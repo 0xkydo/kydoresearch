@@ -131,7 +131,7 @@ tmux kill-session -t pidev
       bench script exits nonzero, advisor blocker during parallel ideas.
 - [x] Resume matrix: kill at every phase with runner=subprocess (shim), resume,
       assert no duplicate submissions and no orphaned worktrees.
-- [ ] Docs: update `docs/architecture.md` — v2 section describes what IS built,
+- [x] Docs: update `docs/architecture.md` — v2 section describes what IS built,
       not what will be.
 
 ## Progress log
@@ -193,3 +193,7 @@ Append one line per session: date, what landed, what's next.
   duplicate submissions or orphaned worktrees; aborts no longer consume verify
   attempts, Git registry mutations are serialized, all 69 tests pass, and the
   architecture truth pass is next.
+- 2026-07-25: architecture docs now describe the implemented subprocess
+  runtime, initialization, concurrency locks, execution controls, durable
+  checkpoints, persistence, and external submission boundary; documentation
+  contracts and all 71 tests pass, completing every checklist item.
