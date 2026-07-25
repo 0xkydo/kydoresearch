@@ -72,7 +72,7 @@ export async function initChallenge(opts: {
     kind: "init.explore",
     cwd: repoRoot,
     stateDir,
-    input: { manifest },
+    input: { manifest, setupCommand: manifest.setupCommand },
     signal: opts.signal,
   });
   if (!explore.ok) throw new Error(`Setup agent failed: ${explore.error ?? explore.output}`);

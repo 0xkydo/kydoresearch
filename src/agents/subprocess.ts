@@ -1,17 +1,38 @@
 import { spawn } from "node:child_process";
-import type { RolesConfig } from "../config.ts";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { fileURLToPath } from "node:url";
+import type { RolesConfig, RoleSpec } from "../config.ts";
 import type { AgentResult, AgentRunner, AgentTask } from "./types.ts";
+
+const BUNDLED_PROMPTS_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../extensions/autoresearch/prompts",
+);
 
 /**
  * Spawns an isolated `pi --mode json -p` subprocess for each agent task.
- * Prompt-file resolution, thinking levels, tool allowlists, and cancellation
- * are layered onto this core process/event mapping separately.
+ * Thinking levels, tool allowlists, and cancellation are layered onto this
+ * core process/event mapping separately.
  */
 export class PiSubprocessRunner implements AgentRunner {
   constructor(private readonly roles: RolesConfig) {}
 
   run(task: AgentTask): Promise<AgentResult> {
     const role = this.roles[task.role];
+    let prompt: string;
+    try {
+      prompt = loadAndRenderPrompt(role, task);
+    } catch (error) {
+      return Promise.resolve({
+        ok: false,
+        output: "",
+        filesWritten: [],
+        usage: { cost: 0, turns: 0 },
+        error: `Failed to load prompt "${role.prompt?.trim() || `${task.role}.md`}": ${errorMessage(error)}`,
+      });
+    }
+
     const args = [
       "--mode",
       "json",
@@ -19,7 +40,7 @@ export class PiSubprocessRunner implements AgentRunner {
       "--no-session",
       "--model",
       role.model,
-      JSON.stringify(task.input),
+      prompt,
     ];
 
     return new Promise((resolve) => {
@@ -132,6 +153,68 @@ export class PiSubprocessRunner implements AgentRunner {
       });
     });
   }
+}
+
+function loadAndRenderPrompt(role: RoleSpec, task: AgentTask): string {
+  const configuredPath = role.prompt?.trim() || `${task.role}.md`;
+  const promptPath = resolvePromptPath(configuredPath, task.stateDir);
+  const template = fs.readFileSync(promptPath, "utf8");
+  return renderPrompt(template, {
+    ...task.input,
+    role: task.role,
+    kind: task.kind,
+    cwd: task.cwd,
+    stateDir: task.stateDir,
+  });
+}
+
+function resolvePromptPath(configuredPath: string, stateDir: string): string {
+  if (path.basename(configuredPath) === configuredPath) {
+    return path.join(BUNDLED_PROMPTS_DIR, configuredPath);
+  }
+  if (path.isAbsolute(configuredPath)) {
+    throw new Error("repo-relative prompt paths cannot be absolute");
+  }
+
+  const repoRoot = path.dirname(stateDir);
+  const resolved = path.resolve(repoRoot, configuredPath);
+  const relative = path.relative(repoRoot, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("repo-relative prompt path escapes the challenge repo");
+  }
+  return resolved;
+}
+
+function renderPrompt(template: string, context: Record<string, unknown>): string {
+  let rendered = template;
+  const sectionPattern = /{{#([A-Za-z0-9_.-]+)}}([\s\S]*?){{\/\1}}/g;
+
+  // Repeat so nested sections are fully rendered.
+  while (sectionPattern.test(rendered)) {
+    sectionPattern.lastIndex = 0;
+    rendered = rendered.replace(sectionPattern, (_match, key: string, body: string) =>
+      promptTruthy(readContextValue(context, key)) ? body : "",
+    );
+  }
+
+  return rendered.replace(/{{([A-Za-z0-9_.-]+)}}/g, (_match, key: string) =>
+    formatPromptValue(readContextValue(context, key)),
+  );
+}
+
+function readContextValue(context: Record<string, unknown>, key: string): unknown {
+  return key.split(".").reduce<unknown>((value, part) => (isRecord(value) ? value[part] : undefined), context);
+}
+
+function promptTruthy(value: unknown): boolean {
+  return value !== undefined && value !== null && value !== false && (!Array.isArray(value) || value.length > 0);
+}
+
+function formatPromptValue(value: unknown): string {
+  if (value === undefined) return "";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean" || value === null) return String(value);
+  return JSON.stringify(value, null, 2);
 }
 
 function extractAssistantText(content: unknown): string {

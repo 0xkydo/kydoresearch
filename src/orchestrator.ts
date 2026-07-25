@@ -203,6 +203,7 @@ export class Orchestrator {
         loop: this.state.loop,
         maxIdeasPerLoop: this.config.maxIdeasPerLoop,
         bestScore: this.state.bestScore,
+        direction: this.state.challenge.direction,
         dryLoopStreak: this.state.dryLoopStreak,
         history: this.state.history,
       },
@@ -261,6 +262,9 @@ export class Orchestrator {
             attempt: idea.verifyAttempts + 1,
             ideaId: idea.id,
             specFile: path.join(this.stateDir, idea.specFile),
+            maxVerifyAttempts: this.config.maxVerifyAttempts,
+            editablePaths: this.state.challenge.editablePaths,
+            verifyCommand: this.state.challenge.verifyCommand,
             lastVerifyError: idea.lastVerifyError,
           },
           signal: this.ports.signal,
@@ -473,7 +477,7 @@ export class Orchestrator {
       kind: "advise",
       cwd: this.repoRoot,
       stateDir: this.stateDir,
-      input: { rules: watchdog.rules, stateDiff, summary },
+      input: { rules: watchdog.rules, stateDiff, summary, watchdogFile: this.config.advisor.watchdogFile },
       signal: this.ports.signal,
     });
     if (!result.ok) return [];

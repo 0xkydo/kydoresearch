@@ -79,7 +79,7 @@ tmux kill-session -t pidev
       structured payload). Sub-items below (prompt resolution, thinking/tools,
       timeouts/abort) may land as separate follow-up commits; run() itself
       lands first with the success + failure paths tested.
-- [ ] Resolve the role's prompt file: `RoleSpec.prompt` (see `src/config.ts`) —
+- [x] Resolve the role's prompt file: `RoleSpec.prompt` (see `src/config.ts`) —
       bare filename resolves against `extensions/autoresearch/prompts/`,
       repo-relative path against the challenge repo. Default `<role>.md`.
       This field is currently stored by the config UI but consumed by nothing.
@@ -142,3 +142,6 @@ Append one line per session: date, what landed, what's next.
   TUI; `RoleSpec.prompt` added but unconsumed; subprocess runner is a stub.
 - 2026-07-25: core `PiSubprocessRunner.run()` landed with fake-`pi` coverage
   for success, malformed JSON, and nonzero exit; prompt resolution is next.
+- 2026-07-25: subprocess roles now resolve bundled/custom prompts and render
+  task context, including PhD implementation/note variants; thinking/tools is
+  next.
