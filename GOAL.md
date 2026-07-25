@@ -67,7 +67,7 @@ tmux kill-session -t pidev
 ## Work items (priority order — check off as you land them)
 
 ### 1. v2: real subprocess agents
-- [ ] Implement `PiSubprocessRunner.run()` in `src/agents/subprocess.ts` per the
+- [x] Implement `PiSubprocessRunner.run()` in `src/agents/subprocess.ts` per the
       plan in `docs/architecture.md` §v2: spawn
       `pi --mode json -p --no-session --model <model>` with `cwd = task.cwd`,
       parse the JSON event stream into `AgentResult`. Crib the parse loop from
@@ -140,3 +140,5 @@ Append one line per session: date, what landed, what's next.
 
 - 2026-07-25: goal file created. v1 mock loop + two-pane config UI verified in
   TUI; `RoleSpec.prompt` added but unconsumed; subprocess runner is a stub.
+- 2026-07-25: core `PiSubprocessRunner.run()` landed with fake-`pi` coverage
+  for success, malformed JSON, and nonzero exit; prompt resolution is next.
