@@ -12,7 +12,8 @@ export function readManifest(repoRoot: string): BenchmarkManifest {
   const manifestPath = path.join(repoRoot, "benchmark.json");
   if (!fs.existsSync(manifestPath)) {
     throw new Error(
-      `No benchmark.json found in ${repoRoot}. /autoresearch must run inside a cloned yukon challenge repo.`,
+      `No benchmark.json found in ${repoRoot}. ` +
+        "cd into a cloned Yukon challenge repo, then retry /autoresearch.",
     );
   }
   const parsed: unknown = JSON.parse(fs.readFileSync(manifestPath, "utf8"));

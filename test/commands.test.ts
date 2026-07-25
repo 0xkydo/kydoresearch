@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAutoresearchCommand } from "../extensions/autoresearch/commands.ts";
 import { newLoopState, saveState, STATE_DIR_NAME } from "../src/state.ts";
+import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
 describe("/autoresearch status", () => {
   const dirs: string[] = [];
@@ -63,5 +64,155 @@ describe("/autoresearch status", () => {
     );
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("best local 42"), "info");
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("/autoresearch compatibility", () => {
+  it("turns an unsupported Pi version into an actionable notification", async () => {
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void },
+      ) => {
+        handler = options.handler;
+      },
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi, { piVersion: "0.74.9" });
+
+    const notify = vi.fn();
+    const ctx = {
+      cwd: process.cwd(),
+      hasUI: true,
+      ui: { notify },
+    } as unknown as ExtensionCommandContext;
+
+    await handler!("run", ctx);
+
+    expect(notify).toHaveBeenCalledWith(
+      "kydoresearch requires Pi 0.75.0 or newer (running 0.74.9). Run `pi update`, restart Pi, then retry /autoresearch.",
+      "error",
+    );
+    expect(notify.mock.calls.flat().join("\n")).not.toMatch(/\n\s+at\s/);
+  });
+});
+
+describe("/autoresearch startup errors", () => {
+  const cleanups: Array<() => void> = [];
+
+  afterEach(() => {
+    for (const cleanup of cleanups.splice(0)) cleanup();
+  });
+
+  function commandHarness(repoRoot: string) {
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void },
+      ) => {
+        handler = options.handler;
+      },
+      sendMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const notify = vi.fn();
+    const ctx = {
+      cwd: repoRoot,
+      hasUI: true,
+      ui: { notify, confirm: vi.fn().mockResolvedValue(true) },
+    } as unknown as ExtensionCommandContext;
+    return { run: () => handler!("run", ctx), notify };
+  }
+
+  it("surfaces actionable repo and manifest guidance without a stack trace", async () => {
+    const emptyDir = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-empty-"));
+    cleanups.push(() => fs.rmSync(emptyDir, { recursive: true, force: true }));
+    const missingManifest = commandHarness(emptyDir);
+    await missingManifest.run();
+    expect(missingManifest.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/No benchmark\.json.*cd into a cloned Yukon challenge repo.*retry \/autoresearch/s),
+      "error",
+    );
+
+    const staleChallenge = makeTmpChallenge();
+    cleanups.push(staleChallenge.cleanup);
+    const staleStateDir = path.join(staleChallenge.repoRoot, STATE_DIR_NAME);
+    saveState(
+      staleStateDir,
+      newLoopState({
+        name: "stale-challenge",
+        cli: "",
+        direction: "-",
+        setupCommand: "./setup.sh",
+        verifyCommand: "./verify.sh",
+        benchCommand: "./benchmark.sh",
+        submitNeedsModel: false,
+        editablePaths: ["src"],
+        scorePath: "score.json",
+      }),
+    );
+    fs.rmSync(path.join(staleChallenge.repoRoot, "benchmark.json"));
+    const staleManifest = commandHarness(staleChallenge.repoRoot);
+    await expect(staleManifest.run()).resolves.toBeUndefined();
+    expect(staleManifest.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/No benchmark\.json.*retry \/autoresearch/s),
+      "error",
+    );
+
+    const challenge = makeTmpChallenge();
+    cleanups.push(challenge.cleanup);
+    fs.rmSync(path.join(challenge.repoRoot, ".git"), { recursive: true, force: true });
+    const notGit = commandHarness(challenge.repoRoot);
+    await notGit.run();
+    expect(notGit.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/Not a git repository.*clone the challenge.*retry \/autoresearch/is),
+      "error",
+    );
+
+    expect(
+      [
+        ...missingManifest.notify.mock.calls,
+        ...staleManifest.notify.mock.calls,
+        ...notGit.notify.mock.calls,
+      ].flat().join("\n"),
+    ).not.toMatch(/\n\s+at\s/);
+  });
+
+  it("surfaces actionable setup and missing-benchmark guidance without a stack trace", async () => {
+    const setupChallenge = makeTmpChallenge();
+    cleanups.push(setupChallenge.cleanup);
+    fs.writeFileSync(
+      path.join(setupChallenge.repoRoot, "setup.sh"),
+      "#!/usr/bin/env bash\necho setup exploded >&2\nexit 7\n",
+    );
+    const setupFailure = commandHarness(setupChallenge.repoRoot);
+    await setupFailure.run();
+    expect(setupFailure.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/Dependency setup failed.*Run "\.\/setup\.sh" manually.*retry \/autoresearch/s),
+      "error",
+    );
+
+    const benchmarkChallenge = makeTmpChallenge();
+    cleanups.push(benchmarkChallenge.cleanup);
+    const manifestPath = path.join(benchmarkChallenge.repoRoot, "benchmark.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.benchmarkCommand = "./missing-benchmark.sh";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    const benchmarkFailure = commandHarness(benchmarkChallenge.repoRoot);
+    await benchmarkFailure.run();
+    expect(benchmarkFailure.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/Benchmark command "\.\/missing-benchmark\.sh" was not found.*fix benchmarkCommand.*retry \/autoresearch/s),
+      "error",
+    );
+
+    expect(
+      [...setupFailure.notify.mock.calls, ...benchmarkFailure.notify.mock.calls].flat().join("\n"),
+    ).not.toMatch(/\n\s+at\s/);
   });
 });

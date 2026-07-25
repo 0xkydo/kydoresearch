@@ -133,13 +133,35 @@ describe("initChallenge", () => {
     fs.writeFileSync(path.join(repoRoot, "setup.sh"), "#!/usr/bin/env bash\nexit 7\n");
     await expect(
       initChallenge({ repoRoot, runner: new MockAgentRunner(), exec: nodeExec }),
-    ).rejects.toThrow(/Dependency setup failed/);
+    ).rejects.toThrow(
+      /Dependency setup failed.*Run "\.\/setup\.sh" manually, fix the reported error, then retry \/autoresearch/s,
+    );
   });
 
   it("requires a benchmark.json", async () => {
     fs.rmSync(path.join(repoRoot, "benchmark.json"));
     await expect(
       initChallenge({ repoRoot, runner: new MockAgentRunner(), exec: nodeExec }),
-    ).rejects.toThrow(/No benchmark.json/);
+    ).rejects.toThrow(/No benchmark\.json.*cd into a cloned Yukon challenge repo, then retry \/autoresearch/s);
+  });
+
+  it("requires the challenge directory to be a git worktree", async () => {
+    fs.rmSync(path.join(repoRoot, ".git"), { recursive: true, force: true });
+    await expect(
+      initChallenge({ repoRoot, runner: new MockAgentRunner(), exec: nodeExec }),
+    ).rejects.toThrow(/Not a git repository.*clone the challenge, cd into it, then retry \/autoresearch/is);
+  });
+
+  it("explains how to recover when the benchmark command is missing", async () => {
+    const manifestPath = path.join(repoRoot, "benchmark.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.benchmarkCommand = "./missing-benchmark.sh";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    await expect(
+      initChallenge({ repoRoot, runner: new MockAgentRunner(), exec: nodeExec }),
+    ).rejects.toThrow(
+      /Benchmark command "\.\/missing-benchmark\.sh" was not found.*fix benchmarkCommand in benchmark\.json, then retry \/autoresearch/s,
+    );
   });
 });

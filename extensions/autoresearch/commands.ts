@@ -1,4 +1,5 @@
 import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { MockAgentRunner } from "../../src/agents/mock.ts";
@@ -17,6 +18,12 @@ import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
 import { renderStatusLines } from "./widget.ts";
 
 const WIDGET_KEY = "autoresearch";
+export const MIN_PI_VERSION = "0.75.0";
+
+export interface AutoresearchCommandOptions {
+  /** Injectable for compatibility regression tests; production uses Pi's runtime version. */
+  piVersion?: string;
+}
 
 interface RunHandle {
   controller: AbortController;
@@ -26,8 +33,12 @@ interface RunHandle {
 }
 
 /** Registers /autoresearch with subcommands run|status|config|stop. */
-export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: (ctx: ExtensionContext) => void } {
+export function registerAutoresearchCommand(
+  pi: ExtensionAPI,
+  options: AutoresearchCommandOptions = {},
+): { restoreWidget: (ctx: ExtensionContext) => void } {
   let active: RunHandle | null = null;
+  const piVersion = options.piVersion ?? PI_VERSION;
 
   function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" | "error" = "info") {
     if (ctx.hasUI) ctx.ui.notify(message, level);
@@ -74,16 +85,16 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
     }
     const repoRoot = ctx.cwd;
     const stateDir = path.join(repoRoot, STATE_DIR_NAME);
+    let manifest;
+    try {
+      manifest = readManifest(repoRoot);
+    } catch (err) {
+      notify(ctx, err instanceof Error ? err.message : String(err), "error");
+      return;
+    }
 
     // First run in this repo: init (setup agent) with a confirm when interactive.
     if (!loadState(stateDir)) {
-      let manifest;
-      try {
-        manifest = readManifest(repoRoot);
-      } catch (err) {
-        notify(ctx, err instanceof Error ? err.message : String(err), "error");
-        return;
-      }
       if (ctx.hasUI) {
         const ok = await ctx.ui.confirm(
           `Initialize autoresearch for "${manifest.name}"?`,
@@ -109,7 +120,6 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
     // The scripted mock playlist covers ~6 loops (submit, god trigger,
     // post-god improvement) then idles forever; cap the demo so it terminates.
     if (config.runner === "mock" && config.maxLoops === null) config.maxLoops = 8;
-    const manifest = readManifest(repoRoot);
     const state = loadState(stateDir)!;
     const controller = new AbortController();
     const orchestrator = new Orchestrator(repoRoot, stateDir, config, {
@@ -339,6 +349,15 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
       return items.length > 0 ? items : null;
     },
     handler: async (args, ctx) => {
+      if (!isVersionAtLeast(piVersion, MIN_PI_VERSION)) {
+        notify(
+          ctx,
+          `kydoresearch requires Pi ${MIN_PI_VERSION} or newer (running ${piVersion}). ` +
+            "Run `pi update`, restart Pi, then retry /autoresearch.",
+          "error",
+        );
+        return;
+      }
       const sub = (args ?? "").trim().split(/\s+/)[0] || "run";
       switch (sub) {
         case "run":
@@ -364,4 +383,19 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
       }
     },
   };
+}
+
+function isVersionAtLeast(actual: string, minimum: string): boolean {
+  const parse = (value: string): [number, number, number] | null => {
+    const match = value.match(/^v?(\d+)\.(\d+)\.(\d+)/);
+    return match ? [Number(match[1]), Number(match[2]), Number(match[3])] : null;
+  };
+  const left = parse(actual);
+  const right = parse(minimum);
+  if (!left || !right) return true;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index]! > right[index]!) return true;
+    if (left[index]! < right[index]!) return false;
+  }
+  return true;
 }

@@ -36,6 +36,13 @@ export async function initChallenge(opts: {
   const { repoRoot, runner, exec } = opts;
   const emit = opts.emit ?? (() => {});
   const manifest = readManifest(repoRoot);
+  const gitCheck = await exec("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repoRoot });
+  if (gitCheck.code !== 0 || gitCheck.stdout.trim() !== "true") {
+    throw new Error(
+      `Not a git repository: ${repoRoot}. ` +
+        "Clone the challenge, cd into it, then retry /autoresearch.",
+    );
+  }
 
   if (isInsideEditablePaths(STATE_DIR_NAME, manifest.editablePaths)) {
     throw new Error(
@@ -68,7 +75,10 @@ export async function initChallenge(opts: {
   });
   const setup = await bootstrapAdapter.setup(opts.signal);
   if (!setup.ok) {
-    throw new Error(`Dependency setup failed (exit ${setup.exitCode}):\n${setup.raw}`);
+    throw new Error(
+      `Dependency setup failed (exit ${setup.exitCode}):\n${setup.raw}\n\n` +
+        `Run "${manifest.setupCommand}" manually, fix the reported error, then retry /autoresearch.`,
+    );
   }
 
   // Phase init.knowledge — setup agent reads the repo, builds the knowledge
@@ -122,6 +132,15 @@ export async function initChallenge(opts: {
   });
   const baseline = await baselineAdapter.bench(undefined, opts.signal);
   if (!baseline.ok || baseline.score === undefined) {
+    if (
+      baseline.exitCode === 127 ||
+      /(?:command not found|No such file or directory)/i.test(baseline.raw)
+    ) {
+      throw new Error(
+        `Benchmark command "${benchCommand}" was not found or could not start.\n${baseline.raw}\n\n` +
+          "Install the required executable or fix benchmarkCommand in benchmark.json, then retry /autoresearch.",
+      );
+    }
     throw new Error(`Baseline benchmark failed (exit ${baseline.exitCode}):\n${baseline.raw}`);
   }
 

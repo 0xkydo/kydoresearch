@@ -116,7 +116,7 @@ tmux kill-session -t pidev
 - [x] `pi install git:github.com/0xkydo/kydoresearch` path: verify
       `package.json` `pi.extensions` works when installed (not just `-e` dev
       mode). Peer-dep failure modes → clear error messages.
-- [ ] Graceful errors when: not a git repo, no manifest, setup.sh fails,
+- [x] Graceful errors when: not a git repo, no manifest, setup.sh fails,
       benchmark command missing, pi too old. Each should tell the user what to
       do next, not stack-trace.
 - [ ] README: quickstart against a real challenge (the ecdsafail flow), config
@@ -172,3 +172,7 @@ Append one line per session: date, what landed, what's next.
   `/autoresearch config` through isolated pi package settings without `-e` or
   peer errors; package metadata/lock regressions landed, and graceful startup
   errors are next.
+- 2026-07-25: startup now gives recovery instructions for non-git directories,
+  missing manifests, setup failures, missing benchmark commands, and Pi older
+  than 0.75.0; installed-package TUI and 53-test gates pass, and README
+  stranger-proofing is next.
