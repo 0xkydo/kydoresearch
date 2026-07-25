@@ -37,10 +37,9 @@ export function isImprovement(
   minImprovement: number,
 ): boolean {
   if (best === null) return true;
-  if (direction === "+") return candidate > best * (1 + minImprovement);
-  // For minimization, guard against best === 0 (relative epsilon degenerates).
-  if (best === 0) return candidate < 0;
-  return candidate < best * (1 - minImprovement);
+  const improvement = direction === "+" ? candidate - best : best - candidate;
+  const requiredImprovement = Math.abs(best) * Math.max(0, minImprovement);
+  return improvement > requiredImprovement;
 }
 
 /** Pick the better of two scores for a direction. */

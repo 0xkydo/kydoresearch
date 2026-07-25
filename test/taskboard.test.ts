@@ -37,6 +37,12 @@ describe("util", () => {
     expect(isImprovement(10, 10.1, "+", 0.005)).toBe(true);
     expect(isImprovement(0, 0, "-", 0.005)).toBe(false); // zero-best guard
     expect(isImprovement(0, -1, "-", 0.005)).toBe(true);
+    expect(isImprovement(-100, -99, "-", 0.05)).toBe(false); // worse, despite negative incumbent
+    expect(isImprovement(-100, -104, "-", 0.05)).toBe(false); // better, but inside epsilon
+    expect(isImprovement(-100, -106, "-", 0.05)).toBe(true);
+    expect(isImprovement(-100, -101, "+", 0.05)).toBe(false); // worse, despite negative incumbent
+    expect(isImprovement(-100, -96, "+", 0.05)).toBe(false); // better, but inside epsilon
+    expect(isImprovement(-100, -94, "+", 0.05)).toBe(true);
   });
 
   it("Mutex serializes", async () => {

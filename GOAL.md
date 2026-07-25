@@ -94,7 +94,7 @@ tmux kill-session -t pidev
 - [x] `readManifest`/`detectCli` (`src/challenge/detect.ts`) must handle the
       ecdsafail layout. Document/fix whatever assumptions the mock fixture
       baked in (manifest fields, CLI discovery, score direction).
-- [ ] Score direction: ecdsafail is lower-is-better. Verify the orchestrator's
+- [x] Score direction: ecdsafail is lower-is-better. Verify the orchestrator's
       "improvement" comparisons and `minImprovement` epsilon respect the
       challenge's direction rather than assuming one. Test both directions.
 - [ ] Init against the scratch copy end-to-end with the mock runner: setup.sh
@@ -153,3 +153,6 @@ Append one line per session: date, what landed, what's next.
 - 2026-07-25: real scratch detection now handles Yukon argv-array commands and
   the `ecadd-challenge-test` → `ecdsafail` identity alias while preserving
   direction `-`; direction-aware improvement tests are next.
+- 2026-07-25: minimize/maximize orchestrator scenarios now prove directional
+  winner selection and epsilon filtering; negative-score relative epsilon was
+  fixed, and scratch init is next.

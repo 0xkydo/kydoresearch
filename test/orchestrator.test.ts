@@ -1,3 +1,4 @@
+import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
@@ -115,6 +116,53 @@ describe("Orchestrator scenario matrix", () => {
     const journal = fs.readFileSync(path.join(h.stateDir, "journal.ndjson"), "utf8");
     expect(journal).toContain("L002-I1");
     expect(journal).toMatch(/verify failed \(attempt 1/);
+  });
+
+  it("maximization applies minImprovement and selects the highest qualifying score", async () => {
+    const manifestPath = path.join(repoRoot, "benchmark.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8")) as { direction: string };
+    manifest.direction = "+";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    fs.writeFileSync(
+      path.join(repoRoot, "benchmark.sh"),
+      `#!/usr/bin/env bash
+set -euo pipefail
+cd "$(dirname "$0")"
+./verify.sh
+node - <<'EOF'
+const fs = require("fs");
+const params = JSON.parse(fs.readFileSync("src/solution/params.json", "utf8"));
+const scores = new Map([
+  ["0,0", 100],
+  ["-2,2", 90],
+  ["2,0", 106],
+  ["1,-1", 104],
+]);
+const score = scores.get(\`\${params.x},\${params.y}\`) ?? 100;
+fs.writeFileSync("score.json", JSON.stringify({ score }) + "\\n");
+EOF
+`,
+    );
+    execFileSync("git", ["add", "benchmark.json", "benchmark.sh"], { cwd: repoRoot, stdio: "pipe" });
+    execFileSync("git", ["commit", "-m", "maximize fixture", "--no-gpg-sign"], {
+      cwd: repoRoot,
+      stdio: "pipe",
+      env: { ...process.env, GIT_CONFIG_GLOBAL: "/dev/null" },
+    });
+
+    const h = await makeHarness(repoRoot, { minImprovement: 0.05 });
+    const orchestrator = h.makeOrchestrator();
+    expect((await orchestrator.runLoop())!.improved).toBe(false); // 90 is worse than baseline 100
+    const summary = await orchestrator.runLoop();
+    const byId = Object.fromEntries(summary!.ideas.map((idea) => [idea.id, idea]));
+
+    expect(summary!.improved).toBe(true);
+    expect(byId["L002-I1"]).toMatchObject({ status: "done-improved", localScore: 106 });
+    expect(byId["L002-I2"]).toMatchObject({ status: "done-no-improvement", localScore: 104 });
+    const state = loadState(h.stateDir)!;
+    expect(state.challenge.direction).toBe("+");
+    expect(state.bestScore).toBe(106);
+    expect(state.bestSubmittedScore).toBe(106);
   });
 
   it("three dry loops trigger God; streak resets; post-God loop improves", async () => {
