@@ -104,7 +104,7 @@ tmux kill-session -t pidev
       inspectable (`.autoresearch/logs/`?) instead of buffering silently.
 
 ### 3. Known bugs
-- [ ] `/autoresearch status` shows nothing in interactive mode:
+- [x] `/autoresearch status` shows nothing in interactive mode:
       `extensions/autoresearch/commands.ts` sends via
       `pi.sendMessage({...}, { deliverAs: "nextTurn" })`, which only surfaces
       after the next LLM turn. Render immediately instead (notify or widget).
@@ -162,3 +162,6 @@ Append one line per session: date, what landed, what's next.
 - 2026-07-25: setup/verify/benchmark deadlines are configurable and command
   output now streams into append-only `.autoresearch/logs/`; real scratch init
   and the config TUI passed, and immediate interactive status rendering is next.
+- 2026-07-25: `/autoresearch status` now renders immediately through the pi UI
+  instead of waiting for another LLM turn; command-level coverage and a real
+  scratch TUI capture pass, and configurable mock-loop pacing is next.

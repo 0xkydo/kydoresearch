@@ -183,8 +183,7 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
           taskboardOpen: 0,
           lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
         });
-    pi.sendMessage({ customType: "autoresearch-status", content: lines.join("\n"), display: true }, { deliverAs: "nextTurn" });
-    if (!ctx.hasUI) console.log(lines.join("\n"));
+    notify(ctx, lines.join("\n"));
   }
 
   /** Bundled role prompts plus per-challenge overrides in .autoresearch/prompts/. */
