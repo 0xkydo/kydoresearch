@@ -129,7 +129,7 @@ tmux kill-session -t pidev
 - [x] Orchestrator failure-mode tests: subprocess runner wired in with the
       fake shim — PhD crash mid-implement, professor returns zero ideas,
       bench script exits nonzero, advisor blocker during parallel ideas.
-- [ ] Resume matrix: kill at every phase with runner=subprocess (shim), resume,
+- [x] Resume matrix: kill at every phase with runner=subprocess (shim), resume,
       assert no duplicate submissions and no orphaned worktrees.
 - [ ] Docs: update `docs/architecture.md` — v2 section describes what IS built,
       not what will be.
@@ -188,3 +188,8 @@ Append one line per session: date, what landed, what's next.
   mid-implementation PhD crash, zero proposals, nonzero benchmark, and advisor
   blocker after proven parallel work; all 61 tests pass, and the subprocess
   phase-by-phase resume matrix is next.
+- 2026-07-25: subprocess abort/resume now re-enters the same loop across sync,
+  propose, ideas, finalize, loop-end, post-submit, and God checkpoints without
+  duplicate submissions or orphaned worktrees; aborts no longer consume verify
+  attempts, Git registry mutations are serialized, all 69 tests pass, and the
+  architecture truth pass is next.

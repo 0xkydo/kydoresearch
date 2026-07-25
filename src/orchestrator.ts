@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentRunner, ProposedIdea } from "./agents/types.ts";
 import type { AdvisorNote } from "./advisor.ts";
-import { filterByThreshold, hasBlocker, loadWatchdog } from "./advisor.ts";
+import { filterByThreshold, loadWatchdog } from "./advisor.ts";
 import type { ChallengeAdapter, LeaderboardEntry } from "./challenge/types.ts";
 import type { HarnessConfig } from "./config.ts";
 import type { ExecPort } from "./exec.ts";
@@ -106,62 +106,123 @@ export class Orchestrator {
    * → advisor → streak/god bookkeeping. Returns null if aborted mid-loop.
    */
   async runLoop(): Promise<LoopSummary | null> {
-    // Resume support: if a previous run left in-flight ideas, finish them;
-    // otherwise start a fresh loop.
-    const resuming = this.state.ideas.some((i) => !isIdeaTerminal(i.status));
-    if (!resuming) {
+    const loopInProgress = this.state.loop > this.state.history.length;
+    const inferredResumePhase: Phase =
+      this.state.ideas.length === 0
+        ? "loop.proposing"
+        : this.state.ideas.every((idea) => isIdeaTerminal(idea.status))
+          ? "loop.finalizing"
+          : "loop.ideas";
+    const resumePhase = loopInProgress
+      ? this.state.resumePhase ??
+        (this.state.phase === "paused" ? inferredResumePhase : this.state.phase)
+      : undefined;
+    const resumeAtFinalizing =
+      resumePhase === "loop.finalizing" ||
+      resumePhase === "loop.end" ||
+      resumePhase === "god";
+    const resumeAtEnd = resumePhase === "loop.end" || resumePhase === "god";
+
+    if (!loopInProgress) {
       this.state.loop += 1;
       this.state.ideas = [];
       await this.syncLeaderboard();
       if (this.aborted()) return this.abortLoop();
       await this.propose();
     } else {
-      this.emitLog(`resuming loop ${this.state.loop} with ${this.state.ideas.length} idea(s)`);
+      this.emitLog(
+        `resuming loop ${this.state.loop} from ${resumePhase ?? "saved state"} ` +
+          `with ${this.state.ideas.length} idea(s)`,
+      );
+      if (this.state.ideas.length === 0) {
+        if (resumePhase === "loop.syncing") {
+          await this.syncLeaderboard();
+          if (this.aborted()) return this.abortLoop();
+        }
+        await this.propose();
+      }
     }
     if (this.aborted()) return this.abortLoop();
 
     // Parallel idea pipelines (implement → verify×N → bench-in-worktree).
-    this.transition("loop.ideas");
-    await Promise.all(this.state.ideas.map((idea) => this.runIdeaPipeline(idea)));
-    if (this.aborted()) return this.abortLoop();
-
-    // Winner selection + apply + re-verify + re-bench on main + submit.
-    this.transition("loop.finalizing");
-    const improved = await this.finalizeLoop();
-    if (this.aborted()) return this.abortLoop();
-
-    // Loop end: summary, advisor, streak, god.
-    this.transition("loop.end");
-    const summary: LoopSummary = {
-      loop: this.state.loop,
-      improved,
-      bestScoreAfter: this.state.bestScore,
-      ideas: this.state.ideas.map((i) => ({ id: i.id, title: i.title, status: i.status, localScore: i.localScore })),
-    };
-
-    const advisorNotes = await this.runAdvisor(summary);
-    summary.advisorNotes = advisorNotes.map((n) => `[${n.severity}] ${n.text}`);
-
-    this.state.dryLoopStreak = improved ? 0 : this.state.dryLoopStreak + 1;
-
-    if (
-      this.config.godTriggerThreshold > 0 &&
-      this.state.dryLoopStreak >= this.config.godTriggerThreshold
-    ) {
-      summary.godConversation = await this.godConversation();
-      this.state.dryLoopStreak = 0;
+    if (!resumeAtFinalizing) {
+      this.transition("loop.ideas");
+      if (this.aborted()) return this.abortLoop();
+      await Promise.all(this.state.ideas.map((idea) => this.runIdeaPipeline(idea)));
+      if (this.aborted()) return this.abortLoop();
     }
 
-    this.state.history.push(summary);
-    this.state.ideas = [];
-    this.persist();
+    // Winner selection + apply + re-verify + re-bench on main + submit.
+    let improved: boolean;
+    if (resumeAtEnd) {
+      improved =
+        this.state.pendingSummary?.improved ??
+        this.state.ideas.some((idea) => idea.status === "done-improved");
+    } else if (
+      resumePhase === "loop.finalizing" &&
+      this.state.ideas.every((idea) => isIdeaTerminal(idea.status))
+    ) {
+      // Submission may have completed immediately before the process stopped.
+      // A terminal winner is the durable idempotency marker: never submit it again.
+      improved = this.state.ideas.some((idea) => idea.status === "done-improved");
+    } else {
+      this.transition("loop.finalizing");
+      if (this.aborted()) return this.abortLoop();
+      improved = await this.finalizeLoop();
+      if (this.aborted()) return this.abortLoop();
+    }
 
-    // Prune successful worktrees; failures were already kept for debugging.
+    // Loop end: summary, advisor, streak, god.
+    let summary = this.state.pendingSummary;
+    if (!summary || (resumePhase !== "loop.end" && resumePhase !== "god")) {
+      this.transition("loop.end");
+      if (this.aborted()) return this.abortLoop();
+      summary = {
+        loop: this.state.loop,
+        improved,
+        bestScoreAfter: this.state.bestScore,
+        ideas: this.state.ideas.map((idea) => ({
+          id: idea.id,
+          title: idea.title,
+          status: idea.status,
+          localScore: idea.localScore,
+        })),
+      };
+
+      const advisorNotes = await this.runAdvisor(summary);
+      if (this.aborted()) return this.abortLoop();
+      summary.advisorNotes = advisorNotes.map((note) => `[${note.severity}] ${note.text}`);
+      this.state.dryLoopStreak = improved ? 0 : this.state.dryLoopStreak + 1;
+      this.state.pendingSummary = summary;
+      this.persist();
+    }
+
+    if (
+      resumePhase === "god" ||
+      (this.config.godTriggerThreshold > 0 &&
+        this.state.dryLoopStreak >= this.config.godTriggerThreshold)
+    ) {
+      summary.godConversation = await this.godConversation();
+      if (this.aborted()) return this.abortLoop();
+      this.state.dryLoopStreak = 0;
+      this.state.pendingSummary = summary;
+      this.persist();
+    }
+
+    // Prune before committing loop completion. If cleanup is interrupted, the
+    // pending summary and idea IDs remain durable so resume can retry it.
+    // Failed worktrees are intentionally kept for debugging.
     for (const idea of summary.ideas) {
       if (idea.status !== "failed") await this.worktrees.remove(idea.id).catch(() => {});
     }
 
-    if (hasBlocker(advisorNotes)) {
+    this.state.history.push(summary);
+    this.state.ideas = [];
+    this.state.pendingSummary = undefined;
+    this.state.resumePhase = undefined;
+    this.persist();
+
+    if (summary.advisorNotes?.some((note) => note.startsWith("[blocker]"))) {
       this.emitLog("advisor blocker raised; pausing the loop");
       this.pause("advisor-blocker");
       return summary;
@@ -212,7 +273,10 @@ export class Orchestrator {
       },
       signal: this.ports.signal,
     });
-    if (!result.ok) throw new Error(`Professor propose failed: ${result.error ?? result.output}`);
+    if (!result.ok) {
+      if (this.aborted()) return;
+      throw new Error(`Professor propose failed: ${result.error ?? result.output}`);
+    }
     const proposed = ((result.structured?.ideas as ProposedIdea[] | undefined) ?? []).slice(
       0,
       this.config.maxIdeasPerLoop,
@@ -240,6 +304,8 @@ export class Orchestrator {
 
   /** implement → verify (retry up to maxVerifyAttempts) → bench, all inside the idea's worktree. */
   private async runIdeaPipeline(idea: Idea): Promise<void> {
+    if (isIdeaTerminal(idea.status)) return;
+    if (idea.status === "benching" && idea.localScore !== undefined) return;
     const ideaIndex = this.state.ideas.indexOf(idea);
     try {
       if (!idea.worktreePath) {
@@ -273,6 +339,7 @@ export class Orchestrator {
           signal: this.ports.signal,
         });
         if (!impl.ok) {
+          if (this.aborted()) return;
           idea.lastVerifyError = impl.error ?? impl.output;
           idea.verifyAttempts += 1;
           this.persist();
@@ -282,6 +349,7 @@ export class Orchestrator {
         idea.status = "verifying";
         this.persist();
         const verify = await this.ports.adapter.verify(idea.worktreePath, this.ports.signal);
+        if (this.aborted()) return;
         idea.verifyAttempts += 1;
         if (verify.ok) {
           idea.lastVerifyError = undefined;
@@ -306,6 +374,7 @@ export class Orchestrator {
       const bench = await this.benchLock.runExclusive(() =>
         this.ports.adapter.bench(idea.worktreePath, this.ports.signal),
       );
+      if (this.aborted()) return;
       if (!bench.ok || bench.score === undefined) {
         idea.status = "failed";
         idea.lastVerifyError = bench.raw;
@@ -531,6 +600,7 @@ export class Orchestrator {
 
   private transition(phase: Phase): void {
     this.state.phase = phase;
+    this.state.resumePhase = undefined;
     this.persist();
     appendJournal(this.paths.journal, { phase, loop: this.state.loop });
     this.ports.emit({ type: "phase", phase, loop: this.state.loop });
@@ -561,6 +631,7 @@ export class Orchestrator {
   }
 
   private pause(reason: string): void {
+    if (this.state.phase !== "paused") this.state.resumePhase = this.state.phase;
     this.state.phase = "paused";
     this.persist();
     appendJournal(this.paths.journal, { phase: "paused", reason, loop: this.state.loop });

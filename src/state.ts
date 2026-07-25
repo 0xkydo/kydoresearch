@@ -49,6 +49,10 @@ export interface LoopState {
   dryLoopStreak: number;
   ideas: Idea[]; // current loop's ideas
   history: LoopSummary[];
+  /** Active phase to re-enter when phase is "paused". Optional for v1 state compatibility. */
+  resumePhase?: Phase;
+  /** Loop-end bookkeeping persisted before a God turn or final history commit. */
+  pendingSummary?: LoopSummary;
   challenge: ChallengeInfo;
   startedAt: string;
   updatedAt: string;

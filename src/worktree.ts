@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { ExecPort } from "./exec.ts";
+import { Mutex } from "./util.ts";
 
 /**
  * Per-idea git worktrees under .autoresearch/worktrees/<ideaId>/, so parallel
@@ -8,6 +9,8 @@ import type { ExecPort } from "./exec.ts";
  * (yukon clones always are).
  */
 export class WorktreePool {
+  private readonly registryLock = new Mutex();
+
   constructor(
     private readonly repoRoot: string,
     private readonly worktreesDir: string,
@@ -20,8 +23,12 @@ export class WorktreePool {
 
   /** Create a detached worktree at the current HEAD for an idea. */
   async create(ideaId: string): Promise<string> {
+    return this.registryLock.runExclusive(() => this.createUnlocked(ideaId));
+  }
+
+  private async createUnlocked(ideaId: string): Promise<string> {
     const wtPath = path.join(this.worktreesDir, ideaId);
-    if (fs.existsSync(wtPath)) await this.remove(ideaId); // stale from a previous crash
+    if (fs.existsSync(wtPath)) await this.removeUnlocked(ideaId); // stale from a previous crash
     fs.mkdirSync(this.worktreesDir, { recursive: true });
     const result = await this.git(["worktree", "add", "--detach", wtPath]);
     if (result.code !== 0) {
@@ -34,6 +41,10 @@ export class WorktreePool {
   }
 
   async remove(ideaId: string): Promise<void> {
+    await this.registryLock.runExclusive(() => this.removeUnlocked(ideaId));
+  }
+
+  private async removeUnlocked(ideaId: string): Promise<void> {
     const wtPath = path.join(this.worktreesDir, ideaId);
     await this.git(["worktree", "remove", "--force", wtPath]);
     if (fs.existsSync(wtPath)) fs.rmSync(wtPath, { recursive: true, force: true });
