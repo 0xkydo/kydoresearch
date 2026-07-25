@@ -26,6 +26,15 @@ export interface RolesConfig {
   advisor: RoleSpec;
 }
 
+export interface ExecutionConfig {
+  /** Dependency/setup command deadline. */
+  setupTimeoutMs: number;
+  /** Per correctness-check deadline. */
+  verifyTimeoutMs: number;
+  /** Per performance benchmark deadline; real challenge benches may take minutes. */
+  benchmarkTimeoutMs: number;
+}
+
 export interface HarnessConfig {
   version: 1;
   runner: "mock" | "subprocess";
@@ -38,6 +47,7 @@ export interface HarnessConfig {
   maxLoops: number | null;
   /** Relative epsilon for "meaningful improvement". */
   minImprovement: number;
+  execution: ExecutionConfig;
   advisor: { enabled: boolean; watchdogFile: string };
   /** Model name passed to `submit --model` when the challenge requires it (mlxfast). */
   submitModelName?: string;
@@ -58,6 +68,11 @@ export const DEFAULT_CONFIG: HarnessConfig = {
   maxIdeasPerLoop: 5,
   maxLoops: null,
   minImprovement: 0.005,
+  execution: {
+    setupTimeoutMs: 30 * 60_000,
+    verifyTimeoutMs: 10 * 60_000,
+    benchmarkTimeoutMs: 60 * 60_000,
+  },
   advisor: { enabled: true, watchdogFile: "WATCHDOG.md" },
 };
 
@@ -68,6 +83,7 @@ export function loadConfig(stateDir: string): HarnessConfig {
     ...structuredClone(DEFAULT_CONFIG),
     ...onDisk,
     roles: { ...structuredClone(DEFAULT_CONFIG.roles), ...(onDisk.roles ?? {}) },
+    execution: { ...structuredClone(DEFAULT_CONFIG.execution), ...(onDisk.execution ?? {}) },
     advisor: { ...structuredClone(DEFAULT_CONFIG.advisor), ...(onDisk.advisor ?? {}) },
     version: 1,
   };

@@ -14,6 +14,9 @@ export type EditableSettingField =
   | "maxVerifyAttempts"
   | "maxLoops"
   | "minImprovement"
+  | "setupTimeoutMs"
+  | "verifyTimeoutMs"
+  | "benchmarkTimeoutMs"
   | "watchdogFile"
   | "submitModelName";
 
@@ -43,7 +46,7 @@ interface Row {
 }
 
 const LEFT_WIDTH = 12;
-const LABEL_WIDTH = 17;
+const LABEL_WIDTH = 18;
 
 export class ConfigPanel {
   constructor(
@@ -78,6 +81,14 @@ export class ConfigPanel {
       { id: "maxVerifyAttempts", label: "verify attempts", value: String(c.maxVerifyAttempts), kind: "edit" },
       { id: "maxLoops", label: "max loops", value: c.maxLoops === null ? "unlimited" : String(c.maxLoops), kind: "edit" },
       { id: "minImprovement", label: "min improvement", value: String(c.minImprovement), kind: "edit" },
+      { id: "setupTimeoutMs", label: "setup timeout", value: `${c.execution.setupTimeoutMs} ms`, kind: "edit" },
+      { id: "verifyTimeoutMs", label: "verify timeout", value: `${c.execution.verifyTimeoutMs} ms`, kind: "edit" },
+      {
+        id: "benchmarkTimeoutMs",
+        label: "benchmark timeout",
+        value: `${c.execution.benchmarkTimeoutMs} ms`,
+        kind: "edit",
+      },
       { id: "watchdogFile", label: "watchdog file", value: c.advisor.watchdogFile, kind: "edit" },
       { id: "submitModelName", label: "submit model", value: c.submitModelName ?? "—", kind: "edit" },
     ];

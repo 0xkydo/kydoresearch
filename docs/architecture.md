@@ -61,6 +61,7 @@ Key invariants:
   journal.ndjson     append-only audit
   knowledge-base.md  professor context: subject area, loop log, leaderboard digests, advisor notes
   ideas/loop-NNN/idea-N.md
+  logs/              append-only setup/verify/benchmark command output
   notes/             PhD hypotheses, god-NNN.md, advisor-NNN.md, submission notes
   taskboard.json     shared todo board
   leaderboard.json   last sync snapshot

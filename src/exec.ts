@@ -11,6 +11,8 @@ export interface ExecOptions {
   signal?: AbortSignal;
   timeout?: number;
   env?: Record<string, string>;
+  /** Receives process output as it is produced, before the command exits. */
+  onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
 }
 
 /** Command execution port. The pi extension can substitute pi.exec; tests and
@@ -19,7 +21,7 @@ export type ExecPort = (cmd: string, args: string[], opts?: ExecOptions) => Prom
 
 export const nodeExec: ExecPort = (cmd, args, opts = {}) =>
   new Promise((resolve) => {
-    execFile(
+    const child = execFile(
       cmd,
       args,
       {
@@ -28,6 +30,7 @@ export const nodeExec: ExecPort = (cmd, args, opts = {}) =>
         timeout: opts.timeout ?? 10 * 60_000,
         env: opts.env ? { ...process.env, ...opts.env } : process.env,
         maxBuffer: 32 * 1024 * 1024,
+        encoding: "utf8",
         shell: false,
       },
       (error, stdout, stderr) => {
@@ -39,6 +42,10 @@ export const nodeExec: ExecPort = (cmd, args, opts = {}) =>
         });
       },
     );
+    child.stdout?.setEncoding("utf8");
+    child.stderr?.setEncoding("utf8");
+    child.stdout?.on("data", (chunk: string) => opts.onOutput?.(chunk, "stdout"));
+    child.stderr?.on("data", (chunk: string) => opts.onOutput?.(chunk, "stderr"));
   });
 
 /** Run a shell command string (e.g. "./setup.sh" from benchmark.json manifests). */

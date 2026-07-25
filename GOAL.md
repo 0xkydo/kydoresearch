@@ -99,7 +99,7 @@ tmux kill-session -t pidev
       challenge's direction rather than assuming one. Test both directions.
 - [x] Init against the scratch copy end-to-end with the mock runner: setup.sh
       runs, baseline bench parses `score.json`, state lands in `.autoresearch/`.
-- [ ] Long-running bench: `benchmark.sh` on a real challenge can take minutes.
+- [x] Long-running bench: `benchmark.sh` on a real challenge can take minutes.
       Make exec timeouts configurable; stream/append output somewhere
       inspectable (`.autoresearch/logs/`?) instead of buffering silently.
 
@@ -159,3 +159,6 @@ Append one line per session: date, what landed, what's next.
 - 2026-07-25: `/tmp/ecdsa-dev` init completed with the mock runner (baseline
   2,511,992,646, phase `ready`) and an argv-manifest regression now covers the
   path; configurable streamed benchmark execution is next.
+- 2026-07-25: setup/verify/benchmark deadlines are configurable and command
+  output now streams into append-only `.autoresearch/logs/`; real scratch init
+  and the config TUI passed, and immediate interactive status rendering is next.

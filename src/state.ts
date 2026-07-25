@@ -65,6 +65,7 @@ export function statePaths(stateDir: string) {
     taskboard: path.join(stateDir, "taskboard.json"),
     leaderboard: path.join(stateDir, "leaderboard.json"),
     ideasDir: path.join(stateDir, "ideas"),
+    logsDir: path.join(stateDir, "logs"),
     notesDir: path.join(stateDir, "notes"),
     worktreesDir: path.join(stateDir, "worktrees"),
   };

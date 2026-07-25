@@ -11,7 +11,7 @@ import { nodeExec } from "../../src/exec.ts";
 import { initChallenge } from "../../src/init.ts";
 import type { OrchestratorEvent } from "../../src/orchestrator.ts";
 import { Orchestrator } from "../../src/orchestrator.ts";
-import { loadState, STATE_DIR_NAME } from "../../src/state.ts";
+import { loadState, STATE_DIR_NAME, statePaths } from "../../src/state.ts";
 import type { ConfigPanelResult, EditableSettingField, NavState } from "./config-ui.ts";
 import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
 import { renderStatusLines } from "./widget.ts";
@@ -120,6 +120,8 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
         cli: detectCli(repoRoot, manifest),
         verifyCommand: state.challenge.verifyCommand,
         benchCommand: state.challenge.benchCommand,
+        execution: config.execution,
+        logDir: statePaths(stateDir).logsDir,
         exec: nodeExec,
       }),
       exec: nodeExec,
@@ -209,6 +211,12 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
       maxVerifyAttempts: ["Verify attempts per idea before giving up:", String(config.maxVerifyAttempts)],
       maxLoops: ["Max loops (empty = unlimited):", config.maxLoops === null ? "" : String(config.maxLoops)],
       minImprovement: ["Relative epsilon for meaningful improvement:", String(config.minImprovement)],
+      setupTimeoutMs: ["Setup command timeout in milliseconds:", String(config.execution.setupTimeoutMs)],
+      verifyTimeoutMs: ["Verify command timeout in milliseconds:", String(config.execution.verifyTimeoutMs)],
+      benchmarkTimeoutMs: [
+        "Benchmark command timeout in milliseconds:",
+        String(config.execution.benchmarkTimeoutMs),
+      ],
       watchdogFile: ["Advisor watchdog file (repo-relative):", config.advisor.watchdogFile],
       submitModelName: ["Model name for submit --model (empty = none):", config.submitModelName ?? ""],
     };
@@ -234,6 +242,15 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
       case "minImprovement":
         if (Number.isFinite(asInt) && asInt >= 0) config.minImprovement = asInt;
         break;
+      case "setupTimeoutMs":
+        if (Number.isInteger(asInt) && asInt > 0) config.execution.setupTimeoutMs = asInt;
+        break;
+      case "verifyTimeoutMs":
+        if (Number.isInteger(asInt) && asInt > 0) config.execution.verifyTimeoutMs = asInt;
+        break;
+      case "benchmarkTimeoutMs":
+        if (Number.isInteger(asInt) && asInt > 0) config.execution.benchmarkTimeoutMs = asInt;
+        break;
       case "watchdogFile":
         if (trimmed) config.advisor.watchdogFile = trimmed;
         break;
@@ -252,6 +269,9 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
         `maxIdeasPerLoop: ${config.maxIdeasPerLoop}`,
         `godTriggerThreshold: ${config.godTriggerThreshold}`,
         `maxVerifyAttempts: ${config.maxVerifyAttempts}`,
+        `setupTimeoutMs: ${config.execution.setupTimeoutMs}`,
+        `verifyTimeoutMs: ${config.execution.verifyTimeoutMs}`,
+        `benchmarkTimeoutMs: ${config.execution.benchmarkTimeoutMs}`,
         `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
         ...CONFIGURABLE_ROLES.map(
           (role) =>

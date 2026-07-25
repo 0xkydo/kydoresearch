@@ -47,6 +47,7 @@ export async function initChallenge(opts: {
   const stateDir = path.join(repoRoot, STATE_DIR_NAME);
   const paths = statePaths(stateDir);
   fs.mkdirSync(paths.ideasDir, { recursive: true });
+  fs.mkdirSync(paths.logsDir, { recursive: true });
   fs.mkdirSync(paths.notesDir, { recursive: true });
   fs.mkdirSync(paths.worktreesDir, { recursive: true });
   excludeFromGit(repoRoot, `${STATE_DIR_NAME}/`);
@@ -57,7 +58,14 @@ export async function initChallenge(opts: {
   // Phase init.setup — dependency install before anything else.
   emit(`init: running setup (${manifest.setupCommand})`);
   appendJournal(paths.journal, { phase: "init.setup", setupCommand: manifest.setupCommand });
-  const bootstrapAdapter = new YukonCliAdapter({ repoRoot, manifest, cli, exec });
+  const bootstrapAdapter = new YukonCliAdapter({
+    repoRoot,
+    manifest,
+    cli,
+    execution: config.execution,
+    logDir: paths.logsDir,
+    exec,
+  });
   const setup = await bootstrapAdapter.setup(opts.signal);
   if (!setup.ok) {
     throw new Error(`Dependency setup failed (exit ${setup.exitCode}):\n${setup.raw}`);
@@ -102,7 +110,16 @@ export async function initChallenge(opts: {
   // Establish the baseline score (real yukon CLIs run the benchmark once on
   // clone). Without a baseline, the first valid idea would always "improve".
   emit(`init: measuring baseline (${benchCommand})`);
-  const baselineAdapter = new YukonCliAdapter({ repoRoot, manifest, cli, verifyCommand, benchCommand, exec });
+  const baselineAdapter = new YukonCliAdapter({
+    repoRoot,
+    manifest,
+    cli,
+    verifyCommand,
+    benchCommand,
+    execution: config.execution,
+    logDir: paths.logsDir,
+    exec,
+  });
   const baseline = await baselineAdapter.bench(undefined, opts.signal);
   if (!baseline.ok || baseline.score === undefined) {
     throw new Error(`Baseline benchmark failed (exit ${baseline.exitCode}):\n${baseline.raw}`);

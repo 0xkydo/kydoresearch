@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MockAgentRunner } from "../src/agents/mock.ts";
+import type { ExecPort } from "../src/exec.ts";
 import { nodeExec } from "../src/exec.ts";
 import { initChallenge } from "../src/init.ts";
 import { loadState } from "../src/state.ts";
@@ -79,6 +80,42 @@ describe("initChallenge", () => {
     });
     expect(loadState(stateDir)).toMatchObject({ phase: "ready", bestScore: 10 });
     expect(fs.readFileSync(path.join(stateDir, "journal.ndjson"), "utf8")).toContain('"phase":"ready"');
+  });
+
+  it("uses persisted phase timeouts and logs setup plus baseline output", async () => {
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({
+        version: 1,
+        execution: {
+          setupTimeoutMs: 1_111,
+          verifyTimeoutMs: 2_222,
+          benchmarkTimeoutMs: 3_333,
+        },
+      }),
+    );
+    const seenTimeouts: number[] = [];
+    const exec: ExecPort = (cmd, args, opts) => {
+      if (cmd === "/bin/bash") seenTimeouts.push(opts?.timeout ?? -1);
+      return nodeExec(cmd, args, opts);
+    };
+
+    const result = await initChallenge({
+      repoRoot,
+      runner: new MockAgentRunner(),
+      exec,
+    });
+
+    expect(result.config.execution).toEqual({
+      setupTimeoutMs: 1_111,
+      verifyTimeoutMs: 2_222,
+      benchmarkTimeoutMs: 3_333,
+    });
+    expect(seenTimeouts).toEqual([1_111, 3_333]);
+    expect(fs.readFileSync(path.join(stateDir, "logs", "setup.log"), "utf8")).toContain("$ ./setup.sh");
+    expect(fs.readFileSync(path.join(stateDir, "logs", "benchmark.log"), "utf8")).toContain("$ ./benchmark.sh");
   });
 
   it("aborts when .autoresearch would fall inside editablePaths", async () => {

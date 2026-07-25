@@ -3,6 +3,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { YukonCliAdapter } from "../src/challenge/adapter.ts";
 import { detectCli, isInsideEditablePaths, readManifest } from "../src/challenge/detect.ts";
+import type { ExecOptions, ExecPort } from "../src/exec.ts";
 import { nodeExec } from "../src/exec.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
@@ -77,6 +78,58 @@ describe("YukonCliAdapter against mockchal", () => {
     const bench = await adapter.bench();
     expect(bench.ok).toBe(true);
     expect(bench.score).toBe(10); // baseline (0,0)
+  });
+
+  it("applies phase timeouts and appends live command output to inspectable logs", async () => {
+    const manifest = readManifest(repoRoot);
+    const seen: Array<{ command: string; timeout: number | undefined }> = [];
+    const logDir = path.join(repoRoot, ".autoresearch", "logs");
+    const exec: ExecPort = async (_cmd, args, opts) => {
+      const command = args[1] ?? "";
+      seen.push({ command, timeout: opts?.timeout });
+      const onOutput = (
+        opts as ExecOptions & {
+          onOutput?: (chunk: string, stream: "stdout" | "stderr") => void;
+        }
+      )?.onOutput;
+      onOutput?.(`${command}: stdout\n`, "stdout");
+      onOutput?.(`${command}: stderr\n`, "stderr");
+      if (command === "./benchmark.sh") {
+        fs.writeFileSync(path.join(opts?.cwd ?? repoRoot, manifest.scorePath), JSON.stringify({ score: 7 }));
+      }
+      return { stdout: "captured stdout", stderr: "captured stderr", code: 0 };
+    };
+    const loggedAdapter = new YukonCliAdapter({
+      repoRoot,
+      manifest,
+      cli: null,
+      verifyCommand: "./verify.sh",
+      benchCommand: "./benchmark.sh",
+      exec,
+      execution: {
+        setupTimeoutMs: 111,
+        verifyTimeoutMs: 222,
+        benchmarkTimeoutMs: 333,
+      },
+      logDir,
+    });
+
+    await loggedAdapter.setup();
+    await loggedAdapter.verify();
+    await loggedAdapter.bench();
+    await loggedAdapter.bench();
+
+    expect(seen.map(({ command, timeout }) => [command, timeout])).toEqual([
+      ["./setup.sh", 111],
+      ["./verify.sh", 222],
+      ["./benchmark.sh", 333],
+      ["./benchmark.sh", 333],
+    ]);
+    expect(fs.readFileSync(path.join(logDir, "setup.log"), "utf8")).toContain("./setup.sh: stdout");
+    expect(fs.readFileSync(path.join(logDir, "verify.log"), "utf8")).toContain("./verify.sh: stderr");
+    const benchmarkLog = fs.readFileSync(path.join(logDir, "benchmark.log"), "utf8");
+    expect(benchmarkLog.match(/\$ \.\/benchmark\.sh/g)).toHaveLength(2);
+    expect(benchmarkLog).toContain("./benchmark.sh: stdout");
   });
 
   it("verify fails before setup (marker missing)", async () => {

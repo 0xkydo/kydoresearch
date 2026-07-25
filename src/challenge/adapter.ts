@@ -1,5 +1,6 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
+import type { ExecutionConfig } from "../config.ts";
 import type { ExecPort, ExecResult } from "../exec.ts";
 import { shellExec } from "../exec.ts";
 import type {
@@ -26,6 +27,10 @@ export interface YukonCliAdapterOptions {
   verifyCommand?: string;
   /** Perf command; defaults to benchmarkCommand. */
   benchCommand?: string;
+  /** Per-phase command deadlines from the persisted harness config. */
+  execution?: ExecutionConfig;
+  /** Append-only command logs. Omit to disable file logging. */
+  logDir?: string;
   exec: ExecPort;
 }
 
@@ -39,6 +44,8 @@ export class YukonCliAdapter implements ChallengeAdapter {
   private readonly cli: string | null;
   private readonly verifyCommand: string;
   private readonly benchCommand: string;
+  private readonly execution: ExecutionConfig | undefined;
+  private readonly logDir: string | undefined;
   private readonly sh: ReturnType<typeof shellExec>;
 
   constructor(opts: YukonCliAdapterOptions) {
@@ -47,16 +54,30 @@ export class YukonCliAdapter implements ChallengeAdapter {
     this.cli = opts.cli;
     this.verifyCommand = opts.verifyCommand ?? opts.manifest.benchmarkCommand;
     this.benchCommand = opts.benchCommand ?? opts.manifest.benchmarkCommand;
+    this.execution = opts.execution;
+    this.logDir = opts.logDir;
     this.sh = shellExec(opts.exec);
   }
 
   async setup(signal?: AbortSignal): Promise<ScoreResult> {
-    const result = await this.sh(this.manifest.setupCommand, { cwd: this.repoRoot, signal });
+    const result = await this.runCommand(
+      "setup",
+      this.manifest.setupCommand,
+      this.repoRoot,
+      this.execution?.setupTimeoutMs,
+      signal,
+    );
     return { ok: result.code === 0, raw: tail(result), exitCode: result.code };
   }
 
   async verify(cwd?: string, signal?: AbortSignal): Promise<ScoreResult> {
-    const result = await this.sh(this.verifyCommand, { cwd: cwd ?? this.repoRoot, signal });
+    const result = await this.runCommand(
+      "verify",
+      this.verifyCommand,
+      cwd ?? this.repoRoot,
+      this.execution?.verifyTimeoutMs,
+      signal,
+    );
     return { ok: result.code === 0, raw: tail(result), exitCode: result.code };
   }
 
@@ -64,7 +85,13 @@ export class YukonCliAdapter implements ChallengeAdapter {
     const dir = cwd ?? this.repoRoot;
     const scoreFile = path.join(dir, this.manifest.scorePath);
     if (fs.existsSync(scoreFile)) fs.rmSync(scoreFile); // stale score guard
-    const result = await this.sh(this.benchCommand, { cwd: dir, signal });
+    const result = await this.runCommand(
+      "benchmark",
+      this.benchCommand,
+      dir,
+      this.execution?.benchmarkTimeoutMs,
+      signal,
+    );
     if (result.code !== 0) return { ok: false, raw: tail(result), exitCode: result.code };
     if (!fs.existsSync(scoreFile)) {
       return {
@@ -78,6 +105,37 @@ export class YukonCliAdapter implements ChallengeAdapter {
       return { ok: false, raw: `${tail(result)}\n[invalid score in ${this.manifest.scorePath}]`, exitCode: 1 };
     }
     return { ok: true, score: parsed.score, raw: tail(result), exitCode: 0 };
+  }
+
+  private async runCommand(
+    phase: "setup" | "verify" | "benchmark",
+    command: string,
+    cwd: string,
+    timeout: number | undefined,
+    signal: AbortSignal | undefined,
+  ): Promise<ExecResult> {
+    const logFile = this.logDir ? path.join(this.logDir, `${phase}.log`) : undefined;
+    const startedAt = new Date();
+    if (logFile) {
+      fs.mkdirSync(path.dirname(logFile), { recursive: true });
+      fs.appendFileSync(
+        logFile,
+        `\n[${startedAt.toISOString()}] start · cwd=${cwd} · timeout=${timeout ?? "default"}ms\n$ ${command}\n`,
+      );
+    }
+    const result = await this.sh(command, {
+      cwd,
+      signal,
+      timeout,
+      onOutput: logFile ? (chunk) => fs.appendFileSync(logFile, chunk) : undefined,
+    });
+    if (logFile) {
+      fs.appendFileSync(
+        logFile,
+        `\n[${new Date().toISOString()}] end · exit=${result.code} · duration=${Date.now() - startedAt.getTime()}ms\n`,
+      );
+    }
+    return result;
   }
 
   async submit(opts: { noteFile: string; model?: string }, signal?: AbortSignal): Promise<SubmitResult> {
