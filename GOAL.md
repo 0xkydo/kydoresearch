@@ -72,6 +72,13 @@ tmux kill-session -t pidev
       `pi --mode json -p --no-session --model <model>` with `cwd = task.cwd`,
       parse the JSON event stream into `AgentResult`. Crib the parse loop from
       `/opt/homebrew/lib/node_modules/@earendil-works/pi-coding-agent/examples/extensions/subagent/index.ts`.
+      Event mapping: concatenate assistant text into `AgentResult` per the
+      existing `AgentResult` type in `src/agents/types.ts` (match how
+      `MockAgentRunner` fills it — mock behavior is the contract; if the
+      stream's final message ends with a fenced JSON block, that is the
+      structured payload). Sub-items below (prompt resolution, thinking/tools,
+      timeouts/abort) may land as separate follow-up commits; run() itself
+      lands first with the success + failure paths tested.
 - [ ] Resolve the role's prompt file: `RoleSpec.prompt` (see `src/config.ts`) —
       bare filename resolves against `extensions/autoresearch/prompts/`,
       repo-relative path against the challenge repo. Default `<role>.md`.
