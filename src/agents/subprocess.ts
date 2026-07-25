@@ -9,28 +9,42 @@ const BUNDLED_PROMPTS_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../extensions/autoresearch/prompts",
 );
+const DEFAULT_TIMEOUT_MS = 30 * 60_000;
+const DEFAULT_KILL_GRACE_MS = 5_000;
+
+export interface PiSubprocessRunnerOptions {
+  /** Maximum wall time for one agent turn. Defaults to 30 minutes. */
+  timeoutMs?: number;
+  /** Time between SIGTERM and forced SIGKILL. Defaults to 5 seconds. */
+  killGraceMs?: number;
+}
 
 /**
  * Spawns an isolated `pi --mode json -p` subprocess for each agent task.
- * Thinking levels, tool allowlists, and cancellation are layered onto this
- * core process/event mapping separately.
+ * Every invocation is bounded and returns failures rather than throwing into
+ * the orchestrator.
  */
 export class PiSubprocessRunner implements AgentRunner {
-  constructor(private readonly roles: RolesConfig) {}
+  constructor(
+    private readonly roles: RolesConfig,
+    private readonly options: PiSubprocessRunnerOptions = {},
+  ) {}
 
   run(task: AgentTask): Promise<AgentResult> {
+    if (task.signal?.aborted) {
+      return Promise.resolve(emptyFailedResult("pi subprocess aborted before start"));
+    }
+
     const role = this.roles[task.role];
     let prompt: string;
     try {
       prompt = loadAndRenderPrompt(role, task);
     } catch (error) {
-      return Promise.resolve({
-        ok: false,
-        output: "",
-        filesWritten: [],
-        usage: { cost: 0, turns: 0 },
-        error: `Failed to load prompt "${role.prompt?.trim() || `${task.role}.md`}": ${errorMessage(error)}`,
-      });
+      return Promise.resolve(
+        emptyFailedResult(
+          `Failed to load prompt "${role.prompt?.trim() || `${task.role}.md`}": ${errorMessage(error)}`,
+        ),
+      );
     }
 
     const args = [
@@ -60,12 +74,9 @@ export class PiSubprocessRunner implements AgentRunner {
       let cost = 0;
       let turns = 0;
       let settled = false;
-
-      const finish = (result: AgentResult): void => {
-        if (settled) return;
-        settled = true;
-        resolve(result);
-      };
+      let terminationError: string | undefined;
+      let timeoutHandle: NodeJS.Timeout | undefined;
+      let killHandle: NodeJS.Timeout | undefined;
 
       const failedResult = (error: string): AgentResult => ({
         ok: false,
@@ -74,6 +85,59 @@ export class PiSubprocessRunner implements AgentRunner {
         usage: { cost, turns },
         error,
       });
+
+      let proc: ReturnType<typeof spawn>;
+      try {
+        proc = spawn("pi", args, {
+          cwd: task.cwd,
+          detached: process.platform !== "win32",
+          shell: false,
+          stdio: ["ignore", "pipe", "pipe"],
+        });
+      } catch (error) {
+        resolve(failedResult(`Failed to start pi: ${errorMessage(error)}`));
+        return;
+      }
+
+      const signalProcess = (signal: NodeJS.Signals): void => {
+        if (proc.exitCode !== null || proc.signalCode !== null) return;
+        if (process.platform !== "win32" && proc.pid !== undefined) {
+          try {
+            process.kill(-proc.pid, signal);
+            return;
+          } catch {
+            // Fall through to signaling the direct child.
+          }
+        }
+        try {
+          proc.kill(signal);
+        } catch {
+          // The close/error event will settle the result.
+        }
+      };
+
+      const terminate = (error: string): void => {
+        if (terminationError !== undefined || settled) return;
+        terminationError = error;
+        signalProcess("SIGTERM");
+        const graceMs = Math.max(0, this.options.killGraceMs ?? DEFAULT_KILL_GRACE_MS);
+        killHandle = setTimeout(() => signalProcess("SIGKILL"), graceMs);
+      };
+
+      const onAbort = (): void => terminate("pi subprocess aborted");
+
+      const cleanup = (): void => {
+        if (timeoutHandle) clearTimeout(timeoutHandle);
+        if (killHandle) clearTimeout(killHandle);
+        task.signal?.removeEventListener("abort", onAbort);
+      };
+
+      const finish = (result: AgentResult): void => {
+        if (settled) return;
+        settled = true;
+        cleanup();
+        resolve(result);
+      };
 
       const processLine = (line: string): void => {
         if (!line.trim() || parseError) return;
@@ -103,29 +167,28 @@ export class PiSubprocessRunner implements AgentRunner {
         }
       };
 
-      const proc = spawn("pi", args, {
-        cwd: task.cwd,
-        shell: false,
-        stdio: ["ignore", "pipe", "pipe"],
-      });
-
-      proc.stdout.on("data", (data: Buffer | string) => {
+      proc.stdout!.on("data", (data: Buffer | string) => {
         stdoutBuffer += data.toString();
         const lines = stdoutBuffer.split("\n");
         stdoutBuffer = lines.pop() ?? "";
         for (const line of lines) processLine(line);
       });
 
-      proc.stderr.on("data", (data: Buffer | string) => {
+      proc.stderr!.on("data", (data: Buffer | string) => {
         stderr += data.toString();
       });
 
       proc.on("error", (error) => {
-        finish(failedResult(`Failed to start pi: ${error.message}`));
+        finish(failedResult(terminationError ?? `Failed to start pi: ${error.message}`));
       });
 
       proc.on("close", (code) => {
         if (stdoutBuffer.trim()) processLine(stdoutBuffer);
+
+        if (terminationError) {
+          finish(failedResult(terminationError));
+          return;
+        }
 
         if (parseError) {
           finish(failedResult(parseError));
@@ -157,8 +220,27 @@ export class PiSubprocessRunner implements AgentRunner {
           usage: { cost, turns },
         });
       });
+
+      if (task.signal) {
+        task.signal.addEventListener("abort", onAbort, { once: true });
+        if (task.signal.aborted) onAbort();
+      }
+      if (terminationError === undefined) {
+        const timeoutMs = Math.max(1, this.options.timeoutMs ?? DEFAULT_TIMEOUT_MS);
+        timeoutHandle = setTimeout(() => terminate(`pi subprocess timed out after ${timeoutMs}ms`), timeoutMs);
+      }
     });
   }
+}
+
+function emptyFailedResult(error: string): AgentResult {
+  return {
+    ok: false,
+    output: "",
+    filesWritten: [],
+    usage: { cost: 0, turns: 0 },
+    error,
+  };
 }
 
 function loadAndRenderPrompt(role: RoleSpec, task: AgentTask): string {

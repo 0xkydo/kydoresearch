@@ -286,6 +286,81 @@ process.exitCode = 7;
     });
   });
 
+  it("terminates a hung pi process after the configured timeout", async () => {
+    const pidPath = path.join(tmpDir, "timeout-pid");
+    process.env.FAKE_PI_RECORD = pidPath;
+    writeFakePi(`
+const fs = require("node:fs");
+fs.writeFileSync(process.env.FAKE_PI_RECORD, String(process.pid));
+process.on("SIGTERM", () => {});
+setInterval(() => {}, 1000);
+`);
+
+    const result = await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles), {
+      timeoutMs: 1_000,
+      killGraceMs: 50,
+    }).run(makeTask(tmpDir));
+
+    expect(result).toMatchObject({
+      ok: false,
+      output: "",
+      filesWritten: [],
+      error: "pi subprocess timed out after 1000ms",
+    });
+    expect(fs.existsSync(pidPath)).toBe(true);
+    expect(processIsRunning(Number(fs.readFileSync(pidPath, "utf8")))).toBe(false);
+  });
+
+  it("does not spawn pi when the task signal is already aborted", async () => {
+    const invokedPath = path.join(tmpDir, "pre-abort-invocation");
+    process.env.FAKE_PI_RECORD = invokedPath;
+    writeFakePi(`
+const fs = require("node:fs");
+fs.writeFileSync(process.env.FAKE_PI_RECORD, "invoked");
+`);
+    const controller = new AbortController();
+    controller.abort();
+
+    const result = await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(
+      makeTask(tmpDir, { signal: controller.signal }),
+    );
+
+    expect(result).toMatchObject({
+      ok: false,
+      output: "",
+      filesWritten: [],
+      error: "pi subprocess aborted before start",
+    });
+    expect(fs.existsSync(invokedPath)).toBe(false);
+  });
+
+  it("terminates pi and resolves a failed result when aborted during a run", async () => {
+    const pidPath = path.join(tmpDir, "abort-pid");
+    process.env.FAKE_PI_RECORD = pidPath;
+    writeFakePi(`
+const fs = require("node:fs");
+fs.writeFileSync(process.env.FAKE_PI_RECORD, String(process.pid));
+setInterval(() => {}, 1000);
+`);
+    const controller = new AbortController();
+    const running = new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles), {
+      timeoutMs: 5_000,
+      killGraceMs: 50,
+    }).run(makeTask(tmpDir, { signal: controller.signal }));
+
+    await waitForFile(pidPath);
+    controller.abort();
+    const result = await running;
+
+    expect(result).toMatchObject({
+      ok: false,
+      output: "",
+      filesWritten: [],
+      error: "pi subprocess aborted",
+    });
+    expect(processIsRunning(Number(fs.readFileSync(pidPath, "utf8")))).toBe(false);
+  });
+
   function writeFakePi(body: string): void {
     const shimPath = path.join(tmpDir, "pi");
     fs.writeFileSync(shimPath, `#!/usr/bin/env node\n${body}`);
@@ -322,4 +397,21 @@ function makeTask(cwd: string, overrides: Partial<AgentTask> = {}): AgentTask {
     },
   };
   return { ...task, ...overrides };
+}
+
+async function waitForFile(filePath: string): Promise<void> {
+  const deadline = Date.now() + 5_000;
+  while (!fs.existsSync(filePath)) {
+    if (Date.now() >= deadline) throw new Error(`Timed out waiting for ${filePath}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
+}
+
+function processIsRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
 }
