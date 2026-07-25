@@ -1,0 +1,277 @@
+import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import * as fs from "node:fs";
+import * as path from "node:path";
+import { MockAgentRunner } from "../../src/agents/mock.ts";
+import { PiSubprocessRunner } from "../../src/agents/subprocess.ts";
+import type { AgentRunner } from "../../src/agents/types.ts";
+import { YukonCliAdapter } from "../../src/challenge/adapter.ts";
+import { detectCli, readManifest } from "../../src/challenge/detect.ts";
+import { loadConfig, saveConfig } from "../../src/config.ts";
+import { nodeExec } from "../../src/exec.ts";
+import { initChallenge } from "../../src/init.ts";
+import type { OrchestratorEvent } from "../../src/orchestrator.ts";
+import { Orchestrator } from "../../src/orchestrator.ts";
+import { loadState, STATE_DIR_NAME } from "../../src/state.ts";
+import { renderStatusLines } from "./widget.ts";
+
+const WIDGET_KEY = "autoresearch";
+
+interface RunHandle {
+  controller: AbortController;
+  orchestrator: Orchestrator;
+  challengeName: string;
+  running: Promise<void>;
+}
+
+/** Registers /autoresearch with subcommands run|status|config|stop. */
+export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: (ctx: ExtensionContext) => void } {
+  let active: RunHandle | null = null;
+
+  function notify(ctx: ExtensionContext, message: string, level: "info" | "warning" | "error" = "info") {
+    if (ctx.hasUI) ctx.ui.notify(message, level);
+    else console.log(`[autoresearch] ${message}`);
+  }
+
+  function updateWidget(ctx: ExtensionContext) {
+    if (!ctx.hasUI || !active) return;
+    ctx.ui.setWidget(WIDGET_KEY, renderStatusLines(active.challengeName, active.orchestrator.status()));
+  }
+
+  function makeRunner(runnerKind: "mock" | "subprocess", stateDir: string): AgentRunner {
+    return runnerKind === "subprocess" ? new PiSubprocessRunner(loadConfig(stateDir).roles) : new MockAgentRunner();
+  }
+
+  function surfaceEvent(ctx: ExtensionContext, ev: OrchestratorEvent) {
+    switch (ev.type) {
+      case "advice":
+        pi.sendMessage(
+          {
+            customType: "autoresearch-advice",
+            content: ev.notes.map((n) => `[advisor:${n.severity}] ${n.text}`).join("\n"),
+            display: true,
+          },
+          { deliverAs: "nextTurn" },
+        );
+        break;
+      case "submitted":
+        notify(ctx, `submitted ${ev.ideaId} (score ${ev.score})${ev.submissionId ? ` as ${ev.submissionId}` : ""}`);
+        break;
+      case "god":
+        notify(ctx, `the professor spoke with God after loop ${ev.loop} — see ${ev.noteFile}`, "warning");
+        break;
+      default:
+        break;
+    }
+    updateWidget(ctx);
+  }
+
+  async function startRun(ctx: ExtensionCommandContext): Promise<void> {
+    if (active) {
+      notify(ctx, "autoresearch already running; /autoresearch stop first", "warning");
+      return;
+    }
+    const repoRoot = ctx.cwd;
+    const stateDir = path.join(repoRoot, STATE_DIR_NAME);
+
+    // First run in this repo: init (setup agent) with a confirm when interactive.
+    if (!loadState(stateDir)) {
+      let manifest;
+      try {
+        manifest = readManifest(repoRoot);
+      } catch (err) {
+        notify(ctx, err instanceof Error ? err.message : String(err), "error");
+        return;
+      }
+      if (ctx.hasUI) {
+        const ok = await ctx.ui.confirm(
+          `Initialize autoresearch for "${manifest.name}"?`,
+          `setup: ${manifest.setupCommand}\nbench: ${manifest.benchmarkCommand}\neditable: ${manifest.editablePaths.join(", ")}\n\nThis runs dependency setup and a baseline benchmark.`,
+        );
+        if (!ok) return;
+      }
+      const config = loadConfig(stateDir);
+      try {
+        await initChallenge({
+          repoRoot,
+          runner: makeRunner(config.runner, stateDir),
+          exec: nodeExec,
+          emit: (msg) => notify(ctx, msg),
+        });
+      } catch (err) {
+        notify(ctx, `init failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+        return;
+      }
+    }
+
+    const config = loadConfig(stateDir);
+    // The scripted mock playlist covers ~6 loops (submit, god trigger,
+    // post-god improvement) then idles forever; cap the demo so it terminates.
+    if (config.runner === "mock" && config.maxLoops === null) config.maxLoops = 8;
+    const manifest = readManifest(repoRoot);
+    const state = loadState(stateDir)!;
+    const controller = new AbortController();
+    const orchestrator = new Orchestrator(repoRoot, stateDir, config, {
+      runner: makeRunner(config.runner, stateDir),
+      adapter: new YukonCliAdapter({
+        repoRoot,
+        manifest,
+        cli: detectCli(repoRoot, manifest),
+        verifyCommand: state.challenge.verifyCommand,
+        benchCommand: state.challenge.benchCommand,
+        exec: nodeExec,
+      }),
+      exec: nodeExec,
+      emit: (ev) => surfaceEvent(ctx, ev),
+      signal: controller.signal,
+    });
+
+    // Fire-and-forget: the loop must not block pi's turn. Mock agents make no
+    // LLM calls so they never contend with the interactive session.
+    const running = orchestrator
+      .runUntilDone()
+      .then(() => {
+        const phase = orchestrator.status().phase;
+        notify(ctx, `autoresearch stopped (phase: ${phase})`);
+      })
+      .catch((err) => {
+        notify(ctx, `autoresearch crashed: ${err instanceof Error ? err.message : String(err)}`, "error");
+      })
+      .finally(() => {
+        active = null;
+        if (ctx.hasUI) {
+          ctx.ui.setWidget(WIDGET_KEY, undefined);
+          ctx.ui.setStatus(WIDGET_KEY, undefined);
+        }
+      });
+
+    active = { controller, orchestrator, challengeName: state.challenge.name, running };
+    if (ctx.hasUI) ctx.ui.setStatus(WIDGET_KEY, "autoresearch: running");
+    notify(ctx, `autoresearch loop started for ${state.challenge.name} (runner: ${config.runner})`);
+    updateWidget(ctx);
+
+    // In headless print mode, pi exits when the handler returns — block until done.
+    if (!ctx.hasUI) await running;
+  }
+
+  function showStatus(ctx: ExtensionCommandContext): void {
+    const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
+    const state = loadState(stateDir);
+    if (!state) {
+      notify(ctx, "no autoresearch state in this repo; run /autoresearch first", "warning");
+      return;
+    }
+    const lines = active
+      ? renderStatusLines(active.challengeName, active.orchestrator.status())
+      : renderStatusLines(state.challenge.name, {
+          phase: state.phase,
+          loop: state.loop,
+          bestScore: state.bestScore,
+          bestSubmittedScore: state.bestSubmittedScore,
+          dryLoopStreak: state.dryLoopStreak,
+          godTriggerThreshold: loadConfig(stateDir).godTriggerThreshold,
+          ideas: state.ideas.map((i) => ({
+            id: i.id,
+            title: i.title,
+            status: i.status,
+            verifyAttempts: i.verifyAttempts,
+            localScore: i.localScore,
+          })),
+          taskboardOpen: 0,
+          lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
+        });
+    pi.sendMessage({ customType: "autoresearch-status", content: lines.join("\n"), display: true }, { deliverAs: "nextTurn" });
+    if (!ctx.hasUI) console.log(lines.join("\n"));
+  }
+
+  async function editConfig(ctx: ExtensionCommandContext): Promise<void> {
+    const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
+    const config = loadConfig(stateDir);
+    const summary = [
+      `runner: ${config.runner}`,
+      `maxIdeasPerLoop: ${config.maxIdeasPerLoop}`,
+      `godTriggerThreshold: ${config.godTriggerThreshold}`,
+      `maxVerifyAttempts: ${config.maxVerifyAttempts}`,
+      `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
+      ...Object.entries(config.roles).map(([role, spec]) => `role ${role}: ${spec.model}${spec.thinking ? ` (${spec.thinking})` : ""}`),
+    ].join("\n");
+    if (!ctx.hasUI) {
+      console.log(summary);
+      return;
+    }
+    const choice = await ctx.ui.select(`autoresearch config\n${summary}\n\nEdit:`, [
+      "toggle runner (mock/subprocess)",
+      "toggle advisor",
+      "set god trigger threshold",
+      "set max ideas per loop",
+      "close",
+    ]);
+    switch (choice) {
+      case "toggle runner (mock/subprocess)":
+        config.runner = config.runner === "mock" ? "subprocess" : "mock";
+        break;
+      case "toggle advisor":
+        config.advisor.enabled = !config.advisor.enabled;
+        break;
+      case "set god trigger threshold": {
+        const value = await ctx.ui.input("Dry loops before God (0 disables):", String(config.godTriggerThreshold));
+        if (value !== undefined && Number.isInteger(Number(value)) && Number(value) >= 0) config.godTriggerThreshold = Number(value);
+        break;
+      }
+      case "set max ideas per loop": {
+        const value = await ctx.ui.input("Max ideas the professor may propose per loop:", String(config.maxIdeasPerLoop));
+        if (value !== undefined && Number.isInteger(Number(value)) && Number(value) > 0) config.maxIdeasPerLoop = Number(value);
+        break;
+      }
+      default:
+        return;
+    }
+    fs.mkdirSync(stateDir, { recursive: true });
+    saveConfig(stateDir, config);
+    notify(ctx, "config saved to .autoresearch/config.json");
+  }
+
+  async function stopRun(ctx: ExtensionCommandContext): Promise<void> {
+    if (!active) {
+      notify(ctx, "no autoresearch loop running", "warning");
+      return;
+    }
+    active.controller.abort();
+    await active.running;
+    notify(ctx, "autoresearch paused; /autoresearch run to resume");
+  }
+
+  pi.registerCommand("autoresearch", {
+    description: "AutoResearch harness: run|status|config|stop (default: run)",
+    getArgumentCompletions: (prefix: string) => {
+      const items = ["run", "status", "config", "stop"]
+        .filter((c) => c.startsWith(prefix))
+        .map((c) => ({ value: c, label: c }));
+      return items.length > 0 ? items : null;
+    },
+    handler: async (args, ctx) => {
+      const sub = (args ?? "").trim().split(/\s+/)[0] || "run";
+      switch (sub) {
+        case "run":
+          return startRun(ctx);
+        case "status":
+          return showStatus(ctx);
+        case "config":
+          return editConfig(ctx);
+        case "stop":
+          return stopRun(ctx);
+        default:
+          notify(ctx, `unknown subcommand "${sub}" — use run|status|config|stop`, "warning");
+      }
+    },
+  });
+
+  return {
+    restoreWidget: (ctx: ExtensionContext) => {
+      // After pi restart, show paused/resumable state in the footer.
+      const state = loadState(path.join(ctx.cwd, STATE_DIR_NAME));
+      if (state && ctx.hasUI && state.phase !== "done") {
+        ctx.ui.setStatus(WIDGET_KEY, `autoresearch: ${state.phase} (loop ${state.loop}) — /autoresearch to resume`);
+      }
+    },
+  };
+}
