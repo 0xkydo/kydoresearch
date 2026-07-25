@@ -1,4 +1,4 @@
-# pi-autoresearch
+# kydoresearch
 
 A [pi](https://github.com/badlogic/pi-mono) harness for yukon AutoResearch challenges
 ([www.ecdsa.fail](https://www.ecdsa.fail), [mlx.fast](https://mlx.fast)).
@@ -33,14 +33,14 @@ Kill pi anytime; `/autoresearch` resumes from the snapshot.
 ## Install
 
 ```bash
-pi install git:github.com/<you>/pi-autoresearch
+pi install git:github.com/0xkydo/kydoresearch
 ```
 
 Dev mode (this repo checked out locally):
 
 ```bash
 cd <challenge-repo>
-pi -e /path/to/pi-autoresearch/extensions/autoresearch/index.ts
+pi -e /path/to/kydoresearch/extensions/autoresearch/index.ts
 ```
 
 ## Commands
@@ -98,7 +98,7 @@ Try it:
 ```bash
 cp -R fixtures/mock-challenge /tmp/mc && cd /tmp/mc
 git init -b main && git add -A && git commit -m baseline
-pi -e /path/to/pi-autoresearch/extensions/autoresearch/index.ts
+pi -e /path/to/kydoresearch/extensions/autoresearch/index.ts
 # then type: /autoresearch
 ```
 

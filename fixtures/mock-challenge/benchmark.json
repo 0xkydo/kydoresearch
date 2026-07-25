@@ -1,6 +1,6 @@
 {
   "name": "mock-challenge",
-  "description": "Minimize f(x,y) = (x-3)^2 + (y+1)^2. Toy fixture challenge for pi-autoresearch.",
+  "description": "Minimize f(x,y) = (x-3)^2 + (y+1)^2. Toy fixture challenge for kydoresearch.",
   "setupCommand": "./setup.sh",
   "benchmarkCommand": "./benchmark.sh",
   "scorePath": "score.json",
