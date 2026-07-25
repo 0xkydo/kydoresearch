@@ -97,7 +97,7 @@ tmux kill-session -t pidev
 - [x] Score direction: ecdsafail is lower-is-better. Verify the orchestrator's
       "improvement" comparisons and `minImprovement` epsilon respect the
       challenge's direction rather than assuming one. Test both directions.
-- [ ] Init against the scratch copy end-to-end with the mock runner: setup.sh
+- [x] Init against the scratch copy end-to-end with the mock runner: setup.sh
       runs, baseline bench parses `score.json`, state lands in `.autoresearch/`.
 - [ ] Long-running bench: `benchmark.sh` on a real challenge can take minutes.
       Make exec timeouts configurable; stream/append output somewhere
@@ -156,3 +156,6 @@ Append one line per session: date, what landed, what's next.
 - 2026-07-25: minimize/maximize orchestrator scenarios now prove directional
   winner selection and epsilon filtering; negative-score relative epsilon was
   fixed, and scratch init is next.
+- 2026-07-25: `/tmp/ecdsa-dev` init completed with the mock runner (baseline
+  2,511,992,646, phase `ready`) and an argv-manifest regression now covers the
+  path; configurable streamed benchmark execution is next.

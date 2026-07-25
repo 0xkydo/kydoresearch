@@ -37,6 +37,50 @@ describe("initChallenge", () => {
     expect(loadState(stateDir)?.challenge.name).toBe("mock-challenge");
   });
 
+  it("initializes an ecdsafail-shaped argv manifest and records its baseline", async () => {
+    fs.writeFileSync(
+      path.join(repoRoot, "benchmark.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          name: "ecadd-challenge-test",
+          description: "Optimize reversible elliptic-curve point addition.",
+          category: "rust",
+          direction: "-",
+          editablePaths: ["src/point_add"],
+          setupCommand: ["bash", "-lc", "./setup.sh"],
+          benchmarkCommand: ["bash", "-lc", "./benchmark.sh"],
+          scorePath: "score.json",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const { state, stateDir } = await initChallenge({
+      repoRoot,
+      runner: new MockAgentRunner(),
+      exec: nodeExec,
+    });
+
+    expect(state).toMatchObject({
+      phase: "ready",
+      bestScore: 10,
+      challenge: {
+        name: "ecadd-challenge-test",
+        cli: "ecdsafail",
+        direction: "-",
+        setupCommand: "bash -lc ./setup.sh",
+        verifyCommand: "bash -lc ./benchmark.sh",
+        benchCommand: "bash -lc ./benchmark.sh",
+        editablePaths: ["src/point_add"],
+        scorePath: "score.json",
+      },
+    });
+    expect(loadState(stateDir)).toMatchObject({ phase: "ready", bestScore: 10 });
+    expect(fs.readFileSync(path.join(stateDir, "journal.ndjson"), "utf8")).toContain('"phase":"ready"');
+  });
+
   it("aborts when .autoresearch would fall inside editablePaths", async () => {
     const manifestPath = path.join(repoRoot, "benchmark.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
