@@ -28,6 +28,8 @@ export interface OrchestratorPorts {
   exec: ExecPort;
   emit: (ev: OrchestratorEvent) => void;
   signal?: AbortSignal;
+  /** Injectable wait for deterministic tests; defaults to an abort-aware timer. */
+  delay?: (ms: number, signal?: AbortSignal) => Promise<void>;
 }
 
 export interface StatusReport {
@@ -95,6 +97,7 @@ export class Orchestrator {
       const summary = await this.runLoop();
       if ((this.state.phase as Phase) === "paused" || (this.state.phase as Phase) === "done") return;
       if (summary === null) return; // aborted mid-loop
+      await this.waitAfterMockLoop();
     }
   }
 
@@ -545,6 +548,13 @@ export class Orchestrator {
     return this.ports.signal?.aborted ?? false;
   }
 
+  private async waitAfterMockLoop(): Promise<void> {
+    const delayMs = this.config.mockLoopDelayMs;
+    if (this.config.runner !== "mock" || !Number.isFinite(delayMs) || delayMs <= 0) return;
+    this.emitLog(`mock demo: waiting ${delayMs}ms after loop ${this.state.loop}`);
+    await (this.ports.delay ?? abortableDelay)(delayMs, this.ports.signal);
+  }
+
   private abortLoop(): null {
     this.pause("aborted");
     return null;
@@ -566,4 +576,17 @@ export class Orchestrator {
     appendJournal(this.paths.journal, { message });
     this.ports.emit({ type: "log", message });
   }
+}
+
+function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
+  if (signal?.aborted || ms <= 0) return Promise.resolve();
+  return new Promise((resolve) => {
+    const finish = () => {
+      clearTimeout(timer);
+      signal?.removeEventListener("abort", finish);
+      resolve();
+    };
+    const timer = setTimeout(finish, ms);
+    signal?.addEventListener("abort", finish, { once: true });
+  });
 }

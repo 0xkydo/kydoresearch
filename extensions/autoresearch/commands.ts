@@ -210,6 +210,7 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
       maxVerifyAttempts: ["Verify attempts per idea before giving up:", String(config.maxVerifyAttempts)],
       maxLoops: ["Max loops (empty = unlimited):", config.maxLoops === null ? "" : String(config.maxLoops)],
       minImprovement: ["Relative epsilon for meaningful improvement:", String(config.minImprovement)],
+      mockLoopDelayMs: ["Pause after each mock loop in milliseconds (0 disables):", String(config.mockLoopDelayMs)],
       setupTimeoutMs: ["Setup command timeout in milliseconds:", String(config.execution.setupTimeoutMs)],
       verifyTimeoutMs: ["Verify command timeout in milliseconds:", String(config.execution.verifyTimeoutMs)],
       benchmarkTimeoutMs: [
@@ -241,6 +242,9 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
       case "minImprovement":
         if (Number.isFinite(asInt) && asInt >= 0) config.minImprovement = asInt;
         break;
+      case "mockLoopDelayMs":
+        if (Number.isInteger(asInt) && asInt >= 0) config.mockLoopDelayMs = asInt;
+        break;
       case "setupTimeoutMs":
         if (Number.isInteger(asInt) && asInt > 0) config.execution.setupTimeoutMs = asInt;
         break;
@@ -268,6 +272,7 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
         `maxIdeasPerLoop: ${config.maxIdeasPerLoop}`,
         `godTriggerThreshold: ${config.godTriggerThreshold}`,
         `maxVerifyAttempts: ${config.maxVerifyAttempts}`,
+        `mockLoopDelayMs: ${config.mockLoopDelayMs}`,
         `setupTimeoutMs: ${config.execution.setupTimeoutMs}`,
         `verifyTimeoutMs: ${config.execution.verifyTimeoutMs}`,
         `benchmarkTimeoutMs: ${config.execution.benchmarkTimeoutMs}`,

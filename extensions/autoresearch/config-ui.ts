@@ -14,6 +14,7 @@ export type EditableSettingField =
   | "maxVerifyAttempts"
   | "maxLoops"
   | "minImprovement"
+  | "mockLoopDelayMs"
   | "setupTimeoutMs"
   | "verifyTimeoutMs"
   | "benchmarkTimeoutMs"
@@ -81,6 +82,7 @@ export class ConfigPanel {
       { id: "maxVerifyAttempts", label: "verify attempts", value: String(c.maxVerifyAttempts), kind: "edit" },
       { id: "maxLoops", label: "max loops", value: c.maxLoops === null ? "unlimited" : String(c.maxLoops), kind: "edit" },
       { id: "minImprovement", label: "min improvement", value: String(c.minImprovement), kind: "edit" },
+      { id: "mockLoopDelayMs", label: "mock loop delay", value: `${c.mockLoopDelayMs} ms`, kind: "edit" },
       { id: "setupTimeoutMs", label: "setup timeout", value: `${c.execution.setupTimeoutMs} ms`, kind: "edit" },
       { id: "verifyTimeoutMs", label: "verify timeout", value: `${c.execution.verifyTimeoutMs} ms`, kind: "edit" },
       {

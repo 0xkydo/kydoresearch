@@ -18,7 +18,10 @@ interface Harness {
   stateDir: string;
   config: HarnessConfig;
   events: OrchestratorEvent[];
-  makeOrchestrator: (signal?: AbortSignal) => Orchestrator;
+  makeOrchestrator: (
+    signal?: AbortSignal,
+    delay?: (ms: number, signal?: AbortSignal) => Promise<void>,
+  ) => Orchestrator;
 }
 
 async function makeHarness(repoRoot: string, configPatch: Partial<HarnessConfig> = {}): Promise<Harness> {
@@ -27,7 +30,10 @@ async function makeHarness(repoRoot: string, configPatch: Partial<HarnessConfig>
   Object.assign(config, configPatch);
   const manifest = readManifest(repoRoot);
   const events: OrchestratorEvent[] = [];
-  const makeOrchestrator = (signal?: AbortSignal) =>
+  const makeOrchestrator = (
+    signal?: AbortSignal,
+    delay?: (ms: number, signal?: AbortSignal) => Promise<void>,
+  ) =>
     new Orchestrator(repoRoot, stateDir, config, {
       runner,
       adapter: new YukonCliAdapter({
@@ -41,6 +47,7 @@ async function makeHarness(repoRoot: string, configPatch: Partial<HarnessConfig>
       exec: nodeExec,
       emit: (ev) => events.push(ev),
       signal,
+      delay,
     });
   return { repoRoot, stateDir, config, events, makeOrchestrator };
 }
@@ -234,6 +241,42 @@ EOF
     expect(state.phase).toBe("done");
     expect(state.loop).toBe(2);
     expect(state.history.length).toBe(2);
+  });
+
+  it("applies the configured delay after each completed mock loop", async () => {
+    const h = await makeHarness(
+      repoRoot,
+      { maxLoops: 1, mockLoopDelayMs: 1_234 } as Partial<HarnessConfig>,
+    );
+    const delays: number[] = [];
+    const orchestrator = h.makeOrchestrator(undefined, async (ms) => {
+      delays.push(ms);
+    });
+
+    await orchestrator.runUntilDone();
+
+    expect(delays).toEqual([1_234]);
+    expect(loadState(h.stateDir)!.phase).toBe("done");
+  });
+
+  it("aborts a long mock-loop delay promptly and persists paused state", async () => {
+    const h = await makeHarness(
+      repoRoot,
+      { maxLoops: 2, mockLoopDelayMs: 60_000 } as Partial<HarnessConfig>,
+    );
+    const controller = new AbortController();
+    h.events.push = ((orig) =>
+      function (this: OrchestratorEvent[], ev: OrchestratorEvent) {
+        if (ev.type === "log" && ev.message.startsWith("mock demo: waiting")) {
+          controller.abort();
+        }
+        return orig.call(this, ev);
+      })(h.events.push) as typeof h.events.push;
+    const orchestrator = h.makeOrchestrator(controller.signal);
+
+    await orchestrator.runUntilDone();
+
+    expect(loadState(h.stateDir)).toMatchObject({ phase: "paused", loop: 1 });
   });
 
   it("abort mid-loop pauses; resume completes without duplicate submissions", async () => {

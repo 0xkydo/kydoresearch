@@ -47,6 +47,8 @@ export interface HarnessConfig {
   maxLoops: number | null;
   /** Relative epsilon for "meaningful improvement". */
   minImprovement: number;
+  /** Demo-only pause after each completed mock loop. 0 disables. */
+  mockLoopDelayMs: number;
   execution: ExecutionConfig;
   advisor: { enabled: boolean; watchdogFile: string };
   /** Model name passed to `submit --model` when the challenge requires it (mlxfast). */
@@ -68,6 +70,7 @@ export const DEFAULT_CONFIG: HarnessConfig = {
   maxIdeasPerLoop: 5,
   maxLoops: null,
   minImprovement: 0.005,
+  mockLoopDelayMs: 0,
   execution: {
     setupTimeoutMs: 30 * 60_000,
     verifyTimeoutMs: 10 * 60_000,

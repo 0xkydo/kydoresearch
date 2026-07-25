@@ -109,7 +109,7 @@ tmux kill-session -t pidev
       `pi.sendMessage({...}, { deliverAs: "nextTurn" })`, which only surfaces
       after the next LLM turn. Render immediately instead (notify or widget).
       Reproduce with a test or scripted TUI check first.
-- [ ] Mock run finishes in ~5s so the live widget is barely visible. Add a
+- [x] Mock run finishes in ~5s so the live widget is barely visible. Add a
       configurable per-loop delay for demos (`mockLoopDelayMs`?), default 0.
 
 ### 4. Stranger-proofing (the first-10-minutes experience)
@@ -165,3 +165,6 @@ Append one line per session: date, what landed, what's next.
 - 2026-07-25: `/autoresearch status` now renders immediately through the pi UI
   instead of waiting for another LLM turn; command-level coverage and a real
   scratch TUI capture pass, and configurable mock-loop pacing is next.
+- 2026-07-25: mock demos can now pause after each completed loop via
+  `mockLoopDelayMs` (default 0), with abort-safe orchestration tests and TUI
+  config coverage; the installed-package first-run path is next.
