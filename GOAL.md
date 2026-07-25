@@ -121,7 +121,7 @@ tmux kill-session -t pidev
       do next, not stack-trace.
 - [x] README: quickstart against a real challenge (the ecdsafail flow), config
       reference kept in sync with `src/config.ts`, troubleshooting section.
-- [ ] `/autoresearch config` panel: sanity-check it against a fresh repo with
+- [x] `/autoresearch config` panel: sanity-check it against a fresh repo with
       no `.autoresearch/` yet (should it create config on save? it does — keep
       that behavior tested).
 
@@ -180,3 +180,7 @@ Append one line per session: date, what landed, what's next.
   subprocess configuration, costs/submissions, logs, every persisted setting,
   mock usage, and troubleshooting; a config-derived docs contract keeps it in
   sync, and fresh-repo config behavior is next.
+- 2026-07-25: `/autoresearch config` now has command-level coverage proving a
+  fresh repo persists the complete defaults on close; the installed-package
+  TUI and 57-test gate pass, and subprocess-backed orchestrator failure modes
+  are next.

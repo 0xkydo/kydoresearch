@@ -4,6 +4,7 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAutoresearchCommand } from "../extensions/autoresearch/commands.ts";
+import { DEFAULT_CONFIG } from "../src/config.ts";
 import { newLoopState, saveState, STATE_DIR_NAME } from "../src/state.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
@@ -96,6 +97,49 @@ describe("/autoresearch compatibility", () => {
       "error",
     );
     expect(notify.mock.calls.flat().join("\n")).not.toMatch(/\n\s+at\s/);
+  });
+});
+
+describe("/autoresearch config", () => {
+  it("creates a complete default config when closed in a fresh repo", async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-fresh-config-"));
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void },
+      ) => {
+        handler = options.handler;
+      },
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const stateDir = path.join(repoRoot, STATE_DIR_NAME);
+    const notify = vi.fn();
+    const custom = vi.fn().mockResolvedValue({ type: "close" });
+    const ctx = {
+      cwd: repoRoot,
+      hasUI: true,
+      ui: { custom, notify },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      expect(fs.existsSync(stateDir)).toBe(false);
+      await handler!("config", ctx);
+
+      expect(custom).toHaveBeenCalledOnce();
+      expect(
+        JSON.parse(fs.readFileSync(path.join(stateDir, "config.json"), "utf8")),
+      ).toEqual(DEFAULT_CONFIG);
+      expect(notify).toHaveBeenCalledWith(
+        "config saved to .autoresearch/config.json",
+        "info",
+      );
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 });
 
