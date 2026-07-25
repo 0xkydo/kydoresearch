@@ -91,7 +91,7 @@ tmux kill-session -t pidev
       exit, timeout, abort mid-run.
 
 ### 2. Real-challenge hardening (use /tmp/ecdsa-dev)
-- [ ] `readManifest`/`detectCli` (`src/challenge/detect.ts`) must handle the
+- [x] `readManifest`/`detectCli` (`src/challenge/detect.ts`) must handle the
       ecdsafail layout. Document/fix whatever assumptions the mock fixture
       baked in (manifest fields, CLI discovery, score direction).
 - [ ] Score direction: ecdsafail is lower-is-better. Verify the orchestrator's
@@ -150,3 +150,6 @@ Append one line per session: date, what landed, what's next.
 - 2026-07-25: subprocess turns now have bounded TERM/KILL shutdown and honor
   pre/mid-run aborts; the full fake-pi matrix passes and real-challenge
   detection is next.
+- 2026-07-25: real scratch detection now handles Yukon argv-array commands and
+  the `ecadd-challenge-test` → `ecdsafail` identity alias while preserving
+  direction `-`; direction-aware improvement tests are next.

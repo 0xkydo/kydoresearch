@@ -33,6 +33,38 @@ describe("YukonCliAdapter against mockchal", () => {
     expect(detectCli(repoRoot, manifest)).toBe("./bin/mockchal");
   });
 
+  it("handles the ecdsafail argv-command manifest and ecadd challenge name", () => {
+    fs.writeFileSync(
+      path.join(repoRoot, "benchmark.json"),
+      JSON.stringify(
+        {
+          schemaVersion: 1,
+          name: "ecadd-challenge-test",
+          description: "Optimize reversible elliptic-curve point addition.",
+          category: "rust",
+          direction: "-",
+          editablePaths: ["src/point_add"],
+          setupCommand: ["bash", "-lc", "./setup.sh"],
+          benchmarkCommand: ["bash", "-lc", "./benchmark.sh"],
+          scorePath: "score.json",
+        },
+        null,
+        2,
+      ),
+    );
+
+    const manifest = readManifest(repoRoot);
+    expect(manifest).toMatchObject({
+      name: "ecadd-challenge-test",
+      direction: "-",
+      editablePaths: ["src/point_add"],
+      setupCommand: "bash -lc ./setup.sh",
+      benchmarkCommand: "bash -lc ./benchmark.sh",
+      scorePath: "score.json",
+    });
+    expect(detectCli(repoRoot, manifest)).toBe("ecdsafail");
+  });
+
   it("editablePaths guard works", () => {
     expect(isInsideEditablePaths(".autoresearch", ["src/solution/"])).toBe(false);
     expect(isInsideEditablePaths("src/solution/params.json", ["src/solution/"])).toBe(true);
