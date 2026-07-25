@@ -2,6 +2,11 @@
   "name": "kydoresearch",
   "version": "0.1.0",
   "description": "Pi harness for yukon AutoResearch challenges (professor/PhD/God loop)",
+  "keywords": [
+    "pi-package",
+    "autoresearch",
+    "yukon"
+  ],
   "type": "module",
   "license": "MIT",
   "pi": {

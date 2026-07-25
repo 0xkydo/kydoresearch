@@ -113,7 +113,7 @@ tmux kill-session -t pidev
       configurable per-loop delay for demos (`mockLoopDelayMs`?), default 0.
 
 ### 4. Stranger-proofing (the first-10-minutes experience)
-- [ ] `pi install git:github.com/0xkydo/kydoresearch` path: verify
+- [x] `pi install git:github.com/0xkydo/kydoresearch` path: verify
       `package.json` `pi.extensions` works when installed (not just `-e` dev
       mode). Peer-dep failure modes → clear error messages.
 - [ ] Graceful errors when: not a git repo, no manifest, setup.sh fails,
@@ -168,3 +168,7 @@ Append one line per session: date, what landed, what's next.
 - 2026-07-25: mock demos can now pause after each completed loop via
   `mockLoopDelayMs` (default 0), with abort-safe orchestration tests and TUI
   config coverage; the installed-package first-run path is next.
+- 2026-07-25: the exact GitHub install and the current checkout both load
+  `/autoresearch config` through isolated pi package settings without `-e` or
+  peer errors; package metadata/lock regressions landed, and graceful startup
+  errors are next.
