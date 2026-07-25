@@ -119,7 +119,7 @@ tmux kill-session -t pidev
 - [x] Graceful errors when: not a git repo, no manifest, setup.sh fails,
       benchmark command missing, pi too old. Each should tell the user what to
       do next, not stack-trace.
-- [ ] README: quickstart against a real challenge (the ecdsafail flow), config
+- [x] README: quickstart against a real challenge (the ecdsafail flow), config
       reference kept in sync with `src/config.ts`, troubleshooting section.
 - [ ] `/autoresearch config` panel: sanity-check it against a fresh repo with
       no `.autoresearch/` yet (should it create config on save? it does — keep
@@ -176,3 +176,7 @@ Append one line per session: date, what landed, what's next.
   missing manifests, setup failures, missing benchmark commands, and Pi older
   than 0.75.0; installed-package TUI and 53-test gates pass, and README
   stranger-proofing is next.
+- 2026-07-25: README now walks through installed-package ecdsafail setup,
+  subprocess configuration, costs/submissions, logs, every persisted setting,
+  mock usage, and troubleshooting; a config-derived docs contract keeps it in
+  sync, and fresh-repo config behavior is next.
