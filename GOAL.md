@@ -126,7 +126,7 @@ tmux kill-session -t pidev
       that behavior tested).
 
 ### 5. Quality passes (after 1–4)
-- [ ] Orchestrator failure-mode tests: subprocess runner wired in with the
+- [x] Orchestrator failure-mode tests: subprocess runner wired in with the
       fake shim — PhD crash mid-implement, professor returns zero ideas,
       bench script exits nonzero, advisor blocker during parallel ideas.
 - [ ] Resume matrix: kill at every phase with runner=subprocess (shim), resume,
@@ -184,3 +184,7 @@ Append one line per session: date, what landed, what's next.
   fresh repo persists the complete defaults on close; the installed-package
   TUI and 57-test gate pass, and subprocess-backed orchestrator failure modes
   are next.
+- 2026-07-25: a process-level fake Pi now drives orchestrator failures for a
+  mid-implementation PhD crash, zero proposals, nonzero benchmark, and advisor
+  blocker after proven parallel work; all 61 tests pass, and the subprocess
+  phase-by-phase resume matrix is next.
