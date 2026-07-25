@@ -12,6 +12,8 @@ import { initChallenge } from "../../src/init.ts";
 import type { OrchestratorEvent } from "../../src/orchestrator.ts";
 import { Orchestrator } from "../../src/orchestrator.ts";
 import { loadState, STATE_DIR_NAME } from "../../src/state.ts";
+import type { ConfigPanelResult, EditableSettingField, NavState } from "./config-ui.ts";
+import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
 import { renderStatusLines } from "./widget.ts";
 
 const WIDGET_KEY = "autoresearch";
@@ -183,47 +185,111 @@ export function registerAutoresearchCommand(pi: ExtensionAPI): { restoreWidget: 
     if (!ctx.hasUI) console.log(lines.join("\n"));
   }
 
+  /** Bundled role prompts plus per-challenge overrides in .autoresearch/prompts/. */
+  function listPromptFiles(repoRoot: string): { label: string; value: string }[] {
+    const bundled = path.join(import.meta.dirname, "prompts");
+    const custom = path.join(repoRoot, STATE_DIR_NAME, "prompts");
+    const entries: { label: string; value: string }[] = [];
+    for (const [dir, prefix] of [
+      [bundled, ""],
+      [custom, `${STATE_DIR_NAME}/prompts/`],
+    ] as const) {
+      if (!fs.existsSync(dir)) continue;
+      for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort()) {
+        entries.push({ label: `${prefix}${file}${prefix ? "" : " (bundled)"}`, value: `${prefix}${file}` });
+      }
+    }
+    return entries;
+  }
+
+  async function editSettingDialog(ctx: ExtensionCommandContext, config: ReturnType<typeof loadConfig>, field: EditableSettingField): Promise<void> {
+    const prompts: Record<EditableSettingField, [title: string, current: string]> = {
+      maxIdeasPerLoop: ["Max ideas the professor may propose per loop:", String(config.maxIdeasPerLoop)],
+      godTriggerThreshold: ["Dry loops before God (0 disables):", String(config.godTriggerThreshold)],
+      maxVerifyAttempts: ["Verify attempts per idea before giving up:", String(config.maxVerifyAttempts)],
+      maxLoops: ["Max loops (empty = unlimited):", config.maxLoops === null ? "" : String(config.maxLoops)],
+      minImprovement: ["Relative epsilon for meaningful improvement:", String(config.minImprovement)],
+      watchdogFile: ["Advisor watchdog file (repo-relative):", config.advisor.watchdogFile],
+      submitModelName: ["Model name for submit --model (empty = none):", config.submitModelName ?? ""],
+    };
+    const [title, current] = prompts[field];
+    const value = await ctx.ui.input(title, current);
+    if (value === undefined) return;
+    const trimmed = value.trim();
+    const asInt = Number(trimmed);
+    switch (field) {
+      case "maxIdeasPerLoop":
+        if (Number.isInteger(asInt) && asInt > 0) config.maxIdeasPerLoop = asInt;
+        break;
+      case "godTriggerThreshold":
+        if (Number.isInteger(asInt) && asInt >= 0) config.godTriggerThreshold = asInt;
+        break;
+      case "maxVerifyAttempts":
+        if (Number.isInteger(asInt) && asInt > 0) config.maxVerifyAttempts = asInt;
+        break;
+      case "maxLoops":
+        if (trimmed === "") config.maxLoops = null;
+        else if (Number.isInteger(asInt) && asInt > 0) config.maxLoops = asInt;
+        break;
+      case "minImprovement":
+        if (Number.isFinite(asInt) && asInt >= 0) config.minImprovement = asInt;
+        break;
+      case "watchdogFile":
+        if (trimmed) config.advisor.watchdogFile = trimmed;
+        break;
+      case "submitModelName":
+        config.submitModelName = trimmed || undefined;
+        break;
+    }
+  }
+
   async function editConfig(ctx: ExtensionCommandContext): Promise<void> {
     const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
     const config = loadConfig(stateDir);
-    const summary = [
-      `runner: ${config.runner}`,
-      `maxIdeasPerLoop: ${config.maxIdeasPerLoop}`,
-      `godTriggerThreshold: ${config.godTriggerThreshold}`,
-      `maxVerifyAttempts: ${config.maxVerifyAttempts}`,
-      `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
-      ...Object.entries(config.roles).map(([role, spec]) => `role ${role}: ${spec.model}${spec.thinking ? ` (${spec.thinking})` : ""}`),
-    ].join("\n");
     if (!ctx.hasUI) {
+      const summary = [
+        `runner: ${config.runner}`,
+        `maxIdeasPerLoop: ${config.maxIdeasPerLoop}`,
+        `godTriggerThreshold: ${config.godTriggerThreshold}`,
+        `maxVerifyAttempts: ${config.maxVerifyAttempts}`,
+        `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
+        ...CONFIGURABLE_ROLES.map(
+          (role) =>
+            `role ${role}: ${config.roles[role].model}${config.roles[role].thinking ? ` (${config.roles[role].thinking})` : ""} · ${config.roles[role].prompt ?? `${role}.md`}`,
+        ),
+      ].join("\n");
       console.log(summary);
       return;
     }
-    const choice = await ctx.ui.select(`autoresearch config\n${summary}\n\nEdit:`, [
-      "toggle runner (mock/subprocess)",
-      "toggle advisor",
-      "set god trigger threshold",
-      "set max ideas per loop",
-      "close",
-    ]);
-    switch (choice) {
-      case "toggle runner (mock/subprocess)":
-        config.runner = config.runner === "mock" ? "subprocess" : "mock";
-        break;
-      case "toggle advisor":
-        config.advisor.enabled = !config.advisor.enabled;
-        break;
-      case "set god trigger threshold": {
-        const value = await ctx.ui.input("Dry loops before God (0 disables):", String(config.godTriggerThreshold));
-        if (value !== undefined && Number.isInteger(Number(value)) && Number(value) >= 0) config.godTriggerThreshold = Number(value);
-        break;
+
+    // Loop: the panel closes for input/select dialogs (they can't stack on
+    // ui.custom) and reopens at the same nav position afterwards.
+    let nav: NavState = { pane: "left", left: 0, right: 0 };
+    for (;;) {
+      const result = await ctx.ui.custom<ConfigPanelResult>((tui, theme, _kb, done) => new ConfigPanel(config, nav, tui, theme, done));
+      if (result.type === "close") break;
+      nav = result.nav;
+      switch (result.type) {
+        case "editModel": {
+          const value = await ctx.ui.input(`Model for ${result.role} (provider/model):`, config.roles[result.role].model);
+          if (value?.trim()) config.roles[result.role].model = value.trim();
+          break;
+        }
+        case "editPrompt": {
+          const files = listPromptFiles(ctx.cwd);
+          const current = config.roles[result.role].prompt ?? `${result.role}.md`;
+          const choice = await ctx.ui.select(
+            `Prompt for ${result.role} (current: ${current})`,
+            files.map((f) => f.label),
+          );
+          const picked = files.find((f) => f.label === choice);
+          if (picked) config.roles[result.role].prompt = picked.value;
+          break;
+        }
+        case "editSetting":
+          await editSettingDialog(ctx, config, result.field);
+          break;
       }
-      case "set max ideas per loop": {
-        const value = await ctx.ui.input("Max ideas the professor may propose per loop:", String(config.maxIdeasPerLoop));
-        if (value !== undefined && Number.isInteger(Number(value)) && Number(value) > 0) config.maxIdeasPerLoop = Number(value);
-        break;
-      }
-      default:
-        return;
     }
     fs.mkdirSync(stateDir, { recursive: true });
     saveConfig(stateDir, config);

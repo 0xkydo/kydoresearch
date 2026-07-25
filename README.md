@@ -49,7 +49,7 @@ pi -e /path/to/kydoresearch/extensions/autoresearch/index.ts
 |---|---|
 | `/autoresearch` (or `run`) | First run: init + start loop. Later: resume. |
 | `/autoresearch status` | Dashboard: loop, phase, best scores, dry streak, god countdown, ideas, advisor notes. |
-| `/autoresearch config` | View/edit runner, god threshold, max ideas per loop, advisor toggle, model roles. |
+| `/autoresearch config` | Two-pane editor: per-role model/thinking/prompt (professor, phd, god, advisor) plus runner, thresholds, advisor settings. |
 | `/autoresearch stop` | Pause (state saved; resume with `run`). |
 
 Tools registered for the LLM: `taskboard` (shared cross-agent todo board),
@@ -66,7 +66,8 @@ Tools registered for the LLM: `taskboard` (shared cross-agent todo board),
   "minImprovement": 0.005,        // relative epsilon for "meaningful"
   "advisor": { "enabled": true, "watchdogFile": "WATCHDOG.md" },
   "roles": {                      // pay for a stronger professor without touching code
-    "professor": { "model": "anthropic/claude-fable-5", "thinking": "high" },
+    "professor": { "model": "anthropic/claude-fable-5", "thinking": "high",
+                   "prompt": ".autoresearch/prompts/my-professor.md" },
     "phd":       { "model": "anthropic/claude-sonnet-5", "thinking": "medium" },
     "god":       { "model": "anthropic/claude-fable-5", "thinking": "high" },
     "advisor":   { "model": "anthropic/claude-fable-5", "thinking": "medium" },
@@ -74,6 +75,12 @@ Tools registered for the LLM: `taskboard` (shared cross-agent todo board),
   }
 }
 ```
+
+Role `prompt` resolves bare filenames ("professor.md", the default) against the
+bundled `extensions/autoresearch/prompts/`, and repo-relative paths against the
+challenge repo — drop custom prompts in `.autoresearch/prompts/` and pick them
+in `/autoresearch config`. The setup role runs once at init, so the config
+panel only exposes professor/phd/god/advisor; edit setup in the JSON if needed.
 
 Advisor rules come from a `WATCHDOG.md` in the challenge repo (OMP-style), e.g.:
 

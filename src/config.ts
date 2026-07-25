@@ -9,6 +9,13 @@ export interface RoleSpec {
   thinking?: ThinkingLevel;
   /** Tool allowlist for the role's subprocess (v2). */
   tools?: string[];
+  /**
+   * Prompt MD file for the role. A bare filename ("professor.md") resolves
+   * against the bundled extensions/autoresearch/prompts/; a repo-relative path
+   * (".autoresearch/prompts/custom.md") against the challenge repo. Defaults
+   * to "<role>.md" (bundled).
+   */
+  prompt?: string;
 }
 
 export interface RolesConfig {
