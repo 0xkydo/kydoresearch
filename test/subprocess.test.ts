@@ -94,6 +94,55 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     expect(prompt).not.toContain("{{");
   });
 
+  it("passes the role thinking level and tool allowlist to pi", async () => {
+    const recordPath = path.join(tmpDir, "role-options-invocation.json");
+    process.env.FAKE_PI_RECORD = recordPath;
+    writeRecordingFakePi();
+    const roles = structuredClone(DEFAULT_CONFIG.roles);
+    roles.professor.thinking = "xhigh";
+    roles.professor.tools = ["read", "grep", "taskboard"];
+
+    await new PiSubprocessRunner(roles).run(makeTask(tmpDir));
+
+    const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
+    expect(invocation.args.slice(0, -1)).toEqual([
+      "--mode",
+      "json",
+      "-p",
+      "--no-session",
+      "--model",
+      roles.professor.model,
+      "--thinking",
+      "xhigh",
+      "--tools",
+      "read,grep,taskboard",
+    ]);
+  });
+
+  it("disables every tool for an explicitly empty role allowlist", async () => {
+    const recordPath = path.join(tmpDir, "no-tools-invocation.json");
+    process.env.FAKE_PI_RECORD = recordPath;
+    writeRecordingFakePi();
+    const roles = structuredClone(DEFAULT_CONFIG.roles);
+    roles.professor.thinking = "off";
+    roles.professor.tools = [];
+
+    await new PiSubprocessRunner(roles).run(makeTask(tmpDir));
+
+    const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
+    expect(invocation.args.slice(0, -1)).toEqual([
+      "--mode",
+      "json",
+      "-p",
+      "--no-session",
+      "--model",
+      roles.professor.model,
+      "--thinking",
+      "off",
+      "--no-tools",
+    ]);
+  });
+
   it("resolves a configured bare prompt filename from the bundled prompt directory", async () => {
     const recordPath = path.join(tmpDir, "bundled-invocation.json");
     process.env.FAKE_PI_RECORD = recordPath;

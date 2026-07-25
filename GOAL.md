@@ -83,7 +83,7 @@ tmux kill-session -t pidev
       bare filename resolves against `extensions/autoresearch/prompts/`,
       repo-relative path against the challenge repo. Default `<role>.md`.
       This field is currently stored by the config UI but consumed by nothing.
-- [ ] Respect `thinking` level and `tools` allowlist from `RoleSpec`.
+- [x] Respect `thinking` level and `tools` allowlist from `RoleSpec`.
 - [ ] Timeouts + abort: honor the orchestrator's `AbortSignal`; a hung or
       crashed subprocess returns a failed `AgentResult`, never throws past the
       orchestrator (one PhD dying must not kill the loop).
@@ -145,3 +145,5 @@ Append one line per session: date, what landed, what's next.
 - 2026-07-25: subprocess roles now resolve bundled/custom prompts and render
   task context, including PhD implementation/note variants; thinking/tools is
   next.
+- 2026-07-25: subprocess roles now pass configured thinking and tool allowlists
+  to pi (including an explicit no-tools mode); timeout/abort handling is next.

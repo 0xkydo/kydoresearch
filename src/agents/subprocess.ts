@@ -40,8 +40,14 @@ export class PiSubprocessRunner implements AgentRunner {
       "--no-session",
       "--model",
       role.model,
-      prompt,
     ];
+    if (role.thinking !== undefined) args.push("--thinking", role.thinking);
+    if (role.tools !== undefined) {
+      const tools = role.tools.map((tool) => tool.trim()).filter(Boolean);
+      if (tools.length > 0) args.push("--tools", tools.join(","));
+      else args.push("--no-tools");
+    }
+    args.push(prompt);
 
     return new Promise((resolve) => {
       const assistantText: string[] = [];
