@@ -17,6 +17,8 @@ export interface AgentTask {
   stateDir: string;
   /** Kind-specific payload (idea spec, verify error, streak, leaderboard, ...). */
   input: Record<string, unknown>;
+  /** Optional per-invocation Pi tool override; narrows the role default. */
+  tools?: string[];
   signal?: AbortSignal;
 }
 
@@ -35,9 +37,13 @@ export interface AgentRunner {
   run(task: AgentTask): Promise<AgentResult>;
 }
 
-/** Shape of the professor's "propose" structured output. */
-export interface ProposedIdea {
-  title: string;
-  /** Markdown body written to the idea spec file. */
-  spec: string;
-}
+/**
+ * Professor output accepted at the runtime boundary. The scientific fields
+ * are optional here only for compatibility with older custom prompts; they
+ * become required when normalizeProposal persists the candidate.
+ */
+export type ProposedIdea = Pick<CandidateProposalV1, "title" | "spec"> &
+  Partial<
+    Omit<CandidateProposalV1, "schemaVersion" | "title" | "spec">
+  >;
+import type { CandidateProposalV1 } from "../experiments.ts";

@@ -3,6 +3,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MockAgentRunner } from "../src/agents/mock.ts";
+import type { AgentRunner, AgentTask } from "../src/agents/types.ts";
+import { candidateRunPaths, readLedger, readRunRecord } from "../src/archive.ts";
 import { YukonCliAdapter } from "../src/challenge/adapter.ts";
 import { detectCli, readManifest } from "../src/challenge/detect.ts";
 import type { HarnessConfig } from "../src/config.ts";
@@ -10,7 +12,8 @@ import { nodeExec } from "../src/exec.ts";
 import { initChallenge } from "../src/init.ts";
 import type { OrchestratorEvent } from "../src/orchestrator.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
-import { loadState } from "../src/state.ts";
+import type { Idea } from "../src/state.ts";
+import { loadState, saveState } from "../src/state.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
 interface Harness {
@@ -24,8 +27,11 @@ interface Harness {
   ) => Orchestrator;
 }
 
-async function makeHarness(repoRoot: string, configPatch: Partial<HarnessConfig> = {}): Promise<Harness> {
-  const runner = new MockAgentRunner();
+async function makeHarness(
+  repoRoot: string,
+  configPatch: Partial<HarnessConfig> = {},
+  runner: AgentRunner = new MockAgentRunner(),
+): Promise<Harness> {
   const { stateDir, config } = await initChallenge({ repoRoot, runner, exec: nodeExec });
   Object.assign(config, configPatch);
   const manifest = readManifest(repoRoot);
@@ -96,6 +102,31 @@ describe("Orchestrator scenario matrix", () => {
     // Hypothesis notes exist for both non-winning ideas.
     expect(fs.existsSync(path.join(h.stateDir, "notes", "loop-001-L001-I1.md"))).toBe(true);
     expect(fs.existsSync(path.join(h.stateDir, "notes", "loop-001-L001-I2.md"))).toBe(true);
+
+    // Every terminal candidate is sealed with evidence before successful
+    // worktrees are pruned.
+    for (const ideaId of ["L001-I1", "L001-I2"]) {
+      const run = candidateRunPaths(h.stateDir, ideaId);
+      expect(readRunRecord(h.stateDir, ideaId).status).toBe("sealed");
+      for (const artifact of [
+        run.task,
+        run.proposal,
+        run.parent,
+        run.source,
+        run.diff,
+        run.metrics,
+        run.integrity,
+        run.postmortem,
+        run.verifyLog,
+        run.benchmarkLog,
+      ]) {
+        expect(fs.existsSync(artifact), artifact).toBe(true);
+      }
+    }
+    expect(readLedger(h.stateDir).map((entry) => entry.candidateId)).toEqual([
+      "L001-I1",
+      "L001-I2",
+    ]);
   });
 
   it("loop 2: verify-retry-then-pass, best-of-two winner submits, loser superseded", async () => {
@@ -191,6 +222,163 @@ EOF
     state = loadState(h.stateDir)!;
     expect(state.bestScore).toBe(0);
     expect(mySubmissions(repoRoot).some((s) => s.score === 0)).toBe(true);
+  });
+
+  it("uses the sealed winning candidate as the explicit parent in later loops", async () => {
+    const h = await makeHarness(repoRoot);
+    const orchestrator = h.makeOrchestrator();
+    await orchestrator.runLoop();
+    await orchestrator.runLoop();
+
+    expect(loadState(h.stateDir)!.bestCandidateId).toBe("L002-I1");
+    const winningSource = candidateRunPaths(h.stateDir, "L002-I1").source;
+    expect(
+      JSON.parse(
+        fs.readFileSync(path.join(winningSource, "src", "solution", "params.json"), "utf8"),
+      ),
+    ).toMatchObject({ algorithm: "coord-descent-x", x: 2, y: 0 });
+
+    await orchestrator.runLoop();
+    const loop3 = readLedger(h.stateDir).filter((entry) => entry.candidateId.startsWith("L003-"));
+    expect(loop3).not.toHaveLength(0);
+    expect(loop3.every((entry) => entry.parentCandidateId === "L002-I1")).toBe(true);
+    for (const entry of loop3) {
+      expect(
+        JSON.parse(
+          fs.readFileSync(candidateRunPaths(h.stateDir, entry.candidateId).parent, "utf8"),
+        ),
+      ).toMatchObject({
+        candidateId: entry.candidateId,
+        parentCandidateId: "L002-I1",
+        parentSourcePath: winningSource,
+      });
+    }
+  });
+
+  it("replays a persisted professor result without conflicting partial runs", async () => {
+    const h = await makeHarness(repoRoot);
+    const state = loadState(h.stateDir)!;
+    state.loop = 1;
+    saveState(h.stateDir, state);
+
+    const first = h.makeOrchestrator() as unknown as {
+      propose(): Promise<void>;
+    };
+    await first.propose();
+    const materialized = loadState(h.stateDir)!.ideas;
+    expect(materialized).toHaveLength(2);
+    expect(
+      fs.existsSync(path.join(h.stateDir, "loops", "loop-001", "professor-result.json")),
+    ).toBe(true);
+
+    // Simulate a process loss after immutable run files were created but
+    // before state.ideas became durable.
+    const interrupted = loadState(h.stateDir)!;
+    interrupted.ideas = [];
+    saveState(h.stateDir, interrupted);
+
+    const resumed = h.makeOrchestrator() as unknown as {
+      propose(): Promise<void>;
+    };
+    await expect(resumed.propose()).resolves.toBeUndefined();
+    expect(loadState(h.stateDir)!.ideas).toMatchObject(
+      materialized.map((idea) => ({
+        id: idea.id,
+        title: idea.title,
+        parentCandidateId: idea.parentCandidateId,
+        proposalFile: idea.proposalFile,
+      })),
+    );
+  });
+
+  it("repairs a missing ledger append for an already sealed candidate", async () => {
+    const h = await makeHarness(repoRoot);
+    const orchestrator = h.makeOrchestrator();
+    const summary = await orchestrator.runLoop();
+    const candidate = summary!.ideas[1]!;
+    const remaining = readLedger(h.stateDir).filter(
+      (entry) => entry.candidateId !== candidate.id,
+    );
+    fs.writeFileSync(
+      path.join(h.stateDir, "ledger.ndjson"),
+      remaining.map((entry) => JSON.stringify(entry)).join("\n") + "\n",
+    );
+
+    const idea: Idea = {
+      id: candidate.id,
+      loop: 1,
+      title: candidate.title,
+      parentCandidateId: "baseline",
+      specFile: "ideas/loop-001/idea-2.md",
+      status: candidate.status,
+      verifyAttempts: 1,
+      localScore: candidate.localScore,
+      comparisonScore: 10,
+    };
+    const internal = h.makeOrchestrator() as unknown as {
+      archiveIdea(candidateIdea: Idea): Promise<void>;
+    };
+    await internal.archiveIdea(idea);
+
+    expect(
+      readLedger(h.stateDir).filter((entry) => entry.candidateId === candidate.id),
+    ).toHaveLength(1);
+    expect(idea.archivedAt).toBeTruthy();
+  });
+
+  it("snapshots repository instructions and makes postmortems read-only", async () => {
+    fs.writeFileSync(path.join(repoRoot, "AGENTS.md"), "Only edit declared candidate paths.\n");
+    fs.writeFileSync(
+      path.join(repoRoot, "src", "solution", "AGENTS.md"),
+      "Solution changes must retain the JSON schema.\n",
+    );
+    fs.mkdirSync(path.join(repoRoot, "src", "solution", "nested"), { recursive: true });
+    fs.writeFileSync(
+      path.join(repoRoot, "src", "solution", "nested", "CLAUDE.md"),
+      "Nested solution evidence must remain reproducible.\n",
+    );
+    class RecordingRunner implements AgentRunner {
+      readonly tasks: AgentTask[] = [];
+      private readonly delegate = new MockAgentRunner();
+
+      run(task: AgentTask) {
+        this.tasks.push(task);
+        return this.delegate.run(task);
+      }
+    }
+    const runner = new RecordingRunner();
+    const h = await makeHarness(repoRoot, {}, runner);
+    await h.makeOrchestrator().runLoop();
+
+    const implementations = runner.tasks.filter((task) => task.kind === "implement");
+    expect(implementations.length).toBeGreaterThan(0);
+    for (const task of implementations) {
+      const instructions = task.input.repositoryInstructionPaths as string[];
+      expect(instructions).toHaveLength(3);
+      expect(instructions).toEqual(
+        expect.arrayContaining([
+          expect.stringMatching(
+            /\.autoresearch\/runs\/L001-I[12]\/agent\/repository-instructions\/AGENTS\.md$/,
+          ),
+          expect.stringMatching(
+            /repository-instructions\/src\/solution\/AGENTS\.md$/,
+          ),
+          expect.stringMatching(
+            /repository-instructions\/src\/solution\/nested\/CLAUDE\.md$/,
+          ),
+        ]),
+      );
+      expect(instructions.map((instruction) => fs.readFileSync(instruction, "utf8")).join("\n"))
+        .toContain("Only edit declared");
+    }
+
+    const postmortems = runner.tasks.filter((task) => task.kind === "write-note");
+    expect(postmortems).toHaveLength(2);
+    for (const task of postmortems) {
+      expect(task.tools).toEqual(["read"]);
+      expect(task.cwd).toMatch(/\.autoresearch\/runs\/L001-I[12]$/);
+      expect(task.cwd).not.toBe(repoRoot);
+    }
   });
 
   it("god trigger disabled when threshold is 0", async () => {

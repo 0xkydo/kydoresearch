@@ -29,4 +29,26 @@ describe("loadConfig", () => {
     expect(config.execution.benchmarkTimeoutMs).toBe(123_456);
     expect(config.mockLoopDelayMs).toBe(0);
   });
+
+  it("deep-merges older partial role settings with portable tool defaults", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-config-"));
+    dirs.push(stateDir);
+    fs.writeFileSync(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({
+        version: 1,
+        roles: {
+          professor: { model: "custom/research-model" },
+        },
+      }),
+    );
+
+    const config = loadConfig(stateDir);
+
+    expect(config.roles.professor).toEqual({
+      ...DEFAULT_CONFIG.roles.professor,
+      model: "custom/research-model",
+    });
+    expect(config.roles.phd).toEqual(DEFAULT_CONFIG.roles.phd);
+  });
 });

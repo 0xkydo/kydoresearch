@@ -13,7 +13,12 @@ import { initChallenge } from "../../src/init.ts";
 import type { OrchestratorEvent } from "../../src/orchestrator.ts";
 import { Orchestrator } from "../../src/orchestrator.ts";
 import { loadState, STATE_DIR_NAME, statePaths } from "../../src/state.ts";
-import type { ConfigPanelResult, EditableSettingField, NavState } from "./config-ui.ts";
+import type {
+  ConfigPanelResult,
+  ConfigurableRole,
+  EditableSettingField,
+  NavState,
+} from "./config-ui.ts";
 import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
 import { renderStatusLines } from "./widget.ts";
 
@@ -213,6 +218,29 @@ export function registerAutoresearchCommand(
     return entries;
   }
 
+  /** Bundled role soul plus per-challenge overrides in .autoresearch/agents/<role>/. */
+  function listSoulFiles(
+    repoRoot: string,
+    role: ConfigurableRole,
+  ): { label: string; value: string }[] {
+    const bundled = path.join(import.meta.dirname, "agents", role);
+    const custom = path.join(repoRoot, STATE_DIR_NAME, "agents", role);
+    const entries: { label: string; value: string }[] = [];
+    for (const [dir, prefix] of [
+      [bundled, ""],
+      [custom, `${STATE_DIR_NAME}/agents/${role}/`],
+    ] as const) {
+      if (!fs.existsSync(dir)) continue;
+      for (const file of fs.readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
+        entries.push({
+          label: `${prefix}${file}${prefix ? "" : " (bundled)"}`,
+          value: `${prefix}${file}`,
+        });
+      }
+    }
+    return entries;
+  }
+
   async function editSettingDialog(ctx: ExtensionCommandContext, config: ReturnType<typeof loadConfig>, field: EditableSettingField): Promise<void> {
     const prompts: Record<EditableSettingField, [title: string, current: string]> = {
       maxIdeasPerLoop: ["Max ideas the professor may propose per loop:", String(config.maxIdeasPerLoop)],
@@ -289,7 +317,7 @@ export function registerAutoresearchCommand(
         `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
         ...CONFIGURABLE_ROLES.map(
           (role) =>
-            `role ${role}: ${config.roles[role].model}${config.roles[role].thinking ? ` (${config.roles[role].thinking})` : ""} · ${config.roles[role].prompt ?? `${role}.md`}`,
+            `role ${role}: ${config.roles[role].model}${config.roles[role].thinking ? ` (${config.roles[role].thinking})` : ""} · soul ${config.roles[role].soul ?? "SOUL.md"} · prompt ${config.roles[role].prompt ?? `${role}.md`}`,
         ),
       ].join("\n");
       console.log(summary);
@@ -307,6 +335,17 @@ export function registerAutoresearchCommand(
         case "editModel": {
           const value = await ctx.ui.input(`Model for ${result.role} (provider/model):`, config.roles[result.role].model);
           if (value?.trim()) config.roles[result.role].model = value.trim();
+          break;
+        }
+        case "editSoul": {
+          const files = listSoulFiles(ctx.cwd, result.role);
+          const current = config.roles[result.role].soul ?? "SOUL.md";
+          const choice = await ctx.ui.select(
+            `Soul for ${result.role} (current: ${current})`,
+            files.map((file) => file.label),
+          );
+          const picked = files.find((file) => file.label === choice);
+          if (picked) config.roles[result.role].soul = picked.value;
           break;
         }
         case "editPrompt": {

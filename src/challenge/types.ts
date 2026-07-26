@@ -17,6 +17,7 @@ export interface ScoreResult {
   score?: number;
   raw: string; // combined stdout/stderr tail for diagnostics
   exitCode: number;
+  timedOut?: boolean;
 }
 
 export interface SubmitResult {
@@ -39,9 +40,9 @@ export interface ChallengeAdapter {
   /** Install dependencies (setupCommand). */
   setup(signal?: AbortSignal): Promise<ScoreResult>;
   /** Correctness check. cwd overrides the repo root (idea worktrees). */
-  verify(cwd?: string, signal?: AbortSignal): Promise<ScoreResult>;
+  verify(cwd?: string, signal?: AbortSignal, logFile?: string): Promise<ScoreResult>;
   /** Performance benchmark; parses scorePath. cwd overrides the repo root. */
-  bench(cwd?: string, signal?: AbortSignal): Promise<ScoreResult>;
+  bench(cwd?: string, signal?: AbortSignal, logFile?: string): Promise<ScoreResult>;
   /** Submit editablePaths via the challenge CLI. Always runs at repo root. */
   submit(opts: { noteFile: string; model?: string }, signal?: AbortSignal): Promise<SubmitResult>;
   listSubmissions(all: boolean, signal?: AbortSignal): Promise<LeaderboardEntry[]>;

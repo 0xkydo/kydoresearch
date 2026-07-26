@@ -118,11 +118,17 @@ describe("YukonCliAdapter against mockchal", () => {
     await loggedAdapter.verify();
     await loggedAdapter.bench();
     await loggedAdapter.bench();
+    const candidateVerifyLog = path.join(repoRoot, ".autoresearch", "runs", "L001-I1", "logs", "verify.log");
+    const candidateBenchLog = path.join(repoRoot, ".autoresearch", "runs", "L001-I1", "logs", "benchmark.log");
+    await loggedAdapter.verify(repoRoot, undefined, candidateVerifyLog);
+    await loggedAdapter.bench(repoRoot, undefined, candidateBenchLog);
 
     expect(seen.map(({ command, timeout }) => [command, timeout])).toEqual([
       ["./setup.sh", 111],
       ["./verify.sh", 222],
       ["./benchmark.sh", 333],
+      ["./benchmark.sh", 333],
+      ["./verify.sh", 222],
       ["./benchmark.sh", 333],
     ]);
     expect(fs.readFileSync(path.join(logDir, "setup.log"), "utf8")).toContain("./setup.sh: stdout");
@@ -130,6 +136,8 @@ describe("YukonCliAdapter against mockchal", () => {
     const benchmarkLog = fs.readFileSync(path.join(logDir, "benchmark.log"), "utf8");
     expect(benchmarkLog.match(/\$ \.\/benchmark\.sh/g)).toHaveLength(2);
     expect(benchmarkLog).toContain("./benchmark.sh: stdout");
+    expect(fs.readFileSync(candidateVerifyLog, "utf8")).toContain("./verify.sh: stdout");
+    expect(fs.readFileSync(candidateBenchLog, "utf8")).toContain("./benchmark.sh: stderr");
   });
 
   it("verify fails before setup (marker missing)", async () => {

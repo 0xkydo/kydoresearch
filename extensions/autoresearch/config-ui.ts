@@ -36,6 +36,7 @@ export interface NavState {
 export type ConfigPanelResult =
   | { type: "close" }
   | { type: "editModel"; role: ConfigurableRole; nav: NavState }
+  | { type: "editSoul"; role: ConfigurableRole; nav: NavState }
   | { type: "editPrompt"; role: ConfigurableRole; nav: NavState }
   | { type: "editSetting"; field: EditableSettingField; nav: NavState };
 
@@ -70,6 +71,7 @@ export class ConfigPanel {
       return [
         { id: "model", label: "model", value: spec.model, kind: "edit" },
         { id: "thinking", label: "thinking", value: spec.thinking ?? "off", kind: "cycle" },
+        { id: "soul", label: "soul", value: spec.soul ?? "SOUL.md", kind: "edit" },
         { id: "prompt", label: "prompt", value: spec.prompt ?? `${role}.md`, kind: "edit" },
       ];
     }
@@ -145,6 +147,8 @@ export class ConfigPanel {
         return;
       case "model":
         return this.done({ type: "editModel", role: role!, nav: this.nav });
+      case "soul":
+        return this.done({ type: "editSoul", role: role!, nav: this.nav });
       case "prompt":
         return this.done({ type: "editPrompt", role: role!, nav: this.nav });
       default:

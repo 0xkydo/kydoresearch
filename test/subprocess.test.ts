@@ -10,16 +10,23 @@ describe("PiSubprocessRunner", () => {
   let tmpDir: string;
   let originalPath: string | undefined;
   let originalRecordPath: string | undefined;
+  let originalArgv1: string | undefined;
 
   beforeEach(() => {
     tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), "fake-pi-"));
     originalPath = process.env.PATH;
     originalRecordPath = process.env.FAKE_PI_RECORD;
+    originalArgv1 = process.argv[1];
+    // Exercise the generic-runtime fallback in most tests. A dedicated test
+    // below covers reuse of the script that launched the parent Pi.
+    process.argv[1] = "/$bunfs/root/pi";
     process.env.PATH = `${tmpDir}${path.delimiter}${originalPath ?? ""}`;
   });
 
   afterEach(() => {
     process.env.PATH = originalPath;
+    if (originalArgv1 === undefined) delete process.argv[1];
+    else process.argv[1] = originalArgv1;
     if (originalRecordPath === undefined) delete process.env.FAKE_PI_RECORD;
     else process.env.FAKE_PI_RECORD = originalRecordPath;
     fs.rmSync(tmpDir, { recursive: true, force: true });
@@ -92,6 +99,15 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     expect(prompt).toContain("Current best score: 100 (direction -)");
     expect(prompt).toContain(`${task.stateDir}/knowledge-base.md`);
     expect(prompt).not.toContain("{{");
+    const soulFlag = invocation.args.indexOf("--append-system-prompt");
+    expect(soulFlag).toBeGreaterThan(-1);
+    expect(invocation.args[soulFlag + 1]).toMatch(
+      /extensions[/\\]autoresearch[/\\]agents[/\\]professor[/\\]SOUL\.md$/,
+    );
+    const soul = fs.readFileSync(invocation.args[soulFlag + 1]!, "utf8");
+    expect(soul).toContain("research director and evidence-driven search strategist");
+    expect(soul).not.toContain("{{");
+    expect(soul).not.toContain("loop 2");
   });
 
   it("passes the role thinking level and tool allowlist to pi", async () => {
@@ -110,13 +126,46 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
       "json",
       "-p",
       "--no-session",
+      "--no-extensions",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-context-files",
       "--model",
       roles.professor.model,
       "--thinking",
       "xhigh",
       "--tools",
       "read,grep,taskboard",
+      "--append-system-prompt",
+      expect.stringMatching(
+        /extensions[/\\]autoresearch[/\\]agents[/\\]professor[/\\]SOUL\.md$/,
+      ),
     ]);
+  });
+
+  it("allows a task to narrow the role tool allowlist", async () => {
+    const recordPath = path.join(tmpDir, "task-tools-invocation.json");
+    process.env.FAKE_PI_RECORD = recordPath;
+    writeRecordingFakePi();
+    const roles = structuredClone(DEFAULT_CONFIG.roles);
+    roles.phd.tools = ["read", "write", "edit", "bash"];
+    const task = makeTask(tmpDir, {
+      role: "phd",
+      kind: "write-note",
+      tools: ["read"],
+      input: {
+        notePath: path.join(tmpDir, ".autoresearch", "note.md"),
+        ideaTitle: "Safe postmortem",
+      },
+    });
+
+    await new PiSubprocessRunner(roles).run(task);
+
+    const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as {
+      args: string[];
+    };
+    expect(invocation.args).toContain("--tools");
+    expect(invocation.args[invocation.args.indexOf("--tools") + 1]).toBe("read");
   });
 
   it("disables every tool for an explicitly empty role allowlist", async () => {
@@ -135,11 +184,19 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
       "json",
       "-p",
       "--no-session",
+      "--no-extensions",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-context-files",
       "--model",
       roles.professor.model,
       "--thinking",
       "off",
       "--no-tools",
+      "--append-system-prompt",
+      expect.stringMatching(
+        /extensions[/\\]autoresearch[/\\]agents[/\\]professor[/\\]SOUL\.md$/,
+      ),
     ]);
   });
 
@@ -159,6 +216,30 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
     expect(invocation.args.at(-1)).toContain("after 4 consecutive loops");
     expect(invocation.args.at(-1)).toContain("to `/tmp/hope.md`");
+  });
+
+  it("resolves a configured bare soul from the bundled role directory", async () => {
+    const recordPath = path.join(tmpDir, "bundled-soul-invocation.json");
+    process.env.FAKE_PI_RECORD = recordPath;
+    writeRecordingFakePi();
+    const roles = structuredClone(DEFAULT_CONFIG.roles);
+    roles.god.soul = "SOUL.md";
+
+    await new PiSubprocessRunner(roles).run(
+      makeTask(tmpDir, {
+        role: "god",
+        kind: "god-conversation",
+        input: { streak: 4, notePath: "/tmp/hope.md" },
+      }),
+    );
+
+    const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
+    const soulPath = invocation.args[invocation.args.indexOf("--append-system-prompt") + 1]!;
+    expect(soulPath).toMatch(/extensions[/\\]autoresearch[/\\]agents[/\\]god[/\\]SOUL\.md$/);
+    const soul = fs.readFileSync(soulPath, "utf8");
+    expect(soul).toContain("inspire, comfort, and give hope that the score CAN improve");
+    expect(soul).toContain("warm, wise, occasionally playful");
+    expect(soul).toContain("hope with good priors");
   });
 
   it("renders the task-specific note section of the bundled PhD prompt", async () => {
@@ -184,7 +265,7 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     const prompt = invocation.args.at(-1);
     expect(prompt).toContain("recording what was learned");
     expect(prompt).toContain("Idea: Ancilla reuse");
-    expect(prompt).toContain("Write the note to the requested path");
+    expect(prompt).toContain("Return the complete markdown note");
     expect(prompt).not.toContain("implementing one research idea");
     expect(prompt).not.toContain("{{");
   });
@@ -230,6 +311,28 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     );
   });
 
+  it("resolves a configured repo-relative soul from the main challenge repo", async () => {
+    const repoRoot = path.join(tmpDir, "challenge");
+    const worktree = path.join(tmpDir, "worktree");
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    const customSoulPath = path.join(stateDir, "agents", "professor", "SOUL.md");
+    fs.mkdirSync(path.dirname(customSoulPath), { recursive: true });
+    fs.mkdirSync(worktree);
+    fs.writeFileSync(customSoulPath, "# Custom Professor\n\nStable custom instructions.\n");
+    const recordPath = path.join(tmpDir, "custom-soul-invocation.json");
+    process.env.FAKE_PI_RECORD = recordPath;
+    writeRecordingFakePi();
+    const roles = structuredClone(DEFAULT_CONFIG.roles);
+    roles.professor.soul = ".autoresearch/agents/professor/SOUL.md";
+
+    const result = await new PiSubprocessRunner(roles).run(makeTask(worktree, { stateDir }));
+
+    expect(result.ok).toBe(true);
+    const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
+    expect(invocation.args[invocation.args.indexOf("--append-system-prompt") + 1]).toBe(customSoulPath);
+    expect(invocation.args.at(-1)).toContain("## Your job (loop 2)");
+  });
+
   it("returns a failed result when the configured prompt cannot be read", async () => {
     const invokedPath = path.join(tmpDir, "unexpected-invocation");
     process.env.FAKE_PI_RECORD = invokedPath;
@@ -248,6 +351,159 @@ process.exitCode = 99;
       error: expect.stringMatching(/prompt.*missing\.md/i),
     });
     expect(fs.existsSync(invokedPath)).toBe(false);
+  });
+
+  it("returns a failed result when the configured soul cannot be read", async () => {
+    const invokedPath = path.join(tmpDir, "unexpected-soul-invocation");
+    process.env.FAKE_PI_RECORD = invokedPath;
+    writeRecordingFakePi();
+    const roles = structuredClone(DEFAULT_CONFIG.roles);
+    roles.professor.soul = ".autoresearch/agents/professor/missing.md";
+
+    await expect(new PiSubprocessRunner(roles).run(makeTask(tmpDir))).resolves.toMatchObject({
+      ok: false,
+      output: "",
+      filesWritten: [],
+      error: expect.stringMatching(/soul.*missing\.md/i),
+    });
+    expect(fs.existsSync(invokedPath)).toBe(false);
+  });
+
+  it("retains the complete raw JSONL stream and snapshots the effective soul", async () => {
+    const traceDir = path.join(tmpDir, ".autoresearch", "run", "agent");
+    const rawEvents = [
+      JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "tool-1",
+        toolName: "read",
+        args: { path: "TASK.md" },
+      }),
+      JSON.stringify({
+        type: "tool_result_end",
+        message: { role: "toolResult", content: [{ type: "text", text: "task" }] },
+      }),
+      JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      }),
+    ].join("\n") + "\n";
+    writeFakePi(`
+process.stdout.write(${JSON.stringify(rawEvents)});
+`);
+
+    const result = await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(
+      makeTask(tmpDir, {
+        input: {
+          loop: 2,
+          maxIdeasPerLoop: 3,
+          bestScore: 100,
+          direction: "-",
+          dryLoopStreak: 1,
+          traceDir,
+        },
+      }),
+    );
+
+    expect(result).toMatchObject({ ok: true, output: "done" });
+    expect(fs.readFileSync(path.join(traceDir, "events.ndjson"), "utf8")).toBe(rawEvents);
+    expect(fs.readFileSync(path.join(traceDir, "soul.md"), "utf8")).toContain(
+      "research director and evidence-driven search strategist",
+    );
+    expect(fs.readFileSync(path.join(traceDir, "context.md"), "utf8")).toContain(
+      "## Your job (loop 2)",
+    );
+    expect(
+      JSON.parse(fs.readFileSync(path.join(traceDir, "invocation.json"), "utf8")),
+    ).toMatchObject({
+      schemaVersion: 1,
+      role: "professor",
+      kind: "propose",
+      cwd: tmpDir,
+      input: { loop: 2 },
+    });
+  });
+
+  it("uses an explicitly supplied run trace path", async () => {
+    const tracePath = path.join(
+      tmpDir,
+      ".autoresearch",
+      "run",
+      "agent",
+      "worker.ndjson",
+    );
+    const rawEvent =
+      JSON.stringify({
+        type: "message_end",
+        message: { role: "assistant", content: [{ type: "text", text: "done" }] },
+      }) + "\n";
+    writeFakePi(`
+process.stdout.write(${JSON.stringify(rawEvent)});
+`);
+
+    const result = await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(
+      makeTask(tmpDir, {
+        input: {
+          loop: 2,
+          maxIdeasPerLoop: 3,
+          bestScore: 100,
+          direction: "-",
+          dryLoopStreak: 1,
+          runTracePath: tracePath,
+        },
+      }),
+    );
+
+    expect(result.ok).toBe(true);
+    expect(fs.readFileSync(tracePath, "utf8")).toBe(rawEvent);
+    expect(fs.existsSync(path.join(path.dirname(tracePath), "soul.md"))).toBe(true);
+  });
+
+  it("rejects trace paths outside the autoresearch state directory", async () => {
+    const task = makeTask(tmpDir);
+    const result = await new PiSubprocessRunner(
+      structuredClone(DEFAULT_CONFIG.roles),
+    ).run({
+      ...task,
+      input: {
+        ...task.input,
+        traceDir: path.join(tmpDir, "outside-state"),
+      },
+    });
+
+    expect(result).toMatchObject({
+      ok: false,
+      error: expect.stringMatching(/trace path escapes/i),
+    });
+    expect(fs.existsSync(path.join(tmpDir, "outside-state"))).toBe(false);
+  });
+
+  it("reuses the script that launched the parent Pi process", async () => {
+    const recordPath = path.join(tmpDir, "parent-script-invocation.json");
+    const parentScript = path.join(tmpDir, "pi.cjs");
+    process.env.FAKE_PI_RECORD = recordPath;
+    fs.writeFileSync(
+      parentScript,
+      [
+        'const fs = require("node:fs");',
+        "fs.writeFileSync(process.env.FAKE_PI_RECORD, JSON.stringify({",
+        "  args: process.argv.slice(2),",
+        "  cwd: process.cwd(),",
+        "}));",
+        "process.stdout.write(JSON.stringify({",
+        '  type: "message_end",',
+        '  message: { role: "assistant", content: [{ type: "text", text: "done" }] },',
+        '}) + "\\n");',
+        "",
+      ].join("\n"),
+    );
+    process.argv[1] = parentScript;
+
+    const result = await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(makeTask(tmpDir));
+
+    expect(result.ok).toBe(true);
+    const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[]; cwd: string };
+    expect(invocation.args).toContain("--append-system-prompt");
+    expect(invocation.cwd).toBe(fs.realpathSync(tmpDir));
   });
 
   it("returns a failed result for malformed JSON events", async () => {
@@ -383,17 +639,23 @@ process.stdout.write(JSON.stringify({
 });
 
 function makeTask(cwd: string, overrides: Partial<AgentTask> = {}): AgentTask {
+  const stateDir = path.join(cwd, ".autoresearch");
   const task: AgentTask = {
     role: "professor",
     kind: "propose",
     cwd,
-    stateDir: path.join(cwd, ".autoresearch"),
+    stateDir,
     input: {
+      taskPath: path.join(stateDir, "loops", "loop-002", "professor-task.json"),
       loop: 2,
       maxIdeasPerLoop: 3,
       bestScore: 100,
       direction: "-",
       dryLoopStreak: 1,
+      knowledgeBasePath: path.join(stateDir, "knowledge-base.md"),
+      ledgerPath: path.join(stateDir, "ledger.ndjson"),
+      runsDirectory: path.join(stateDir, "runs"),
+      currentBestCandidateId: "L001-I1",
     },
   };
   return { ...task, ...overrides };

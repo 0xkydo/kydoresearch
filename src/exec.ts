@@ -4,6 +4,8 @@ export interface ExecResult {
   stdout: string;
   stderr: string;
   code: number;
+  /** True when node terminated the child because ExecOptions.timeout elapsed. */
+  timedOut?: boolean;
 }
 
 export interface ExecOptions {
@@ -34,11 +36,18 @@ export const nodeExec: ExecPort = (cmd, args, opts = {}) =>
         shell: false,
       },
       (error, stdout, stderr) => {
-        const rawCode: unknown = error ? (error as NodeJS.ErrnoException & { code?: unknown }).code ?? 1 : 0;
+        const processError = error as
+          | (NodeJS.ErrnoException & { code?: unknown; killed?: boolean })
+          | null;
+        const rawCode: unknown = processError ? processError.code ?? 1 : 0;
         resolve({
           stdout: stdout?.toString() ?? "",
           stderr: stderr?.toString() ?? "",
           code: typeof rawCode === "number" ? rawCode : 1,
+          timedOut:
+            processError?.killed === true &&
+            opts.timeout !== undefined &&
+            !(opts.signal?.aborted ?? false),
         });
       },
     );

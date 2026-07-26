@@ -10,10 +10,20 @@ export interface RoleSpec {
   /** Tool allowlist for the role's subprocess (v2). */
   tools?: string[];
   /**
-   * Prompt MD file for the role. A bare filename ("professor.md") resolves
+   * Stable system instructions for the role. A bare filename ("SOUL.md")
+   * resolves against extensions/autoresearch/agents/<role>/; a repo-relative
+   * path (".autoresearch/agents/professor/SOUL.md") against the challenge
+   * repo. Defaults to the bundled role-local SOUL.md.
+   */
+  soul?: string;
+  /**
+   * Dynamic task prompt MD file for the role. A bare filename ("professor.md") resolves
    * against the bundled extensions/autoresearch/prompts/; a repo-relative path
    * (".autoresearch/prompts/custom.md") against the challenge repo. Defaults
    * to "<role>.md" (bundled).
+   *
+   * This remains separate from `soul` for compatibility with existing
+   * challenge-specific prompt templates.
    */
   prompt?: string;
 }
@@ -59,11 +69,31 @@ export const DEFAULT_CONFIG: HarnessConfig = {
   version: 1,
   runner: "mock",
   roles: {
-    setup: { model: "anthropic/claude-sonnet-5", thinking: "medium" },
-    professor: { model: "anthropic/claude-fable-5", thinking: "high" },
-    phd: { model: "anthropic/claude-sonnet-5", thinking: "medium" },
-    god: { model: "anthropic/claude-fable-5", thinking: "high" },
-    advisor: { model: "anthropic/claude-fable-5", thinking: "medium" },
+    setup: {
+      model: "anthropic/claude-sonnet-5",
+      thinking: "medium",
+      tools: ["read", "write", "edit", "bash"],
+    },
+    professor: {
+      model: "anthropic/claude-fable-5",
+      thinking: "high",
+      tools: ["read", "bash"],
+    },
+    phd: {
+      model: "anthropic/claude-sonnet-5",
+      thinking: "medium",
+      tools: ["read", "write", "edit", "bash"],
+    },
+    god: {
+      model: "anthropic/claude-fable-5",
+      thinking: "high",
+      tools: ["read", "write"],
+    },
+    advisor: {
+      model: "anthropic/claude-fable-5",
+      thinking: "medium",
+      tools: ["read"],
+    },
   },
   godTriggerThreshold: 3,
   maxVerifyAttempts: 3,
@@ -82,12 +112,19 @@ export const DEFAULT_CONFIG: HarnessConfig = {
 export function loadConfig(stateDir: string): HarnessConfig {
   const onDisk = readJsonIfExists<Partial<HarnessConfig>>(statePaths(stateDir).config);
   if (!onDisk) return structuredClone(DEFAULT_CONFIG);
+  const defaults = structuredClone(DEFAULT_CONFIG);
   return {
-    ...structuredClone(DEFAULT_CONFIG),
+    ...defaults,
     ...onDisk,
-    roles: { ...structuredClone(DEFAULT_CONFIG.roles), ...(onDisk.roles ?? {}) },
-    execution: { ...structuredClone(DEFAULT_CONFIG.execution), ...(onDisk.execution ?? {}) },
-    advisor: { ...structuredClone(DEFAULT_CONFIG.advisor), ...(onDisk.advisor ?? {}) },
+    roles: {
+      setup: { ...defaults.roles.setup, ...onDisk.roles?.setup },
+      professor: { ...defaults.roles.professor, ...onDisk.roles?.professor },
+      phd: { ...defaults.roles.phd, ...onDisk.roles?.phd },
+      god: { ...defaults.roles.god, ...onDisk.roles?.god },
+      advisor: { ...defaults.roles.advisor, ...onDisk.roles?.advisor },
+    },
+    execution: { ...defaults.execution, ...(onDisk.execution ?? {}) },
+    advisor: { ...defaults.advisor, ...(onDisk.advisor ?? {}) },
     version: 1,
   };
 }
