@@ -18,7 +18,7 @@ to force an unrelated full run.
 | `finalization` | 47 | pass | 5.911s |
 | `church` | 20 | pass | 2.769s |
 | `metaharness` | 27 | pass | 12.945s |
-| `ui` | 64 | pass | 12.978s |
+| `ui` | 64 | pass | 20.481s |
 
 The Setup capsule stopped before Professor. Every phase capsule asserted that
 its forbidden later agents, commands, benchmark, finalization, or submission
@@ -54,10 +54,9 @@ per-suite durations. Concurrent runs use process-unique Vitest JSON files.
 
 ## Full reconciliation and artifacts
 
-`npm run test:full -- --receipt /tmp/kydoresearch-merged-full-receipt.json`
-passed 38 files and 216 tests in 61.075s. The G0 baseline was 172 tests in
-64.6s, so 44 tests were added while wall time decreased by 3.525s (5.5%).
-`npm test` independently passed the same 38 files and 216 tests in 60.81s.
+`npm run test:full -- --receipt /tmp/kydoresearch-merged-full-receipt-v2.json`
+passed 38 files and 217 tests in 62.269s. The G0 baseline was 172 tests in
+64.6s, so 45 tests were added while wall time decreased by 2.331s (3.6%).
 
 The real Pi integration loaded the actual extension offline with only the
 extension's `taskboard` and `research_notes` tools enabled, restored the RPC

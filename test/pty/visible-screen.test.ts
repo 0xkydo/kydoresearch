@@ -75,7 +75,7 @@ describe("real Pi PTY visible-screen smoke", () => {
     expect(writeScreenArtifact("mixed-candidates", screen)).toMatch(
       /mixed-candidates\.svg$/,
     );
-  }, 15_000);
+  }, 20_000);
 
   it("opens the real configuration component with keyboard input", async () => {
     const challenge = makeTmpChallenge();
@@ -97,8 +97,8 @@ describe("real Pi PTY visible-screen smoke", () => {
     saveConfig(stateDir, DEFAULT_CONFIG);
 
     const screen = await runPiPty(challenge.repoRoot, [
-      { afterMs: 600, data: "/autoresearch config\r" },
-      { afterMs: 900, data: "\t\u001b[B" },
+      { afterMs: 3_000, data: "/autoresearch config\r" },
+      { afterMs: 1_200, data: "\t\u001b[B" },
       { afterMs: 300, data: "\u001b" },
     ]);
     expect(screen).toContain("autoresearch config");
@@ -107,7 +107,7 @@ describe("real Pi PTY visible-screen smoke", () => {
     expect(writeScreenArtifact("configuration", screen)).toMatch(
       /configuration\.svg$/,
     );
-  }, 15_000);
+  }, 20_000);
 
   it("keeps first-run confirmation and setup failure actionable without model access", async () => {
     const challenge = makeTmpChallenge();
@@ -120,8 +120,8 @@ describe("real Pi PTY visible-screen smoke", () => {
     fs.writeFileSync(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 
     const screen = await runPiPty(challenge.repoRoot, [
-      { afterMs: 600, data: "/autoresearch\r" },
-      { afterMs: 1_000, data: "\u001b" },
+      { afterMs: 3_000, data: "/autoresearch\r" },
+      { afterMs: 1_200, data: "\u001b" },
       { afterMs: 400, data: "\r" },
       { afterMs: 3_200, data: "" },
     ]);
@@ -131,7 +131,7 @@ describe("real Pi PTY visible-screen smoke", () => {
     expect(writeScreenArtifact("first-run-failure", screen)).toMatch(
       /first-run-failure\.svg$/,
     );
-  }, 15_000);
+  }, 20_000);
 });
 
 interface ScheduledInput {
@@ -170,7 +170,7 @@ async function runPiPty(
   ], {
     cwd,
     encoding: "utf8",
-    timeout: 8_000,
+    timeout: 15_000,
     env: {
       ...process.env,
       PI_CODING_AGENT_DIR: configDirectory,

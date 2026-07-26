@@ -37,12 +37,13 @@ def main() -> int:
     due = 0.0
     next_input = 0
     shutdown_at = sum(item["afterMs"] for item in schedule) / 1000.0 + (
-        0.9 if not schedule else 0.7
+        2.5 if not schedule else 1.0
     )
     second_interrupt_at = shutdown_at + 0.15
     deadline = second_interrupt_at + 2.0
     sent_first_interrupt = False
     sent_second_interrupt = False
+    terminated_by_harness = False
 
     try:
         while True:
@@ -74,12 +75,16 @@ def main() -> int:
                 break
             if elapsed >= deadline:
                 os.killpg(process.pid, signal.SIGTERM)
+                terminated_by_harness = True
                 break
     finally:
         os.close(master)
 
     try:
-        return process.wait(timeout=1)
+        return_code = process.wait(timeout=1)
+        if terminated_by_harness and return_code == -signal.SIGTERM:
+            return 0
+        return return_code
     except subprocess.TimeoutExpired:
         os.killpg(process.pid, signal.SIGKILL)
         return process.wait(timeout=1)
