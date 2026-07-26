@@ -1,0 +1,10 @@
+{
+  "name": "mock-ranking-quality",
+  "description": "Maximize deterministic ranking quality with normalized semantic, freshness, and diversity weights.",
+  "setupCommand": "./setup.sh",
+  "benchmarkCommand": "./benchmark.sh",
+  "scorePath": "score.json",
+  "direction": "+",
+  "editablePaths": ["solution/"],
+  "preSubmitCommand": "./verify.sh"
+}

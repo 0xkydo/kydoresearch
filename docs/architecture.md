@@ -181,9 +181,14 @@ listed explicitly in the implementation task.
 
 ## Pi worker runtime
 
-`runner: "mock"` uses deterministic agents for the fixture while exercising
-the real state, worktree, evaluator, archive, advisor, and challenge-CLI
-boundaries.
+`runner: "mock"` uses deterministic agents while exercising the real state,
+worktree, evaluator, archive, advisor, and challenge-CLI boundaries. The
+compact integration fixture retains its built-in legacy playlist. Hands-on
+examples may instead declare a validated repository-local
+`mock-scenario.json`; it supplies only canned proposals, candidate file values,
+knowledge text, and church dialogue. The manifest-backed verifier, benchmark,
+score direction, integrity audit, selection, and local challenge CLI remain
+outside that playlist.
 
 `runner: "subprocess"` uses `PiSubprocessRunner`. For every invocation it:
 
@@ -685,11 +690,12 @@ finite numeric score.
 
 ## Verification strategy
 
-The mock challenge exercises real Git worktrees, parent snapshots, shell
-commands, scores, archive sealing, and submission records. A process-level
-fake Pi executable exercises soul injection, worker resource isolation, JSONL
-trace retention, structured-output fallback, timeout, abort, and orchestration
-without model calls.
+The compact mock fixture and three declarative hands-on challenges exercise
+real Git worktrees, parent snapshots, shell commands, both score directions,
+verifier retries, scores, archive sealing, church reflection, and local
+submission records. A process-level fake Pi executable exercises soul
+injection, worker resource isolation, JSONL trace retention, structured-output
+fallback, timeout, abort, and orchestration without model calls.
 
 Focused suites cover:
 

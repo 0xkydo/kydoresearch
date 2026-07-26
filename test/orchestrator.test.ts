@@ -1,6 +1,8 @@
 import { execFileSync } from "node:child_process";
 import * as fs from "node:fs";
+import * as os from "node:os";
 import * as path from "node:path";
+import { fileURLToPath } from "node:url";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MockAgentRunner } from "../src/agents/mock.ts";
 import type { AgentRunner, AgentTask } from "../src/agents/types.ts";
@@ -66,6 +68,11 @@ function mySubmissions(repoRoot: string): { score: number; note: string }[] {
   const data = JSON.parse(fs.readFileSync(file, "utf8")) as { submissions: { author: string; score: number; note: string }[] };
   return data.submissions.filter((s) => s.author === "me");
 }
+
+const mockExamplesRoot = path.resolve(
+  fileURLToPath(import.meta.url),
+  "../../examples/mock-challenges",
+);
 
 describe("Orchestrator scenario matrix", () => {
   let repoRoot: string;
@@ -617,4 +624,125 @@ EOF
     expect(kb).toContain("Loop 2 submission");
     expect(kb).toContain("Advisor, loop 1");
   });
+});
+
+describe("declarative mock challenge examples", () => {
+  it("offers a one-command launcher with aliases and a selected-only preparation mode", () => {
+    const destination = fs.mkdtempSync(
+      path.join(os.tmpdir(), "kydoresearch-mock-launcher-"),
+    );
+    const fakePi = path.join(destination, "fake-pi");
+    fs.writeFileSync(fakePi, "#!/usr/bin/env bash\nexit 0\n");
+    fs.chmodSync(fakePi, 0o755);
+    try {
+      const output = execFileSync(
+        "bash",
+        [
+          path.resolve(mockExamplesRoot, "../../scripts/mock-demo.sh"),
+          "ranking",
+          "--prepare-only",
+          "--destination",
+          destination,
+        ],
+        {
+          encoding: "utf8",
+          env: { ...process.env, KYDORESEARCH_PI: fakePi },
+        },
+      );
+
+      expect(output).toContain("Selected: ranking-quality");
+      expect(output).toContain(`Pi: ${fakePi}`);
+      expect(output).toContain("/autoresearch");
+      expect(fs.existsSync(path.join(destination, "ranking-quality", ".git"))).toBe(true);
+      expect(fs.existsSync(path.join(destination, "latency-lab"))).toBe(false);
+      expect(readManifest(path.join(destination, "ranking-quality")).direction).toBe("+");
+    } finally {
+      fs.rmSync(destination, { recursive: true, force: true });
+    }
+  });
+
+  it.each([
+    {
+      name: "latency-lab",
+      baseline: 320,
+      loopTwoBest: 232,
+      direction: "-",
+    },
+    {
+      name: "ranking-quality",
+      baseline: 0.905,
+      loopTwoBest: 0.995,
+      direction: "+",
+    },
+    {
+      name: "memory-packer",
+      baseline: 468,
+      loopTwoBest: 324,
+      direction: "-",
+    },
+  ])(
+    "prepares and runs the first two $name loops without a model call",
+    async ({ name, baseline, loopTwoBest, direction }) => {
+      const destination = fs.mkdtempSync(
+        path.join(os.tmpdir(), "kydoresearch-mock-examples-"),
+      );
+      try {
+        execFileSync(
+          "bash",
+          [path.join(mockExamplesRoot, "prepare.sh"), destination],
+          { stdio: "pipe" },
+        );
+        const repoRoot = path.join(destination, name);
+        const manifest = readManifest(repoRoot);
+        expect(manifest.direction).toBe(direction);
+        expect(detectCli(repoRoot, manifest)).toBe("./bin/mockchal");
+
+        const h = await makeHarness(repoRoot);
+        expect(loadState(h.stateDir)!.bestScore).toBe(baseline);
+        const orchestrator = h.makeOrchestrator();
+        const first = await orchestrator.runLoop();
+        expect(first).toMatchObject({ improved: false });
+        expect(first!.ideas.map((idea) => idea.status)).toEqual([
+          "failed",
+          "done-no-improvement",
+        ]);
+
+        const second = await orchestrator.runLoop();
+        expect(second).toMatchObject({ improved: true });
+        expect(loadState(h.stateDir)).toMatchObject({
+          bestScore: loopTwoBest,
+          bestSubmittedScore: loopTwoBest,
+        });
+        expect(second!.ideas.map((idea) => idea.status)).toEqual([
+          "done-improved",
+          "done-superseded",
+        ]);
+        expect(mySubmissions(repoRoot).map((entry) => entry.score)).toEqual([
+          loopTwoBest,
+        ]);
+
+        if (name === "latency-lab") {
+          await orchestrator.runLoop();
+          await orchestrator.runLoop();
+          await orchestrator.runLoop();
+          const churchNote = path.join(
+            h.stateDir,
+            "notes",
+            "church-005.md",
+          );
+          expect(fs.readFileSync(churchNote, "utf8")).toContain(
+            "cache size and batch size",
+          );
+          const sixth = await orchestrator.runLoop();
+          expect(sixth).toMatchObject({ improved: true, bestScoreAfter: 168 });
+          expect(mySubmissions(repoRoot).map((entry) => entry.score)).toEqual([
+            232,
+            168,
+          ]);
+        }
+      } finally {
+        fs.rmSync(destination, { recursive: true, force: true });
+      }
+    },
+  );
 });

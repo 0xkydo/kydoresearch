@@ -1,0 +1,166 @@
+{
+  "schemaVersion": 1,
+  "subjectArea": "Constrained ranking-signal optimization",
+  "solutionPath": "solution/weights.json",
+  "knowledge": {
+    "objective": "maximize normalized ranking quality",
+    "levers": [
+      "semanticWeight controls topical relevance",
+      "freshnessWeight rewards new material",
+      "diversityWeight reduces redundant results"
+    ],
+    "constraints": [
+      "all three weights stay within zero and one",
+      "the weights sum to one",
+      "strategy is a required public label"
+    ],
+    "competitorIntel": [
+      "seeded results suggest the semantic-heavy baseline underweights both freshness and diversity"
+    ],
+    "verification": [
+      "verify.sh checks the simplex constraint and JSON schema",
+      "benchmark.sh measures deterministic quality and writes score.json",
+      "the manifest direction is plus, so larger scores win"
+    ]
+  },
+  "leaderboard": [
+    {
+      "score": 0.94,
+      "author": "freshness-fan",
+      "note": "Freshness recovered quality, but diversity remained low."
+    },
+    {
+      "score": 0.97,
+      "author": "balanced-ranker",
+      "note": "A three-signal blend beat the semantic-only family."
+    }
+  ],
+  "loops": {
+    "1": [
+      {
+        "title": "Overcommitted semantic vector",
+        "spec": "Set semanticWeight above one to probe normalization enforcement.",
+        "attempts": [
+          {
+            "strategy": "overcommitted-semantic",
+            "semanticWeight": 1.1,
+            "freshnessWeight": 0,
+            "diversityWeight": 0
+          }
+        ]
+      },
+      {
+        "title": "Semantic-only ranker",
+        "spec": "Ablate freshness and diversity to test a pure semantic signal.",
+        "attempts": [
+          {
+            "strategy": "semantic-only",
+            "semanticWeight": 1,
+            "freshnessWeight": 0,
+            "diversityWeight": 0
+          }
+        ]
+      }
+    ],
+    "2": [
+      {
+        "title": "Balanced semantic-forward blend",
+        "spec": "Use weights 0.60, 0.20, and 0.20 for semantic, freshness, and diversity.",
+        "attempts": [
+          {
+            "semanticWeight": 0.6,
+            "freshnessWeight": 0.2,
+            "diversityWeight": 0.2
+          },
+          {
+            "strategy": "balanced-semantic-forward",
+            "semanticWeight": 0.6,
+            "freshnessWeight": 0.2,
+            "diversityWeight": 0.2
+          }
+        ]
+      },
+      {
+        "title": "Freshness-heavy balanced blend",
+        "spec": "Shift more mass into freshness with weights 0.45, 0.35, and 0.20.",
+        "attempts": [
+          {
+            "strategy": "freshness-heavy-balance",
+            "semanticWeight": 0.45,
+            "freshnessWeight": 0.35,
+            "diversityWeight": 0.2
+          }
+        ]
+      }
+    ],
+    "3": [
+      {
+        "title": "Baseline ranker replay A",
+        "spec": "Replay the original semantic-heavy weights.",
+        "attempts": [
+          {
+            "strategy": "baseline-replay-a",
+            "semanticWeight": 0.8,
+            "freshnessWeight": 0.1,
+            "diversityWeight": 0.1
+          }
+        ]
+      }
+    ],
+    "4": [
+      {
+        "title": "Baseline ranker replay B",
+        "spec": "Repeat the original weight vector to confirm the plateau.",
+        "attempts": [
+          {
+            "strategy": "baseline-replay-b",
+            "semanticWeight": 0.8,
+            "freshnessWeight": 0.1,
+            "diversityWeight": 0.1
+          }
+        ]
+      }
+    ],
+    "5": [
+      {
+        "title": "Baseline ranker replay C",
+        "spec": "Repeat the exhausted weight family one last time.",
+        "attempts": [
+          {
+            "strategy": "baseline-replay-c",
+            "semanticWeight": 0.8,
+            "freshnessWeight": 0.1,
+            "diversityWeight": 0.1
+          }
+        ]
+      }
+    ],
+    "6": [
+      {
+        "title": "Evidence-balanced ranking vector",
+        "spec": "Commit to semantic=0.55, freshness=0.25, diversity=0.20.",
+        "attempts": [
+          {
+            "strategy": "evidence-balanced-optimum",
+            "semanticWeight": 0.55,
+            "freshnessWeight": 0.25,
+            "diversityWeight": 0.2
+          }
+        ]
+      }
+    ]
+  },
+  "defaultIdea": {
+    "title": "Idle ranking probe",
+    "spec": "Replay the original semantic-heavy vector after the scripted arc.",
+    "attempts": [
+      {
+        "strategy": "idle-baseline",
+        "semanticWeight": 0.8,
+        "freshnessWeight": 0.1,
+        "diversityWeight": 0.1
+      }
+    ]
+  },
+  "churchConversation": "# The Professor goes to church after the ranking plateau\n\n**Professor:** I keep returning to the semantic-heavy vector because it once felt principled.\n\n**God:** A principle that ignores contrary evidence can become a hiding place. What did the balanced sibling teach you?\n\n**Professor:** That freshness and diversity both matter, but I have been moving them without committing to a clear ratio.\n\n**God:** Then let the next vector state the hypothesis plainly. Balance all three signals and accept whatever the score says.\n\n**Professor:** I will test one precise evidence-balanced vector, not another vague nudge.\n\n**God:** Good. Hope can be precise, and honesty can survive either result."
+}

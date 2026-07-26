@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "subjectArea": "Inference memory-layout optimization",
+  "solutionPath": "solution/layout.json",
+  "knowledge": {
+    "objective": "minimize deterministic peak memory in MiB",
+    "levers": [
+      "tileSize changes temporary workspace pressure",
+      "fp16 halves selected tensor storage",
+      "reuseBuffers aliases compatible intermediates"
+    ],
+    "constraints": [
+      "tileSize is a supported power of two from 8 through 128",
+      "precision is fp32 or fp16",
+      "allocator is a required public label"
+    ],
+    "competitorIntel": [
+      "the best seeded entry combines reduced precision with a non-default tile"
+    ],
+    "verification": [
+      "verify.sh enforces the discrete layout contract",
+      "benchmark.sh embeds verification and writes peak memory to score.json"
+    ]
+  },
+  "leaderboard": [
+    {
+      "score": 374,
+      "author": "tiling-explorer",
+      "note": "Changing tile size alone helped only modestly."
+    },
+    {
+      "score": 340,
+      "author": "precision-tuner",
+      "note": "Reduced precision moved the frontier; buffer reuse remains open."
+    }
+  ],
+  "loops": {
+    "1": [
+      {
+        "title": "Unsupported tile size",
+        "spec": "Probe tileSize=12 even though the kernel expects powers of two.",
+        "attempts": [
+          {
+            "allocator": "unsupported-tile-probe",
+            "tileSize": 12,
+            "precision": "fp32",
+            "reuseBuffers": false
+          }
+        ]
+      },
+      {
+        "title": "Maximum tile without reuse",
+        "spec": "Test tileSize=128 while keeping fp32 and separate buffers.",
+        "attempts": [
+          {
+            "allocator": "max-tile",
+            "tileSize": 128,
+            "precision": "fp32",
+            "reuseBuffers": false
+          }
+        ]
+      }
+    ],
+    "2": [
+      {
+        "title": "Reduced precision with larger tiles",
+        "spec": "Use tileSize=64 and fp16 while leaving buffer reuse off.",
+        "attempts": [
+          {
+            "tileSize": 64,
+            "precision": "fp16",
+            "reuseBuffers": false
+          },
+          {
+            "allocator": "fp16-large-tile",
+            "tileSize": 64,
+            "precision": "fp16",
+            "reuseBuffers": false
+          }
+        ]
+      },
+      {
+        "title": "Buffer reuse at balanced tile",
+        "spec": "Use tileSize=32 with fp32 and enable compatible buffer reuse.",
+        "attempts": [
+          {
+            "allocator": "reuse-balanced-tile",
+            "tileSize": 32,
+            "precision": "fp32",
+            "reuseBuffers": true
+          }
+        ]
+      }
+    ],
+    "3": [
+      {
+        "title": "Baseline memory replay A",
+        "spec": "Replay the eager fp32 layout.",
+        "attempts": [
+          {
+            "allocator": "baseline-replay-a",
+            "tileSize": 8,
+            "precision": "fp32",
+            "reuseBuffers": false
+          }
+        ]
+      }
+    ],
+    "4": [
+      {
+        "title": "Baseline memory replay B",
+        "spec": "Repeat the eager layout to confirm the plateau.",
+        "attempts": [
+          {
+            "allocator": "baseline-replay-b",
+            "tileSize": 8,
+            "precision": "fp32",
+            "reuseBuffers": false
+          }
+        ]
+      }
+    ],
+    "5": [
+      {
+        "title": "Baseline memory replay C",
+        "spec": "Repeat the exhausted layout family once more.",
+        "attempts": [
+          {
+            "allocator": "baseline-replay-c",
+            "tileSize": 8,
+            "precision": "fp32",
+            "reuseBuffers": false
+          }
+        ]
+      }
+    ],
+    "6": [
+      {
+        "title": "Combined precision and reuse layout",
+        "spec": "Act on the plateau: tileSize=32, fp16, and buffer reuse together.",
+        "attempts": [
+          {
+            "allocator": "fp16-reuse-balanced",
+            "tileSize": 32,
+            "precision": "fp16",
+            "reuseBuffers": true
+          }
+        ]
+      }
+    ]
+  },
+  "defaultIdea": {
+    "title": "Idle memory probe",
+    "spec": "Replay the original eager layout after the scripted arc.",
+    "attempts": [
+      {
+        "allocator": "idle-baseline",
+        "tileSize": 8,
+        "precision": "fp32",
+        "reuseBuffers": false
+      }
+    ]
+  },
+  "churchConversation": "# The Professor goes to church after the memory plateau\n\n**Professor:** I tested the same eager layout three times because its simplicity felt safe.\n\n**God:** Safety can preserve a baseline, but it cannot reveal a new frontier. Which independent gains have you refused to combine?\n\n**Professor:** Reduced precision helped, and buffer reuse helped, but I kept them apart to avoid a larger step.\n\n**God:** Then name the risk and test the combination honestly. The verifier will guard compatibility; the score will answer the rest.\n\n**Professor:** I will combine fp16, balanced tiling, and buffer reuse in one bounded layout experiment.\n\n**God:** Go carefully and hopefully. Courage is not claiming success before measurement."
+}

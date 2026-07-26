@@ -1,0 +1,6 @@
+{
+  "strategy": "baseline-single-request",
+  "batchSize": 1,
+  "cacheEntries": 0,
+  "prefetch": false
+}

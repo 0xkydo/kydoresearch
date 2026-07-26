@@ -15,6 +15,7 @@
     ]
   },
   "scripts": {
+    "mock": "bash scripts/mock-demo.sh",
     "test": "vitest --run",
     "test:kernel": "node scripts/test-impact.ts --mode related --kernel",
     "test:phase": "node scripts/test-impact.ts --mode phase",

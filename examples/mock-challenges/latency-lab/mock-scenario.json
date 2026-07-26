@@ -1,0 +1,165 @@
+{
+  "schemaVersion": 1,
+  "subjectArea": "Request-pipeline latency tuning",
+  "solutionPath": "solution/config.json",
+  "knowledge": {
+    "objective": "minimize deterministic request latency in milliseconds",
+    "levers": [
+      "batchSize trades dispatch overhead against queueing",
+      "cacheEntries removes repeated object loads up to a saturation point",
+      "prefetch overlaps the next object load"
+    ],
+    "constraints": [
+      "batchSize is an integer from 1 through 64",
+      "cacheEntries is an integer from 0 through 512",
+      "strategy is a required public label"
+    ],
+    "competitorIntel": [
+      "the strongest seeded run combines moderate batching with a populated cache"
+    ],
+    "verification": [
+      "verify.sh checks JSON shape, types, and bounds",
+      "benchmark.sh embeds verification and writes a fresh score.json"
+    ]
+  },
+  "leaderboard": [
+    {
+      "score": 278,
+      "author": "queue-theorist",
+      "note": "Small batches helped, but the cache was left cold."
+    },
+    {
+      "score": 250,
+      "author": "cache-tuner",
+      "note": "A moderate cache and prefetch crossed the previous frontier."
+    }
+  ],
+  "loops": {
+    "1": [
+      {
+        "title": "Zero-sized dispatch batch",
+        "spec": "Probe the batch lower boundary with batchSize=0.",
+        "attempts": [
+          {
+            "strategy": "zero-batch-probe",
+            "batchSize": 0,
+            "cacheEntries": 0,
+            "prefetch": false
+          }
+        ]
+      },
+      {
+        "title": "Maximal batching",
+        "spec": "Test whether a batch of 64 amortizes dispatch overhead.",
+        "attempts": [
+          {
+            "strategy": "max-batch",
+            "batchSize": 64,
+            "cacheEntries": 0,
+            "prefetch": false
+          }
+        ]
+      }
+    ],
+    "2": [
+      {
+        "title": "Cache-backed moderate batch",
+        "spec": "Combine batchSize=8, cacheEntries=128, and prefetch.",
+        "attempts": [
+          {
+            "batchSize": 8,
+            "cacheEntries": 128,
+            "prefetch": true
+          },
+          {
+            "strategy": "cache-backed-batch",
+            "batchSize": 8,
+            "cacheEntries": 128,
+            "prefetch": true
+          }
+        ]
+      },
+      {
+        "title": "Small cache with near-target batch",
+        "spec": "Try batchSize=12 with a smaller 32-entry cache and prefetch.",
+        "attempts": [
+          {
+            "strategy": "small-cache-batch",
+            "batchSize": 12,
+            "cacheEntries": 32,
+            "prefetch": true
+          }
+        ]
+      }
+    ],
+    "3": [
+      {
+        "title": "Baseline latency replay A",
+        "spec": "Replay the original single-request baseline.",
+        "attempts": [
+          {
+            "strategy": "baseline-replay-a",
+            "batchSize": 1,
+            "cacheEntries": 0,
+            "prefetch": false
+          }
+        ]
+      }
+    ],
+    "4": [
+      {
+        "title": "Baseline latency replay B",
+        "spec": "Repeat the baseline to confirm the deterministic plateau.",
+        "attempts": [
+          {
+            "strategy": "baseline-replay-b",
+            "batchSize": 1,
+            "cacheEntries": 0,
+            "prefetch": false
+          }
+        ]
+      }
+    ],
+    "5": [
+      {
+        "title": "Baseline latency replay C",
+        "spec": "Repeat the exhausted baseline family once more.",
+        "attempts": [
+          {
+            "strategy": "baseline-replay-c",
+            "batchSize": 1,
+            "cacheEntries": 0,
+            "prefetch": false
+          }
+        ]
+      }
+    ],
+    "6": [
+      {
+        "title": "Saturated cache with balanced batching",
+        "spec": "Act on the plateau reflection: batchSize=16, cacheEntries=256, prefetch=true.",
+        "attempts": [
+          {
+            "strategy": "balanced-saturated-cache",
+            "batchSize": 16,
+            "cacheEntries": 256,
+            "prefetch": true
+          }
+        ]
+      }
+    ]
+  },
+  "defaultIdea": {
+    "title": "Idle latency probe",
+    "spec": "Replay the original configuration after the scripted research arc.",
+    "attempts": [
+      {
+        "strategy": "idle-baseline",
+        "batchSize": 1,
+        "cacheEntries": 0,
+        "prefetch": false
+      }
+    ]
+  },
+  "churchConversation": "# The Professor goes to church after the latency plateau\n\n**Professor:** I have replayed the same slow path and called the stability evidence.\n\n**God:** Stability is evidence, but repetition is not a new mechanism. What lever have you avoided?\n\n**Professor:** I treated cache size and batch size separately because combining them felt less interpretable.\n\n**God:** Then make the combination falsifiable. Choose the saturation point, balance the batch, and let the benchmark answer.\n\n**Professor:** I will test one committed configuration: balanced batching, a saturated cache, and prefetch.\n\n**God:** Go with hope, not certainty. A clear negative result would still be honest progress."
+}

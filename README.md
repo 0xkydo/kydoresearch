@@ -670,23 +670,31 @@ or challenge commands from the host operating system.
 
 ## Mock demo
 
-The repository includes deterministic agents and
-`fixtures/mock-challenge/`, so the complete orchestration path can be exercised
-without provider calls or a real leaderboard:
+For a hands-on tour, the repository includes three distinct deterministic
+challenge examples: latency minimization, ranking-quality maximization, and
+peak-memory minimization. From any kydoresearch worktree, use the interactive
+launcher:
 
 ```bash
-cp -R fixtures/mock-challenge /tmp/kydoresearch-mock
-cd /tmp/kydoresearch-mock
-git init -b main
-git add -A
-git -c user.name=Demo -c user.email=demo@example.com commit -m baseline
-pi -e /path/to/kydoresearch/extensions/autoresearch/index.ts
-# In Pi: /autoresearch
+npm run mock
 ```
 
-The default `"runner": "mock"` is intended for this fixture. The fixture still
-uses real Git worktrees, shell commands, verification, scoring, archives,
-notes, and a local mock challenge CLI.
+Choose one of the three examples, then run `/autoresearch` inside Pi. The
+launcher creates a fresh standalone Git repository, resolves Pi from the
+current worktree or main checkout when it is not globally installed, and loads
+the extension from the worktree where the launcher lives. Use
+`npm run mock -- latency`, `npm run mock -- ranking`, or
+`npm run mock -- memory` to skip the menu.
+
+Keep the default `"runner": "mock"`; no configured role model or remote API is
+called. Setting `max loops` to `6` and `mock loop delay` to `1200` ms in the
+first-run review makes the complete scripted flow easy to watch. The examples
+still use real Git worktrees, shell commands, verification, scoring, archives,
+Advisor rules, church reflection, notes, and a local mock challenge CLI.
+
+See [`examples/mock-challenges/README.md`](examples/mock-challenges/README.md)
+for the scenario matrix, Pi commands, evidence to inspect, and reset guidance.
+`fixtures/mock-challenge/` remains the compact integration-test fixture.
 
 For real research, `"runner": "subprocess"` starts a fresh bounded
 `pi --mode json --no-session` worker for each role invocation. It prefers the
