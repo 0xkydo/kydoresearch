@@ -23,6 +23,7 @@ describe("initChallenge", () => {
     expect(fs.existsSync(path.join(stateDir, "state.json"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "config.json"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "knowledge-base.md"))).toBe(true);
+    expect(fs.existsSync(path.join(stateDir, "telemetry.ndjson"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "loops", "init", "setup-task.json"))).toBe(true);
     expect(
       fs.existsSync(
@@ -44,6 +45,10 @@ describe("initChallenge", () => {
 
     // reload round-trips
     expect(loadState(stateDir)?.challenge.name).toBe("mock-challenge");
+    const telemetry = fs.readFileSync(path.join(stateDir, "telemetry.ndjson"), "utf8");
+    expect(telemetry).toContain('"flow":"init.setup"');
+    expect(telemetry).toContain('"flow":"setup.explore"');
+    expect(telemetry).toContain('"flow":"challenge.benchmark"');
   });
 
   it("initializes an ecdsafail-shaped argv manifest and records its baseline", async () => {
@@ -88,6 +93,23 @@ describe("initChallenge", () => {
     });
     expect(loadState(stateDir)).toMatchObject({ phase: "ready", bestScore: 10 });
     expect(fs.readFileSync(path.join(stateDir, "journal.ndjson"), "utf8")).toContain('"phase":"ready"');
+  });
+
+  it("recognizes spaced MLX Fast challenge names as requiring model attribution", async () => {
+    const manifestPath = path.join(repoRoot, "benchmark.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.name = "MLX Fast Challenge";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    const { state } = await initChallenge({
+      repoRoot,
+      runner: new MockAgentRunner(),
+      exec: nodeExec,
+      delay: async () => {},
+    });
+
+    expect(state.challenge.cli).toBe("mlxfast");
+    expect(state.challenge.submitNeedsModel).toBe(true);
   });
 
   it("uses persisted phase timeouts and logs setup plus baseline output", async () => {

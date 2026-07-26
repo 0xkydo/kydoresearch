@@ -85,6 +85,7 @@ src/
   advisor.ts            WATCHDOG.md parsing and severity filtering
   state.ts              atomic operational snapshot schema
   config.ts             defaults and forward-compatible config merge
+  telemetry.ts          local-only span recording and aggregate reporting
   taskboard.ts          atomic shared task persistence
   exec.ts               bounded, streaming process port
 ```
@@ -204,6 +205,10 @@ defined in [`agent-profiles.md`](agent-profiles.md).
 The baseline source snapshot is important: a candidate parent is an explicit
 artifact, not an assumption that Git `HEAD` represents the current best.
 Initialization never submits.
+
+MLX Fast identity is based on the resolved `mlxfast` CLI, including spaced or
+hyphenated manifest names. Its Orchestrator requires an explicit
+`submitModelName`, preventing submission under an `unknown` attribution.
 
 ## Experiment lifecycle
 
@@ -388,6 +393,12 @@ Memory ownership is intentionally split:
 - `knowledge-base.md` is a human-readable navigation layer, not the sole
   memory store;
 - `journal.ndjson` is the operational transition log.
+- `telemetry.ndjson` is the local-only completed-flow timing stream.
+
+Telemetry spans cover initialization, professor, PhD, correctness, benchmark,
+submission, advisor, church, and full-loop wall time. They exclude prompts,
+source, command output, paths, environment values, and credentials.
+`/autoresearch telemetry` aggregates them; the extension does not upload them.
 
 ## Candidate archive
 
@@ -398,6 +409,7 @@ The main filesystem layout is:
   state.json
   config.json
   journal.ndjson
+  telemetry.ndjson
   knowledge-base.md
   leaderboard.json
   taskboard.json
@@ -531,6 +543,12 @@ always fail-stops.
 - `submit --note-file [--model]`;
 - `submissions --all`;
 - `sync`.
+
+Before submission, the harness writes a public reproducibility note from the
+canonical proposal, model and thinking configuration, implementation report,
+exact commands, verification attempts, worktree/main measurements, caveats,
+and next step. Local repository paths and common credential-shaped strings are
+redacted before agent prose is included.
 
 The execution config exposes `setupTimeoutMs`, `verifyTimeoutMs`, and
 `benchmarkTimeoutMs`. Setup and main-checkout command output uses

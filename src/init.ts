@@ -12,6 +12,7 @@ import type { SetupTaskV1 } from "./experiments.ts";
 import { EXPERIMENT_SCHEMA_VERSION, validateResearchTask } from "./experiments.ts";
 import type { ChallengeInfo, LoopState } from "./state.ts";
 import { newLoopState, saveState, STATE_DIR_NAME, statePaths } from "./state.ts";
+import { LocalTelemetry } from "./telemetry.ts";
 import { appendJournal, atomicWriteJson } from "./util.ts";
 
 export interface InitResult {
@@ -60,6 +61,7 @@ export async function initChallenge(opts: {
 
   const stateDir = path.join(repoRoot, STATE_DIR_NAME);
   const paths = statePaths(stateDir);
+  const telemetry = new LocalTelemetry(paths.telemetry);
   fs.mkdirSync(paths.ideasDir, { recursive: true });
   fs.mkdirSync(paths.loopsDir, { recursive: true });
   fs.mkdirSync(paths.runsDir, { recursive: true });
@@ -90,16 +92,22 @@ export async function initChallenge(opts: {
     signal: opts.signal,
     delay: opts.delay,
   };
-  const setup = await retryOperation({
-    ...retryPolicy,
-    operation: () => bootstrapAdapter.setup(opts.signal),
-    isSuccess: (result) => result.ok,
-    onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
-      emit(
-        `init: setup failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
-          (value?.raw ? ` · ${firstLine(value.raw)}` : ""),
-      ),
-  });
+  const setup = await telemetry.measure(
+    "init.setup",
+    { scope: "init" },
+    () =>
+      retryOperation({
+        ...retryPolicy,
+        operation: () => bootstrapAdapter.setup(opts.signal),
+        isSuccess: (result) => result.ok,
+        onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
+          emit(
+            `init: setup failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
+              (value?.raw ? ` · ${firstLine(value.raw)}` : ""),
+          ),
+      }),
+    (result) => (opts.signal?.aborted ? "aborted" : result.ok ? "ok" : "error"),
+  );
   if (!setup.ok) {
     throw new Error(
       `Dependency setup failed (exit ${setup.exitCode}):\n${setup.raw}\n\n` +
@@ -130,31 +138,37 @@ export async function initChallenge(opts: {
   };
   validateResearchTask(setupTask);
   atomicWriteJson(setupTaskPath, setupTask);
-  const explore = await retryOperation({
-    ...retryPolicy,
-    maxAttempts: config.resilience.agentMaxAttempts,
-    operation: () =>
-      runner.run({
-        role: "setup",
-        kind: "init.explore",
-        cwd: repoRoot,
-        stateDir,
-        input: {
-          ...setupTask.input,
-          manifest,
-          setupCommand: manifest.setupCommand,
-          taskPath: setupTaskPath,
-          traceDir: path.join(paths.resolvedAgentsDir, "setup"),
-        },
-        signal: opts.signal,
+  const explore = await telemetry.measure(
+    "setup.explore",
+    { scope: "init" },
+    () =>
+      retryOperation({
+        ...retryPolicy,
+        maxAttempts: config.resilience.agentMaxAttempts,
+        operation: () =>
+          runner.run({
+            role: "setup",
+            kind: "init.explore",
+            cwd: repoRoot,
+            stateDir,
+            input: {
+              ...setupTask.input,
+              manifest,
+              setupCommand: manifest.setupCommand,
+              taskPath: setupTaskPath,
+              traceDir: path.join(paths.resolvedAgentsDir, "setup"),
+            },
+            signal: opts.signal,
+          }),
+        isSuccess: (result) => result.ok,
+        onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
+          emit(
+            `init: setup agent failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
+              (value ? ` · ${firstLine(value.error ?? value.output)}` : ""),
+          ),
       }),
-    isSuccess: (result) => result.ok,
-    onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
-      emit(
-        `init: setup agent failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
-          (value ? ` · ${firstLine(value.error ?? value.output)}` : ""),
-      ),
-  });
+    (result) => (opts.signal?.aborted ? "aborted" : result.ok ? "ok" : "error"),
+  );
   if (!explore.ok) throw new Error(`Setup agent failed: ${explore.error ?? explore.output}`);
 
   const structured = explore.structured ?? {};
@@ -176,7 +190,7 @@ export async function initChallenge(opts: {
     verifyCommand,
     benchCommand,
     preSubmitCommand: manifest.preSubmitCommand,
-    submitNeedsModel: manifest.name.toLowerCase().includes("mlxfast"),
+    submitNeedsModel: cli === "mlxfast",
     editablePaths: manifest.editablePaths,
     scorePath: manifest.scorePath,
     subjectArea: typeof structured.subjectArea === "string" ? structured.subjectArea : undefined,
@@ -195,16 +209,27 @@ export async function initChallenge(opts: {
     logDir: paths.logsDir,
     exec,
   });
-  const baseline = await retryOperation({
-    ...retryPolicy,
-    operation: () => baselineAdapter.bench(undefined, opts.signal),
-    isSuccess: (result) => result.ok && result.score !== undefined,
-    onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
-      emit(
-        `init: baseline failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
-          (value?.raw ? ` · ${firstLine(value.raw)}` : ""),
-      ),
-  });
+  const baseline = await telemetry.measure(
+    "challenge.benchmark",
+    { scope: "init" },
+    () =>
+      retryOperation({
+        ...retryPolicy,
+        operation: () => baselineAdapter.bench(undefined, opts.signal),
+        isSuccess: (result) => result.ok && result.score !== undefined,
+        onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
+          emit(
+            `init: baseline failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
+              (value?.raw ? ` · ${firstLine(value.raw)}` : ""),
+          ),
+      }),
+    (result) =>
+      opts.signal?.aborted
+        ? "aborted"
+        : result.ok && result.score !== undefined
+          ? "ok"
+          : "error",
+  );
   if (!baseline.ok || baseline.score === undefined) {
     if (
       baseline.exitCode === 127 ||

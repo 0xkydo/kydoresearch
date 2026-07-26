@@ -17,6 +17,7 @@ import {
 import type { OrchestratorEvent, StatusReport } from "../../src/orchestrator.ts";
 import { Orchestrator } from "../../src/orchestrator.ts";
 import { loadState, STATE_DIR_NAME, statePaths } from "../../src/state.ts";
+import { readTelemetry, renderTelemetryReport } from "../../src/telemetry.ts";
 import type {
   ConfigPanelResult,
   ConfigurableRole,
@@ -101,6 +102,18 @@ export function registerAutoresearchCommand(
       notify(ctx, err instanceof Error ? err.message : String(err), "error");
       return;
     }
+    const detectedCli = detectCli(repoRoot, manifest);
+    const preflightConfig = loadConfig(stateDir);
+    if (detectedCli === "mlxfast" && !preflightConfig.submitModelName?.trim()) {
+      notify(
+        ctx,
+        'MLX Fast requires exact model attribution before the loop can submit. ' +
+          'Open /autoresearch config → settings → submit model and enter the underlying model name ' +
+          '(for this Codex agent: "GPT 5.6 Sol"), then retry /autoresearch.',
+        "error",
+      );
+      return;
+    }
 
     // First run in this repo: init (setup agent) with a confirm when interactive.
     if (!loadState(stateDir)) {
@@ -137,7 +150,7 @@ export function registerAutoresearchCommand(
       adapter: new YukonCliAdapter({
         repoRoot,
         manifest,
-        cli: detectCli(repoRoot, manifest),
+        cli: detectedCli,
         verifyCommand: state.challenge.verifyCommand,
         benchCommand: state.challenge.benchCommand,
         execution: config.execution,
@@ -227,6 +240,11 @@ export function registerAutoresearchCommand(
             : {}),
         });
     notify(ctx, lines.join("\n"));
+  }
+
+  function showTelemetry(ctx: ExtensionCommandContext): void {
+    const telemetryFile = statePaths(path.join(ctx.cwd, STATE_DIR_NAME)).telemetry;
+    notify(ctx, renderTelemetryReport(readTelemetry(telemetryFile)));
   }
 
   /** Bundled dynamic prompts plus per-challenge prompt overrides. */
@@ -473,8 +491,35 @@ export function registerAutoresearchCommand(
       nav = result.nav;
       switch (result.type) {
         case "editModel": {
-          const value = await ctx.ui.input(`Model for ${result.role} (provider/model):`, config.roles[result.role].model);
-          if (value?.trim()) config.roles[result.role].model = value.trim();
+          const current = config.roles[result.role].model;
+          const models = ctx.modelRegistry
+            .getAvailable()
+            .map((model) => ({
+              label:
+                model.name && model.name !== model.id
+                  ? `${model.provider}/${model.id} — ${model.name}`
+                  : `${model.provider}/${model.id}`,
+              value: `${model.provider}/${model.id}`,
+            }))
+            .sort((left, right) => {
+              if (left.value === current) return -1;
+              if (right.value === current) return 1;
+              return left.value.localeCompare(right.value);
+            });
+          if (models.length === 0) {
+            notify(
+              ctx,
+              "no available models found; use /login to configure a provider, then reopen config",
+              "warning",
+            );
+            break;
+          }
+          const choice = await ctx.ui.select(
+            `Model for ${result.role} (current: ${current})`,
+            models.map((model) => model.label),
+          );
+          const picked = models.find((model) => model.label === choice);
+          if (picked) config.roles[result.role].model = picked.value;
           break;
         }
         case "editSoul": {
@@ -520,9 +565,9 @@ export function registerAutoresearchCommand(
   }
 
   pi.registerCommand("autoresearch", {
-    description: "AutoResearch harness: run|status|config|stop (default: run)",
+    description: "AutoResearch harness: run|status|telemetry|config|stop (default: run)",
     getArgumentCompletions: (prefix: string) => {
-      const items = ["run", "status", "config", "stop"]
+      const items = ["run", "status", "telemetry", "config", "stop"]
         .filter((c) => c.startsWith(prefix))
         .map((c) => ({ value: c, label: c }));
       return items.length > 0 ? items : null;
@@ -543,12 +588,18 @@ export function registerAutoresearchCommand(
           return startRun(ctx);
         case "status":
           return showStatus(ctx);
+        case "telemetry":
+          return showTelemetry(ctx);
         case "config":
           return editConfig(ctx);
         case "stop":
           return stopRun(ctx);
         default:
-          notify(ctx, `unknown subcommand "${sub}" — use run|status|config|stop`, "warning");
+          notify(
+            ctx,
+            `unknown subcommand "${sub}" — use run|status|telemetry|config|stop`,
+            "warning",
+          );
       }
     },
   });

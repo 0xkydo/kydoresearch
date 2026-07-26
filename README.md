@@ -177,6 +177,27 @@ tail -f .autoresearch/runs/L001-I1/logs/verify.log
 tail -f .autoresearch/runs/L001-I1/logs/benchmark.log
 ```
 
+## Quickstart: MLX Fast
+
+Clone through the challenge CLI, then launch Pi from the created checkout so
+the MLX Fast project hooks can register the session:
+
+```bash
+mlxfast clone ./mlxfast
+cd ./mlxfast
+pi -e /path/to/kydoresearch/extensions/autoresearch/index.ts
+```
+
+If clone or the trace gate requests a restart, relaunch Pi from that repository
+root. Inside Pi, `!mlxfast trace status` should report the registered project
+session. The CLI is pinned to the launch benchmark, so do not pass a benchmark
+name or ID.
+
+Before `/autoresearch`, set `runner` to `subprocess`, review every role model
+and thinking level, and set `submit model` to the exact underlying model name
+shown publicly by MLX Fast—for this Codex agent, `GPT 5.6 Sol`. Startup is
+blocked while MLX Fast model attribution is empty.
+
 ## The experiment loop
 
 ```text
@@ -246,6 +267,7 @@ research references behind the design.
 | `/autoresearch` | Initialize and start, or resume saved state. |
 | `/autoresearch run` | Explicit form of `/autoresearch`. |
 | `/autoresearch status` | Show the phase, loop, scores, ideas, dry streak, advisor notes, and open task count. |
+| `/autoresearch telemetry` | Aggregate local flow timings by count, total, average, maximum, and failures. |
 | `/autoresearch config` | Edit runner, role models, souls, prompts, thresholds, timeouts, advisor behavior, and submission model. |
 | `/autoresearch stop` | Abort active work safely and persist a resumable paused state. |
 
@@ -255,6 +277,17 @@ The extension also registers two tools for interactive and subprocess agents:
 |---|---|
 | `taskboard` | List, add, and update shared tasks in `.autoresearch/taskboard.json`. |
 | `research_notes` | List and read notes, read the knowledge base, or append knowledge. |
+
+## Local telemetry
+
+Completed setup, agent, challenge-command, advisor, church, and full-loop flows
+append compact spans to `.autoresearch/telemetry.ndjson`. Spans contain only a
+flow label, loop/idea identifiers, scope, timestamps, duration, and outcome.
+They exclude prompts, model responses, source, command output, file paths,
+environment values, and credentials, and kydoresearch does not upload them.
+
+Run `/autoresearch telemetry` for aggregates. PhD work can overlap, so per-flow
+totals are not additive; `loop.total` is the corresponding wall-clock time.
 
 ## Supported challenge contract
 
@@ -477,6 +510,7 @@ All runtime data lives in `.autoresearch/` inside the challenge repository:
   state.json                authoritative loop state and resume checkpoints
   config.json               runner, role, limit, timeout, and advisor settings
   journal.ndjson            append-only operational transitions
+  telemetry.ndjson          local-only completed flow timings and outcomes
   ledger.ndjson             compact index of completed candidate experiments
   knowledge-base.md         human-readable research navigation
   leaderboard.json          last parsed submission snapshot

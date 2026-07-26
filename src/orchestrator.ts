@@ -54,6 +54,7 @@ import type { Idea, LoopState, LoopSummary } from "./state.ts";
 import type { MetaHarnessStatus } from "./metaharness.ts";
 import { loadState, saveState, statePaths } from "./state.ts";
 import { Taskboard } from "./taskboard.ts";
+import { LocalTelemetry, type TelemetryContext, type TelemetryOutcome } from "./telemetry.ts";
 import { appendJournal, atomicWriteJson, betterScore, isImprovement, Mutex } from "./util.ts";
 import { WorktreePool } from "./worktree.ts";
 
@@ -102,6 +103,7 @@ export class Orchestrator {
   private readonly worktrees: WorktreePool;
   private readonly benchLock = new Mutex();
   private readonly taskboard: Taskboard;
+  private readonly telemetry: LocalTelemetry;
 
   constructor(
     private readonly repoRoot: string,
@@ -111,10 +113,16 @@ export class Orchestrator {
   ) {
     const state = loadState(stateDir);
     if (!state) throw new Error(`No state.json in ${stateDir}; run init first.`);
+    if (state.challenge.submitNeedsModel && !config.submitModelName?.trim()) {
+      throw new Error(
+        "MLX Fast requires config.submitModelName to contain the exact underlying model name before starting.",
+      );
+    }
     this.state = state;
     this.paths = statePaths(stateDir);
     this.worktrees = new WorktreePool(repoRoot, this.paths.worktreesDir, ports.exec);
     this.taskboard = new Taskboard(stateDir);
+    this.telemetry = new LocalTelemetry(this.paths.telemetry);
   }
 
   status(): StatusReport {
@@ -210,6 +218,18 @@ export class Orchestrator {
    * → advisor → streak/church bookkeeping. Returns null if aborted mid-loop.
    */
   async runLoop(): Promise<LoopSummary | null> {
+    const loop = this.state.loop > this.state.history.length
+      ? this.state.loop
+      : this.state.loop + 1;
+    return this.telemetry.measure(
+      "loop.total",
+      { loop, scope: "loop" },
+      () => this.runLoopInner(),
+      () => (this.aborted() ? "aborted" : "ok"),
+    );
+  }
+
+  private async runLoopInner(): Promise<LoopSummary | null> {
     await this.drainPendingCleanup();
     const loopInProgress = this.state.loop > this.state.history.length;
     const inferredResumePhase: Phase =
@@ -670,6 +690,8 @@ export class Orchestrator {
           this.persist();
           continue;
         }
+        idea.implementationSummary = impl.output;
+        this.persist();
 
         const integrity = await auditCandidateIntegrity({
           repoRoot: this.repoRoot,
@@ -937,6 +959,8 @@ export class Orchestrator {
         continue;
       }
 
+      const worktreeScore = candidate.localScore;
+      const previousBest = this.state.bestScore;
       candidate.localScore = bench.score;
 
       // Submission notes are required and public in Yukon challenges.
@@ -947,13 +971,12 @@ export class Orchestrator {
       const notePath = path.join(this.stateDir, noteRel);
       fs.writeFileSync(
         notePath,
-        [
-          `# ${candidate.title}`,
-          "",
-          `Local score: ${bench.score}. Idea ${candidate.id}, loop ${this.state.loop}.`,
-          "",
-          fs.readFileSync(path.join(this.stateDir, candidate.specFile), "utf8"),
-        ].join("\n"),
+        this.buildSubmissionNote(
+          candidate,
+          bench.score,
+          previousBest,
+          worktreeScore,
+        ),
       );
 
       const submit = await this.submitWithReconciliation(notePath, bench.score);
@@ -1067,7 +1090,7 @@ export class Orchestrator {
           {
             noteFile: notePath,
             model: this.state.challenge.submitNeedsModel
-              ? this.config.submitModelName ?? "unknown"
+              ? this.config.submitModelName!.trim()
               : undefined,
           },
           this.ports.signal,
@@ -1686,22 +1709,31 @@ export class Orchestrator {
     operation: (attempt: number) => Promise<T>,
     isSuccess: (value: T) => boolean,
   ): Promise<T> {
-    return retryOperation({
-      maxAttempts,
-      baseDelayMs: this.config.resilience.retryBaseDelayMs,
-      maxDelayMs: this.config.resilience.retryMaxDelayMs,
-      operation,
-      isSuccess,
-      signal: this.ports.signal,
-      delay: this.ports.delay,
-      onRetry: ({ attempt, maxAttempts: total, nextDelayMs, error, value }) => {
-        const detail = error === undefined ? retryValueDetail(value) : errorMessage(error);
-        this.emitLog(
-          `${label} failed (attempt ${attempt}/${total}); retrying in ${nextDelayMs}ms` +
-            (detail ? ` · ${firstLine(detail)}` : ""),
-        );
-      },
-    });
+    const execute = () =>
+      retryOperation({
+        maxAttempts,
+        baseDelayMs: this.config.resilience.retryBaseDelayMs,
+        maxDelayMs: this.config.resilience.retryMaxDelayMs,
+        operation,
+        isSuccess,
+        signal: this.ports.signal,
+        delay: this.ports.delay,
+        onRetry: ({ attempt, maxAttempts: total, nextDelayMs, error, value }) => {
+          const detail = error === undefined ? retryValueDetail(value) : errorMessage(error);
+          this.emitLog(
+            `${label} failed (attempt ${attempt}/${total}); retrying in ${nextDelayMs}ms` +
+              (detail ? ` · ${firstLine(detail)}` : ""),
+          );
+        },
+      });
+    const flow = this.telemetryFlow(label);
+    if (!flow) return execute();
+    return this.telemetry.measure(
+      flow,
+      this.telemetryContext(label),
+      execute,
+      (value) => this.resultOutcome(isSuccess(value)),
+    );
   }
 
   private loadCachedLeaderboard(): LeaderboardEntry[] {
@@ -1790,6 +1822,168 @@ export class Orchestrator {
 
   private aborted(): boolean {
     return this.ports.signal?.aborted ?? false;
+  }
+
+  private resultOutcome(ok: boolean): TelemetryOutcome {
+    return this.aborted() ? "aborted" : ok ? "ok" : "error";
+  }
+
+  private telemetryFlow(label: string): string | undefined {
+    if (label === "leaderboard sync") return "challenge.sync";
+    if (
+      label === "leaderboard fetch" ||
+      label === "submission reconciliation"
+    ) {
+      return "challenge.list-submissions";
+    }
+    if (label === "professor proposal") return "professor.propose";
+    if (label.startsWith("PhD implementation ")) return "phd.implement";
+    if (label.startsWith("main verify ") || label.startsWith("verify ")) {
+      return "challenge.verify";
+    }
+    if (label.startsWith("main benchmark ") || label.startsWith("benchmark ")) {
+      return "challenge.benchmark";
+    }
+    if (label === "submission") return "challenge.submit";
+    if (label.startsWith("hypothesis note ")) return "phd.write-note";
+    if (label === "advisor review") return "advisor.review";
+    if (label === "church reflection") return "god.reflect";
+    return undefined;
+  }
+
+  private telemetryContext(label: string): TelemetryContext {
+    const ideaId = label.match(/\bL\d{3}-I\d+\b/)?.[0];
+    const scope = label.startsWith("main ")
+      ? "main"
+      : ideaId
+        ? "idea"
+        : "loop";
+    return {
+      loop: this.state.loop,
+      ...(ideaId ? { ideaId } : {}),
+      scope,
+    };
+  }
+
+  /**
+   * Submission notes are public research artifacts. Build them from durable,
+   * versioned facts rather than forwarding an unconstrained model response.
+   */
+  private buildSubmissionNote(
+    candidate: Idea,
+    score: number,
+    priorBest: number | null,
+    worktreeScore: number | undefined,
+  ): string {
+    const proposalPath = candidateRunPaths(this.stateDir, candidate.id).proposal;
+    const proposal = JSON.parse(
+      fs.readFileSync(proposalPath, "utf8"),
+    ) as CandidateProposalV1;
+    const implementation = this.publicExcerpt(
+      candidate.implementationSummary ??
+        "The implementation agent completed the experiment without a narrative summary.",
+      12_000,
+    );
+    const roleLine = (role: "professor" | "phd" | "advisor") => {
+      const configured = this.config.roles[role];
+      return `${configured.model} (thinking: ${configured.thinking ?? "off"})`;
+    };
+    const direction = this.state.challenge.direction === "+"
+      ? "higher is better"
+      : "lower is better";
+    const attribution = this.state.challenge.submitNeedsModel
+      ? this.config.submitModelName!.trim()
+      : `${roleLine("phd")} (challenge does not require --model)`;
+
+    return [
+      `# Submission: ${candidate.title}`,
+      "",
+      "## Attribution",
+      "",
+      `- Submission model: ${attribution}`,
+      "- Coding agent/harness: fresh Pi subprocess agents orchestrated by kydoresearch",
+      `- Professor: ${roleLine("professor")}`,
+      `- Winning PhD implementer: ${roleLine("phd")}`,
+      `- Advisor: ${roleLine("advisor")}`,
+      "",
+      "## Goal and starting point",
+      "",
+      `This was candidate ${candidate.id} in research loop ${this.state.loop} for ${this.state.challenge.name}.`,
+      `It extended archived parent \`${proposal.parentCandidateId}\`; ${direction}.`,
+      `The comparison score before finalization was ${priorBest ?? "not established"}.`,
+      "",
+      "## Hypothesis and approach",
+      "",
+      `- Search mode: ${proposal.searchMode}`,
+      `- Edit family: ${proposal.editFamily}`,
+      `- Observation: ${this.publicExcerpt(proposal.observation, 4_000)}`,
+      `- Hypothesis: ${this.publicExcerpt(proposal.hypothesis, 4_000)}`,
+      `- Intervention: ${this.publicExcerpt(proposal.intervention, 8_000)}`,
+      `- Expected result: ${this.publicExcerpt(proposal.expectedResult, 4_000)}`,
+      `- Falsified when: ${this.publicExcerpt(proposal.falsifiedWhen, 4_000)}`,
+      proposal.evidenceRefs.length > 0
+        ? `- Evidence consulted: ${proposal.evidenceRefs.map((ref) => `\`${this.publicExcerpt(ref, 1_000)}\``).join(", ")}`
+        : "- Evidence consulted: no explicit evidence references were supplied.",
+      "",
+      "## Implementation",
+      "",
+      implementation,
+      "",
+      `The implementation was restricted to the manifest editable paths: ${this.state.challenge.editablePaths.join(", ")}.`,
+      "",
+      "## Verification and measured results",
+      "",
+      "| Measurement | Result |",
+      "|---|---:|",
+      `| Prior best local score | ${priorBest ?? "n/a"} |`,
+      `| Candidate score in its worktree | ${worktreeScore ?? "n/a"} |`,
+      `| Candidate score after applying to main | ${score} |`,
+      `| Correctness attempts | ${candidate.verifyAttempts} |`,
+      "",
+      `The candidate passed \`${this.state.challenge.verifyCommand}\` in its isolated worktree. The winner was then applied to main, re-verified, and re-measured with \`${this.state.challenge.benchCommand}\` before submission.`,
+      "",
+      "## Reproduction",
+      "",
+      "From a clean checkout at the same benchmark revision:",
+      "",
+      `1. Run \`${this.state.challenge.setupCommand}\`.`,
+      `2. Apply the candidate changes under ${this.state.challenge.editablePaths.map((editablePath) => `\`${editablePath}\``).join(", ")}.`,
+      `3. Run the correctness gate: \`${this.state.challenge.verifyCommand}\`.`,
+      `4. Run the local benchmark: \`${this.state.challenge.benchCommand}\`.`,
+      `5. Inspect \`${this.state.challenge.scorePath}\`; this run produced ${score}.`,
+      "",
+      "## Failures and course corrections",
+      "",
+      candidate.verifyAttempts > 1
+        ? `The candidate required ${candidate.verifyAttempts} implementation/verification attempts. Each failed correctness pass was returned to the same PhD flow before benchmarking.`
+        : "The candidate passed the first harness verification attempt.",
+      "Sibling candidates were evaluated independently and either failed, did not improve the comparison score, or were superseded.",
+      "",
+      "## Caveats",
+      "",
+      "- Scores are local measurements and may vary with machine state, benchmark noise, or a newer promoted frontier.",
+      "- The challenge CLI makes the final acceptance and promotion decision.",
+      "- Candidate work ran in parallel, but performance benchmarks were serialized.",
+      "",
+      "## Next step",
+      "",
+      "Re-check the promoted frontier, reproduce the result on the target machine, and profile the remaining hot path before selecting the next experiment.",
+      "",
+    ].join("\n");
+  }
+
+  private publicExcerpt(text: string, maxLength: number): string {
+    const sanitized = text
+      .replaceAll(this.stateDir, ".autoresearch")
+      .replaceAll(this.repoRoot, ".")
+      .replace(
+        /\b(?:sk|ghp|github_pat|xox[baprs]|AKIA)[A-Za-z0-9_=-]{8,}\b/g,
+        "[redacted credential]",
+      )
+      .trim();
+    return sanitized.length <= maxLength
+      ? sanitized
+      : `${sanitized.slice(0, maxLength)}\n\n[condensed]`;
   }
 
   private async waitAfterMockLoop(): Promise<void> {

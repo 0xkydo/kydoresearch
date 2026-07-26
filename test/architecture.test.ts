@@ -59,6 +59,8 @@ describe("architecture documentation contract", () => {
       ".autoresearch/logs/",
       "worktree registry",
       "benchmark lock",
+      "submitModelName",
+      "reproducibility note",
     ]) {
       expect(architecture).toContain(detail);
     }

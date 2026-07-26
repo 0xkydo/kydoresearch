@@ -14,6 +14,7 @@ import type { OrchestratorEvent } from "../src/orchestrator.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
 import type { Idea } from "../src/state.ts";
 import { loadState, saveState } from "../src/state.ts";
+import { readTelemetry } from "../src/telemetry.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
 interface Harness {
@@ -149,11 +150,41 @@ describe("Orchestrator scenario matrix", () => {
     // Only the loop-2 winner submitted.
     const subs = mySubmissions(repoRoot);
     expect(subs.map((s) => s.score)).toEqual([2]);
+    expect(subs[0]!.note).toContain("# Submission:");
+    for (const heading of [
+      "## Attribution",
+      "## Goal and starting point",
+      "## Hypothesis and approach",
+      "## Implementation",
+      "## Verification and measured results",
+      "## Reproduction",
+      "## Failures and course corrections",
+      "## Caveats",
+      "## Next step",
+    ]) {
+      expect(subs[0]!.note).toContain(heading);
+    }
 
     // Retry was real: journal contains a verify-failed line for L002-I1.
     const journal = fs.readFileSync(path.join(h.stateDir, "journal.ndjson"), "utf8");
     expect(journal).toContain("L002-I1");
     expect(journal).toMatch(/verify failed \(attempt 1/);
+
+    const flows = new Set(
+      readTelemetry(path.join(h.stateDir, "telemetry.ndjson")).map((span) => span.flow),
+    );
+    for (const flow of [
+      "loop.total",
+      "challenge.sync",
+      "professor.propose",
+      "phd.implement",
+      "challenge.verify",
+      "challenge.benchmark",
+      "challenge.submit",
+      "advisor.review",
+    ]) {
+      expect(flows).toContain(flow);
+    }
   });
 
   it("maximization applies minImprovement and selects the highest qualifying score", async () => {

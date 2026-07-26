@@ -68,6 +68,41 @@ describe("/autoresearch status", () => {
   });
 });
 
+describe("/autoresearch telemetry", () => {
+  it("summarizes local timing spans without requiring initialized state", async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-telemetry-command-"));
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void },
+      ) => {
+        handler = options.handler;
+      },
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const notify = vi.fn();
+    const ctx = {
+      cwd: repoRoot,
+      hasUI: true,
+      ui: { notify },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!("telemetry", ctx);
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringContaining("no completed flows recorded yet"),
+        "info",
+      );
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("/autoresearch compatibility", () => {
   it("turns an unsupported Pi version into an actionable notification", async () => {
     let handler:
@@ -137,6 +172,61 @@ describe("/autoresearch config", () => {
         "config saved to .autoresearch/config.json",
         "info",
       );
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+
+  it("selects role models from Pi's available model registry", async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-model-config-"));
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void },
+      ) => {
+        handler = options.handler;
+      },
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const custom = vi
+      .fn()
+      .mockResolvedValueOnce({
+        type: "editModel",
+        role: "professor",
+        nav: { pane: "right", left: 0, right: 0 },
+      })
+      .mockResolvedValueOnce({ type: "close" });
+    const select = vi.fn().mockResolvedValue("openai/gpt-5.6 — GPT 5.6");
+    const ctx = {
+      cwd: repoRoot,
+      hasUI: true,
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: "anthropic", id: "claude-sonnet-5", name: "Claude Sonnet 5" },
+          { provider: "openai", id: "gpt-5.6", name: "GPT 5.6" },
+        ],
+      },
+      ui: { custom, notify: vi.fn(), select },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!("config", ctx);
+
+      expect(select).toHaveBeenCalledWith(
+        `Model for professor (current: ${DEFAULT_CONFIG.roles.professor.model})`,
+        [
+          "anthropic/claude-sonnet-5 — Claude Sonnet 5",
+          "openai/gpt-5.6 — GPT 5.6",
+        ],
+      );
+      const saved = JSON.parse(
+        fs.readFileSync(path.join(repoRoot, STATE_DIR_NAME, "config.json"), "utf8"),
+      );
+      expect(saved.roles.professor.model).toBe("openai/gpt-5.6");
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });
     }
@@ -226,6 +316,24 @@ describe("/autoresearch startup errors", () => {
         ...notGit.notify.mock.calls,
       ].flat().join("\n"),
     ).not.toMatch(/\n\s+at\s/);
+  });
+
+  it("blocks MLX Fast startup until an exact submission model is configured", async () => {
+    const challenge = makeTmpChallenge();
+    cleanups.push(challenge.cleanup);
+    const manifestPath = path.join(challenge.repoRoot, "benchmark.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.name = "MLX Fast Challenge";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+
+    const mlx = commandHarness(challenge.repoRoot);
+    await mlx.run();
+
+    expect(mlx.notify).toHaveBeenCalledWith(
+      expect.stringMatching(/MLX Fast requires exact model attribution.*submit model.*GPT 5\.6 Sol/is),
+      "error",
+    );
+    expect(fs.existsSync(path.join(challenge.repoRoot, STATE_DIR_NAME, "state.json"))).toBe(false);
   });
 
   it("surfaces actionable setup and missing-benchmark guidance without a stack trace", async () => {

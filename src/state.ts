@@ -26,6 +26,8 @@ export interface Idea {
   benchmarkRecord?: EvaluationCommandV1;
   worktreePath?: string; // present while in flight (or kept on failure for debugging)
   noteFile?: string; // notes/<...>.md (relative to stateDir)
+  /** Brief implementation report, sanitized before inclusion in public notes. */
+  implementationSummary?: string;
   /** ISO timestamp written after the candidate evidence bundle is sealed. */
   archivedAt?: string;
   submitted?: { submissionId?: string; noteFile: string };
@@ -95,6 +97,7 @@ export function statePaths(stateDir: string) {
     state: path.join(stateDir, "state.json"),
     config: path.join(stateDir, "config.json"),
     journal: path.join(stateDir, "journal.ndjson"),
+    telemetry: path.join(stateDir, "telemetry.ndjson"),
     knowledgeBase: path.join(stateDir, "knowledge-base.md"),
     taskboard: path.join(stateDir, "taskboard.json"),
     leaderboard: path.join(stateDir, "leaderboard.json"),
