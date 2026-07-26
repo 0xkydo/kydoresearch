@@ -98,6 +98,39 @@ and an event callback. Switching between `MockAgentRunner` and
 `PiSubprocessRunner` remains a configuration choice, not a second
 orchestration implementation.
 
+## Testing architecture
+
+Phase-isolated tests do not introduce a second workflow engine. Capsules use
+the production `initChallenge`, `Orchestrator`, task validators, archive,
+worktree, integrity, challenge adapter, meta-harness validators, and widget
+projections with deterministic recording ports. A capsule stops at its
+declared boundary through the normal abort/resume checkpoint and proves the
+next consumer can read the durable output.
+
+```text
+explicit phase + Git changes
+  -> transitive test imports
+  -> test/impact-map.json semantic rules
+  -> always-on kernel
+  -> conservative escalation
+  -> selected Vitest files + explanation receipt
+```
+
+`src/test-system/` owns the stable phase/tier/receipt schema and pure
+selection logic. `scripts/test-impact.ts` owns Git discovery, dependency
+scanning, execution, and the local last-full-suite marker.
+`test/support/phase-testkit/` owns disposable repositories and deterministic
+recording ports. Phase fixtures remain durable filesystem state; they are not
+child conversations.
+
+Unknown production files, shared state/task/retry/runner/evaluator
+foundations, package/test infrastructure, and changes crossing multiple
+architectural boundaries escalate to the full suite. The selector fails
+closed when its schema is malformed or a test file is unclassified. Real Pi
+loading uses RPC/offline mode without a provider; visible-screen tests use a
+real pseudo-terminal and the mock challenge. See
+[`testing.md`](testing.md) for commands, identifiers, and CI tiers.
+
 ## Role behavior and task requirements
 
 Every role has a local `extensions/autoresearch/agents/<role>/SOUL.md`. A soul

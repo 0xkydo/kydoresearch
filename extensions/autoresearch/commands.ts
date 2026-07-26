@@ -35,7 +35,11 @@ import type {
   EditableSettingField,
   NavState,
 } from "./config-ui.ts";
-import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
+import {
+  applyConfigSetting,
+  ConfigPanel,
+  CONFIGURABLE_ROLES,
+} from "./config-ui.ts";
 import { renderCandidateInspection, renderCandidateList } from "./inspect.ts";
 import {
   renderInitializationDashboardLines,
@@ -610,93 +614,16 @@ export function registerAutoresearchCommand(
     const [title, current] = prompts[field];
     const value = await ctx.ui.input(title, current);
     if (value === undefined) return;
-    const trimmed = value.trim();
-    const asInt = Number(trimmed);
-    switch (field) {
-      case "maxIdeasPerLoop":
-        if (Number.isInteger(asInt) && asInt > 0) config.maxIdeasPerLoop = asInt;
-        break;
-      case "churchTriggerThreshold":
-        if (Number.isInteger(asInt) && asInt >= 0) config.churchTriggerThreshold = asInt;
-        break;
-      case "maxVerifyAttempts":
-        if (Number.isInteger(asInt) && asInt > 0) config.maxVerifyAttempts = asInt;
-        break;
-      case "maxLoops":
-        if (trimmed === "") config.maxLoops = null;
-        else if (Number.isInteger(asInt) && asInt > 0) config.maxLoops = asInt;
-        break;
-      case "minImprovement":
-        if (Number.isFinite(asInt) && asInt >= 0) config.minImprovement = asInt;
-        break;
-      case "mockLoopDelayMs":
-        if (Number.isInteger(asInt) && asInt >= 0) config.mockLoopDelayMs = asInt;
-        break;
-      case "setupTimeoutMs":
-        if (Number.isInteger(asInt) && asInt > 0) config.execution.setupTimeoutMs = asInt;
-        break;
-      case "verifyTimeoutMs":
-        if (Number.isInteger(asInt) && asInt > 0) config.execution.verifyTimeoutMs = asInt;
-        break;
-      case "benchmarkTimeoutMs":
-        if (Number.isInteger(asInt) && asInt > 0) config.execution.benchmarkTimeoutMs = asInt;
-        break;
-      case "agentMaxAttempts":
-        if (Number.isInteger(asInt) && asInt > 0) config.resilience.agentMaxAttempts = asInt;
-        break;
-      case "commandMaxAttempts":
-        if (Number.isInteger(asInt) && asInt > 0) config.resilience.commandMaxAttempts = asInt;
-        break;
-      case "submitMaxAttempts":
-        if (Number.isInteger(asInt) && asInt > 0) config.resilience.submitMaxAttempts = asInt;
-        break;
-      case "maxConsecutiveLoopFailures":
-        if (Number.isInteger(asInt) && asInt > 0) {
-          config.resilience.maxConsecutiveLoopFailures = asInt;
-        }
-        break;
-      case "retryBaseDelayMs":
-        if (Number.isInteger(asInt) && asInt >= 0) config.resilience.retryBaseDelayMs = asInt;
-        break;
-      case "retryMaxDelayMs":
-        if (Number.isInteger(asInt) && asInt >= 0) config.resilience.retryMaxDelayMs = asInt;
-        break;
-      case "loopFailureBaseDelayMs":
-        if (Number.isInteger(asInt) && asInt >= 0) {
-          config.resilience.loopFailureBaseDelayMs = asInt;
-        }
-        break;
-      case "loopFailureMaxDelayMs":
-        if (Number.isInteger(asInt) && asInt >= 0) {
-          config.resilience.loopFailureMaxDelayMs = asInt;
-        }
-        break;
-      case "metaEvaluationLoops":
-        if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.evaluationLoops = asInt;
-        break;
-      case "metaMaxGenerations":
-        if (trimmed === "") config.metaHarness.maxGenerations = null;
-        else if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.maxGenerations = asInt;
-        break;
-      case "metaMaxWallTimeMs":
-        if (trimmed === "") config.metaHarness.maxWallTimeMs = null;
-        else if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.maxWallTimeMs = asInt;
-        break;
-      case "metaMaxRecoveryAttempts":
-        if (Number.isInteger(asInt) && asInt >= 0) config.metaHarness.maxRecoveryAttempts = asInt;
-        break;
-      case "watchdogFile":
-        if (trimmed) config.advisor.watchdogFile = trimmed;
-        break;
-      case "submitModelName":
-        config.submitModelName = trimmed || undefined;
-        break;
+    const update = applyConfigSetting(config, field, value);
+    if (!update.ok) {
+      notify(ctx, update.error ?? `invalid value for ${field}`, "warning");
     }
   }
 
   async function editConfig(ctx: ExtensionCommandContext): Promise<void> {
     const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
     const config = loadConfig(stateDir);
+    const originalConfig = JSON.stringify(config);
     if (!ctx.hasUI) {
       const summary = [
         `runner: ${config.runner}`,
@@ -794,9 +721,17 @@ export function registerAutoresearchCommand(
           break;
       }
     }
-    fs.mkdirSync(stateDir, { recursive: true });
-    saveConfig(stateDir, config);
-    notify(ctx, "config saved to .autoresearch/config.json");
+    if (JSON.stringify(config) === originalConfig) {
+      notify(ctx, "config closed without changes");
+      return;
+    }
+    try {
+      fs.mkdirSync(stateDir, { recursive: true });
+      saveConfig(stateDir, config);
+      notify(ctx, "config saved to .autoresearch/config.json");
+    } catch (error) {
+      notify(ctx, `config was not saved: ${errorMessage(error)}`, "error");
+    }
   }
 
   async function stopRun(ctx: ExtensionCommandContext): Promise<void> {
@@ -992,6 +927,10 @@ function displayPath(repoRoot: string, value: string): string {
 
 function firstDisplayLine(value: string): string {
   return value.trim().split("\n")[0] ?? value;
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function isVersionAtLeast(actual: string, minimum: string): boolean {

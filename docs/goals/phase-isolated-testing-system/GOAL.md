@@ -214,13 +214,13 @@ To minimize merge conflicts:
 **Parallelizable:** no; establishes the shared baseline  
 **Likely files:** test inventory documentation only
 
-- [ ] Record the duration of each current test file and the full suite.
-- [ ] Classify every test as phase-local, adjacent-boundary, cross-cutting,
+- [x] Record the duration of each current test file and the full suite.
+- [x] Classify every test as phase-local, adjacent-boundary, cross-cutting,
       package/install, or full-loop.
-- [ ] Map current slow setup, subprocess, Git, and retry fixtures.
-- [ ] Identify tests that mix fast UI assertions with slow repository setup.
-- [ ] Record the current minimum and pinned Pi versions.
-- [ ] Propose measurable time budgets without weakening correctness coverage.
+- [x] Map current slow setup, subprocess, Git, and retry fixtures.
+- [x] Identify tests that mix fast UI assertions with slow repository setup.
+- [x] Record the current minimum and pinned Pi versions.
+- [x] Propose measurable time budgets without weakening correctness coverage.
 
 **Exit criteria**
 
@@ -257,16 +257,16 @@ Define:
 **Parallelizable:** yes, with `U0`, `S0`, and `R0`  
 **Likely files:** `test/support/phase-testkit/`
 
-- [ ] Implement typed fixture loading and temporary durable-state setup.
-- [ ] Provide deterministic AgentRunner, ChallengeAdapter, ExecPort, clock,
+- [x] Implement typed fixture loading and temporary durable-state setup.
+- [x] Provide deterministic AgentRunner, ChallengeAdapter, ExecPort, clock,
       delay, and abort controls.
-- [ ] Provide a boundary-stop mechanism that does not add a test-only branch to
+- [x] Provide a boundary-stop mechanism that does not add a test-only branch to
       production behavior.
-- [ ] Capture state writes, journal events, runner calls, commands, logs, and
+- [x] Capture state writes, journal events, runner calls, commands, logs, and
       externally visible effects.
-- [ ] Provide retry, abort, restart, and resume helpers.
-- [ ] Reject fixture paths that escape the test root.
-- [ ] Add self-tests proving isolation, cleanup, determinism, and no paid calls.
+- [x] Provide retry, abort, restart, and resume helpers.
+- [x] Reject fixture paths that escape the test root.
+- [x] Add self-tests proving isolation, cleanup, determinism, and no paid calls.
 
 Where orchestration logic is currently private, extract the smallest
 port-driven production handler required by both the Orchestrator and tests.
@@ -285,13 +285,13 @@ The Orchestrator remains the lifecycle owner.
 **Parallelizable:** yes  
 **Likely files:** `extensions/autoresearch/widget.ts`, `test/ui/fixtures.ts`
 
-- [ ] Define canonical scenarios from real `Phase`, `IdeaStatus`,
+- [x] Define canonical scenarios from real `Phase`, `IdeaStatus`,
       initialization, recovery, steering, fidelity, and meta-harness types.
-- [ ] Introduce a semantic dashboard model shared by plain and styled
+- [x] Introduce a semantic dashboard model shared by plain and styled
       projections if tests demonstrate parity risk.
-- [ ] Assign priority to facts and actions so narrow rendering is intentional.
-- [ ] Keep TUI and RPC meaning equivalent.
-- [ ] Preserve color-independent icons and labels.
+- [x] Assign priority to facts and actions so narrow rendering is intentional.
+- [x] Keep TUI and RPC meaning equivalent.
+- [x] Preserve color-independent icons and labels.
 
 **Exit criteria**
 
@@ -305,12 +305,12 @@ The Orchestrator remains the lifecycle owner.
 **Parallelizable:** yes  
 **Likely files:** new selector schema and design tests
 
-- [ ] Define mappings from paths and semantic contracts to phases and tiers.
-- [ ] Define precedence for explicit `--phase`, changed-file inference, Vitest
+- [x] Define mappings from paths and semantic contracts to phases and tiers.
+- [x] Define precedence for explicit `--phase`, changed-file inference, Vitest
       dependency analysis, and risk-map additions.
-- [ ] Define conservative escalation for unknown files and shared boundaries.
-- [ ] Define stale-full-suite handling.
-- [ ] Define a dry-run/explain mode before writing the executor.
+- [x] Define conservative escalation for unknown files and shared boundaries.
+- [x] Define stale-full-suite handling.
+- [x] Define a dry-run/explain mode before writing the executor.
 
 **Exit criteria**
 
@@ -324,15 +324,15 @@ The Orchestrator remains the lifecycle owner.
 **Parallelizable:** yes; independent of implementation  
 **Likely files:** `docs/goals/phase-isolated-testing-system/usability-protocol.md`
 
-- [ ] Define representative Pi-experienced, new-to-kydoresearch, keyboard-only,
+- [x] Define representative Pi-experienced, new-to-kydoresearch, keyboard-only,
       and low-vision participant profiles.
-- [ ] Define task-based mock-challenge scenarios for initialization, fidelity,
+- [x] Define task-based mock-challenge scenarios for initialization, fidelity,
       candidate diagnosis, steering, pause/restart/resume, submission awareness,
       and configuration.
-- [ ] Define measures for task success, time to orientation, unsafe
+- [x] Define measures for task success, time to orientation, unsafe
       misunderstanding, confidence, and perceived ease.
-- [ ] Define facilitator and note-taking scripts.
-- [ ] Keep participant testing outside automated CI.
+- [x] Define facilitator and note-taking scripts.
+- [x] Keep participant testing outside automated CI.
 
 **Exit criteria**
 
@@ -513,14 +513,14 @@ Cover:
 **Likely files:** `scripts/test-impact.ts`, impact-map configuration, selector
 unit tests
 
-- [ ] Combine explicit phase intent, Git changes, Vitest affected-test
+- [x] Combine explicit phase intent, Git changes, Vitest affected-test
       selection, semantic impact mappings, and the always-on kernel.
-- [ ] Print and optionally persist the selection receipt.
-- [ ] Support dry-run/explain mode.
-- [ ] Support minimum selection, phase-flow, PTY, and full escalation.
-- [ ] Test docs-only, UI-only, one-phase, adjacent-boundary, shared-state,
+- [x] Print and optionally persist the selection receipt.
+- [x] Support dry-run/explain mode.
+- [x] Support minimum selection, phase-flow, PTY, and full escalation.
+- [x] Test docs-only, UI-only, one-phase, adjacent-boundary, shared-state,
       package/dependency, broad, and unknown changes.
-- [ ] Fail closed when configuration is malformed.
+- [x] Fail closed when configuration is malformed.
 
 **Mandatory escalation triggers**
 
@@ -550,12 +550,12 @@ unit tests
 **Parallelizable:** yes, with `V1`, `C1`, and `D1`  
 **Likely files:** `test/integration/pi-extension/`
 
-- [ ] Load the actual extension through Pi's extension loader with an in-memory
+- [x] Load the actual extension through Pi's extension loader with an in-memory
       or deterministic model boundary.
-- [ ] Verify command/tool registration, UI calls, session-start restoration,
+- [x] Verify command/tool registration, UI calls, session-start restoration,
       TUI custom-component use, and RPC fallback.
-- [ ] Verify packaged installation in a fresh consumer fixture.
-- [ ] Cover the minimum supported and pinned Pi versions in scheduled CI.
+- [x] Verify packaged installation in a fresh consumer fixture.
+- [x] Cover the minimum supported and pinned Pi versions in scheduled CI.
 
 Do not call a real provider.
 
@@ -604,29 +604,29 @@ quarantine or skip a correctness failure merely because it is slow.
 **Likely files:** README development section, architecture testing section,
 goal-folder protocol
 
-- [ ] Document phase commands, segments, tiers, receipts, and escalation.
-- [ ] Document how to add a new phase capsule and impact-map entry.
-- [ ] Document which runs are safe and free of paid/external effects.
-- [ ] Document nightly/full reconciliation and manual override.
-- [ ] Document the human usability protocol.
-- [ ] Migrate current mixed tests without deleting proven coverage.
+- [x] Document phase commands, segments, tiers, receipts, and escalation.
+- [x] Document how to add a new phase capsule and impact-map entry.
+- [x] Document which runs are safe and free of paid/external effects.
+- [x] Document nightly/full reconciliation and manual override.
+- [x] Document the human usability protocol.
+- [x] Migrate current mixed tests without deleting proven coverage.
 
 ### A1 — Acceptance audit and rollout
 
 **Dependencies:** `M3`  
 **Parallelizable:** final integration step
 
-- [ ] Run every phase capsule independently.
-- [ ] Prove that a Professor-only change does not select Setup, PhD,
+- [x] Run every phase capsule independently.
+- [x] Prove that a Professor-only change does not select Setup, PhD,
       finalization, or submission suites.
-- [ ] Prove that a Setup-only change stops before Professor.
-- [ ] Prove that shared state-machine changes escalate.
-- [ ] Prove unknown impact escalates.
-- [ ] Run the full suite and typecheck once as reconciliation.
-- [ ] Compare duration against `G0`.
-- [ ] Inspect all receipts and CI artifacts.
-- [ ] Confirm no paid models, real sync, or real submission ran.
-- [ ] Update the goal with verified results and any deliberate deviations.
+- [x] Prove that a Setup-only change stops before Professor.
+- [x] Prove that shared state-machine changes escalate.
+- [x] Prove unknown impact escalates.
+- [x] Run the full suite and typecheck once as reconciliation.
+- [x] Compare duration against `G0`.
+- [x] Inspect all receipts and CI artifacts.
+- [x] Confirm no paid models, real sync, or real submission ran.
+- [x] Update the goal with verified results and any deliberate deviations.
 
 ## Always-on safety kernel
 
