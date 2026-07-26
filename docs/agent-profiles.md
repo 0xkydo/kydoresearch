@@ -78,7 +78,7 @@ pause, and resume.
 | PhD | Execute one bounded experiment and report evidence honestly | Claude Sonnet 5 / medium | `read`, `write`, `edit`, `bash` |
 | God | Restore perspective and agency without promising an outcome | Claude Fable 5 / high | `read`, `write` |
 | Advisor | Independently review safety, integrity, and research quality | Claude Fable 5 / medium | `read` |
-| Meta-harness | Diagnose and evolve the permitted outer harness surface | Claude Fable 5 / high | `read`, `write`, `edit`, `bash` |
+| Meta-harness | Diagnose and evolve the permitted outer harness surface | Claude Fable 5 / high | `read`, `write`, `edit`, `bash` (the evolution task narrows this to `read`, `write`, `edit`) |
 
 ### Setup
 
@@ -166,4 +166,6 @@ one falsifiable next direction in `notes/church-NNN.md`.
 
 Custom files must retain task placeholders, structured schemas, role authority,
 and harness-owned operations. The Meta-harness controller additionally hashes,
-validates, confines, and size-bounds candidate-local role artifacts.
+validates, confines, and size-bounds candidate-local role artifacts. Its
+positive allowlist accepts only the profile and the declared role-local
+Professor, PhD, and Advisor soul and prompt files.

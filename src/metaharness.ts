@@ -24,6 +24,7 @@ import {
 
 export const META_HARNESS_SCHEMA_VERSION = 1 as const;
 export const BASELINE_HARNESS_CANDIDATE_ID = "H0000";
+const VERIFIER_FINGERPRINT_SCOPE = "declared-contract-v2" as const;
 
 export const EVOLVING_HARNESS_ROLES = [
   "professor",
@@ -145,17 +146,6 @@ export interface FrozenRuntimeContractV1 {
     god: RoleSpec;
     metaharness: RoleSpec;
   };
-  fixedRoleArtifacts: Record<
-    "setup" | "god" | "metaharness",
-    {
-      soulSha256: string;
-      promptSha256: string;
-    }
-  >;
-  implementationFiles: Array<{
-    label: string;
-    sha256: string;
-  }>;
   innerPolicy: {
     churchTriggerThreshold: number;
     maxVerifyAttempts: number;
@@ -183,8 +173,12 @@ export interface VerifierContractV1 {
     editablePaths: string[];
     localEvaluation?: LoopState["challenge"]["localEvaluation"];
   };
-  files: FrozenVerifierFileV1[];
+  /** Legacy repository snapshot retained only while migrating older campaigns. */
+  files?: FrozenVerifierFileV1[];
   runtime?: FrozenRuntimeContractV1;
+  fingerprintScope?: typeof VERIFIER_FINGERPRINT_SCOPE;
+  /** Older fingerprints retained when a contract is narrowed compatibly. */
+  legacyFingerprints?: string[];
   fingerprint: string;
 }
 
@@ -409,6 +403,18 @@ export class MetaHarnessController {
         config,
       );
       atomicWriteJson(paths.verifier, verifier);
+    } else {
+      const normalized = normalizeVerifierContract(verifier);
+      if (normalized.fingerprint !== verifier.fingerprint) {
+        verifier = normalized;
+        atomicWriteJson(paths.verifier, verifier);
+        appendJournal(paths.journal, {
+          event: "metaharness.verifier-migrated",
+          fingerprint: verifier.fingerprint,
+          legacyFingerprints: verifier.legacyFingerprints,
+          reason: "narrowed fingerprint to the declared contract and runtime policy",
+        });
+      }
     }
 
     let state = readJsonIfExists<MetaHarnessStateV1>(paths.state);
@@ -462,6 +468,7 @@ export class MetaHarnessController {
       config,
     );
     if (current.fingerprint !== verifier.fingerprint) {
+      const drift = describeVerifierContractDrift(verifier, current);
       if (innerState.phase !== "paused") innerState.resumePhase = innerState.phase;
       innerState.phase = "paused";
       saveState(stateDir, innerState);
@@ -472,8 +479,22 @@ export class MetaHarnessController {
         event: "metaharness.verifier-drift",
         expected: verifier.fingerprint,
         observed: current.fingerprint,
+        drift,
       });
-      throw new VerifierDriftError(verifier.fingerprint, current.fingerprint);
+      throw new VerifierDriftError(
+        verifier.fingerprint,
+        current.fingerprint,
+        drift,
+      );
+    }
+    if (state.phase === "paused") {
+      state.phase = state.activeEvaluation ? "evaluating" : "ready";
+      state.updatedAt = new Date().toISOString();
+      atomicWriteJson(paths.state, state);
+      appendJournal(paths.journal, {
+        event: "metaharness.resumed",
+        verifierFingerprint: verifier.fingerprint,
+      });
     }
     return new MetaHarnessController(
       repoRoot,
@@ -676,6 +697,7 @@ export class MetaHarnessController {
         kind: "evolve-harness",
         cwd: paths.root,
         stateDir: this.stateDir,
+        tools: ["read", "write", "edit"],
         input: {
           ...task.input,
           taskPath,
@@ -686,6 +708,11 @@ export class MetaHarnessController {
         },
         signal: this.ports.signal,
       });
+      assertMetaHarnessWritesAllowed(
+        paths.root,
+        paths.profile,
+        result.filesWritten,
+      );
       if (!result.ok) {
         throw new Error(
           result.error ?? (result.output || "metaharness proposer failed"),
@@ -1034,7 +1061,7 @@ export class MetaHarnessController {
       );
     } catch (error) {
       throw new VerifierContractCheckError(
-        `Unable to inspect the frozen verifier contract; the campaign was paused: ` +
+        `Unable to inspect the declared verifier contract; the campaign was paused: ` +
           errorMessage(error),
       );
     }
@@ -1042,6 +1069,7 @@ export class MetaHarnessController {
       throw new VerifierDriftError(
         this.verifier.fingerprint,
         current.fingerprint,
+        describeVerifierContractDrift(this.verifier, current),
       );
     }
   }
@@ -1160,55 +1188,145 @@ export class VerifierContractCheckError extends Error {
 }
 
 export class VerifierDriftError extends VerifierContractCheckError {
-  constructor(expected: string, actual: string) {
+  constructor(expected: string, actual: string, drift: string[] = []) {
+    const detail = formatVerifierDrift(drift);
     super(
-      `Frozen verifier contract changed during metaharness search ` +
-        `(expected ${expected}, observed ${actual}); the campaign was paused.`,
+      `Declared verifier or runtime contract changed during metaharness search ` +
+        `(expected ${expected}, observed ${actual}); ` +
+        `${detail ? `changed components: ${detail}; ` : ""}` +
+        "the campaign was paused.",
     );
     this.name = "VerifierDriftError";
   }
 }
 
+export function describeVerifierContractDrift(
+  expected: VerifierContractV1,
+  actual: VerifierContractV1,
+): string[] {
+  const drift = new Set<string>();
+  collectValueDrift(expected.challenge, actual.challenge, "challenge", drift);
+  collectValueDrift(expected.runtime, actual.runtime, "runtime", drift);
+
+  return [...drift].sort();
+}
+
+function collectValueDrift(
+  expected: unknown,
+  actual: unknown,
+  valuePath: string,
+  drift: Set<string>,
+): void {
+  if (
+    Object.is(expected, actual) ||
+    JSON.stringify(expected) === JSON.stringify(actual)
+  ) {
+    return;
+  }
+  if (
+    expected === null ||
+    actual === null ||
+    typeof expected !== "object" ||
+    typeof actual !== "object" ||
+    Array.isArray(expected) ||
+    Array.isArray(actual)
+  ) {
+    drift.add(valuePath);
+    return;
+  }
+  const expectedRecord = expected as Record<string, unknown>;
+  const actualRecord = actual as Record<string, unknown>;
+  for (const key of new Set([
+    ...Object.keys(expectedRecord),
+    ...Object.keys(actualRecord),
+  ])) {
+    collectValueDrift(
+      expectedRecord[key],
+      actualRecord[key],
+      `${valuePath}.${key}`,
+      drift,
+    );
+  }
+}
+
+function formatVerifierDrift(drift: string[]): string {
+  const visible = drift.slice(0, 8);
+  const remaining = drift.length - visible.length;
+  return `${visible.join(", ")}${remaining > 0 ? ` (+${remaining} more)` : ""}`;
+}
+
+type LegacyFrozenRuntimeContractV1 = FrozenRuntimeContractV1 & {
+  fixedRoleArtifacts?: Record<
+    "setup" | "god" | "metaharness",
+    {
+      soulSha256: string;
+      promptSha256: string;
+    }
+  >;
+  implementationFiles?: Array<{
+    label: string;
+    sha256: string;
+  }>;
+};
+
+export function normalizeVerifierContract(
+  contract: VerifierContractV1,
+): VerifierContractV1 {
+  const legacyRuntime = contract.runtime as
+    | LegacyFrozenRuntimeContractV1
+    | undefined;
+  if (
+    contract.fingerprintScope === VERIFIER_FINGERPRINT_SCOPE &&
+    !legacyRuntime?.implementationFiles &&
+    !legacyRuntime?.fixedRoleArtifacts
+  ) {
+    return contract;
+  }
+  const legacyFingerprint = fingerprintLegacyVerifierContract({
+    challenge: contract.challenge,
+    files: contract.files ?? [],
+    runtime: legacyRuntime,
+  });
+  if (legacyFingerprint !== contract.fingerprint) {
+    throw new Error(
+      `Persisted verifier fingerprint ${contract.fingerprint} does not match ` +
+        `its legacy contract ${legacyFingerprint}`,
+    );
+  }
+
+  let runtime: FrozenRuntimeContractV1 | undefined;
+  if (legacyRuntime) {
+    const {
+      fixedRoleArtifacts: _fixedRoleArtifacts,
+      implementationFiles: _implementationFiles,
+      ...normalizedRuntime
+    } = legacyRuntime;
+    runtime = normalizedRuntime;
+  }
+  const normalized: VerifierContractV1 = {
+    schemaVersion: contract.schemaVersion,
+    capturedAt: contract.capturedAt,
+    challenge: contract.challenge,
+    ...(runtime ? { runtime } : {}),
+    fingerprintScope: VERIFIER_FINGERPRINT_SCOPE,
+    legacyFingerprints: [
+      ...new Set([
+        ...(contract.legacyFingerprints ?? []),
+        legacyFingerprint,
+      ]),
+    ],
+    fingerprint: "",
+  };
+  normalized.fingerprint = fingerprintVerifierContract(normalized);
+  return normalized;
+}
+
 export async function captureVerifierContract(
-  repoRoot: string,
+  _repoRoot: string,
   state: LoopState,
-  exec: ExecPort,
+  _exec: ExecPort,
   config?: HarnessConfig,
 ): Promise<VerifierContractV1> {
-  const listed = await exec("git", ["ls-files", "-z"], { cwd: repoRoot });
-  if (listed.code !== 0) {
-    throw new Error(`Unable to enumerate frozen verifier files: ${listed.stderr.trim()}`);
-  }
-
-  const relativeFiles = new Set(
-    listed.stdout
-      .split("\0")
-      .filter(Boolean)
-      .map(normalizeRelativePath)
-      .filter(
-        (relativePath) =>
-          !isWithinAnyEditablePath(relativePath, state.challenge.editablePaths),
-      ),
-  );
-  relativeFiles.add("benchmark.json");
-
-  for (const command of [
-    state.challenge.verifyCommand,
-    state.challenge.benchCommand,
-  ]) {
-    for (const commandPath of discoverRepoCommandPaths(repoRoot, command)) {
-      if (isWithinAnyEditablePath(commandPath, state.challenge.editablePaths)) {
-        throw new Error(
-          `Frozen evaluator path ${commandPath} is inside editablePaths and cannot be protected`,
-        );
-      }
-      relativeFiles.add(commandPath);
-    }
-  }
-
-  const files = [...relativeFiles]
-    .sort()
-    .flatMap((relativePath) => fingerprintPath(repoRoot, relativePath));
   const challenge = {
     name: state.challenge.name,
     direction: state.challenge.direction,
@@ -1220,18 +1338,45 @@ export async function captureVerifierContract(
       ? { localEvaluation: state.challenge.localEvaluation }
       : {}),
   };
-  const runtime = config ? captureFrozenRuntime(repoRoot, config) : undefined;
-  const fingerprint = createHash("sha256")
-    .update(JSON.stringify({ challenge, files, runtime }))
-    .digest("hex");
-  return {
+  const runtime = config ? captureFrozenRuntime(config) : undefined;
+  const contract: VerifierContractV1 = {
     schemaVersion: META_HARNESS_SCHEMA_VERSION,
     capturedAt: new Date().toISOString(),
     challenge,
-    files,
     ...(runtime ? { runtime } : {}),
-    fingerprint,
+    fingerprintScope: VERIFIER_FINGERPRINT_SCOPE,
+    fingerprint: "",
   };
+  contract.fingerprint = fingerprintVerifierContract(contract);
+  return contract;
+}
+
+function fingerprintVerifierContract(
+  contract: Pick<VerifierContractV1, "challenge" | "runtime">,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        challenge: contract.challenge,
+        runtime: contract.runtime,
+      }),
+    )
+    .digest("hex");
+}
+
+function fingerprintLegacyVerifierContract(
+  contract: Required<Pick<VerifierContractV1, "challenge" | "files">> &
+    Pick<VerifierContractV1, "runtime">,
+): string {
+  return createHash("sha256")
+    .update(
+      JSON.stringify({
+        challenge: contract.challenge,
+        files: contract.files,
+        runtime: contract.runtime,
+      }),
+    )
+    .digest("hex");
 }
 
 export function validateHarnessProfile(
@@ -1275,6 +1420,7 @@ export function validateHarnessProfile(
   const roles = requireRecord(profile.roles, "profile.roles");
   requireExactKeys(roles, EVOLVING_HARNESS_ROLES, "profile.roles");
   let totalBytes = Buffer.byteLength(JSON.stringify(profile));
+  const referencedArtifacts = new Set<string>();
   for (const role of EVOLVING_HARNESS_ROLES) {
     const roleProfile = requireRecord(roles[role], `profile.roles.${role}`);
     requireAllowedKeys(roleProfile, ROLE_PROFILE_KEYS, `profile.roles.${role}`);
@@ -1284,10 +1430,14 @@ export function validateHarnessProfile(
         `profile.roles.${role}.${field}`,
       );
       const resolved = resolveProfileFile(candidateRoot, configured);
+      assertRoleArtifactPath(candidateRoot, role, resolved, field);
       const stat = fs.lstatSync(resolved);
       if (!stat.isFile() || stat.isSymbolicLink()) {
         throw new Error(`profile.roles.${role}.${field} must reference a regular file`);
       }
+      referencedArtifacts.add(
+        normalizeRelativePath(path.relative(candidateRoot, resolved)),
+      );
       totalBytes += stat.size;
     }
     if (roleProfile.tools !== undefined) {
@@ -1299,6 +1449,7 @@ export function validateHarnessProfile(
       `Harness profile is ${totalBytes} bytes; limit is ${options.maxBytes}`,
     );
   }
+  validateHarnessArtifactSurface(candidateRoot, referencedArtifacts);
   return profile as unknown as HarnessProfileV1;
 }
 
@@ -1340,7 +1491,10 @@ function validatePersistedEvaluation(
     evaluation.candidateId !== candidate.candidateId ||
     evaluation.parentCandidateId !== candidate.parentCandidateId ||
     evaluation.profileHash !== candidate.profileHash ||
-    evaluation.verifierFingerprint !== verifier.fingerprint ||
+    ![
+      verifier.fingerprint,
+      ...(verifier.legacyFingerprints ?? []),
+    ].includes(evaluation.verifierFingerprint) ||
     !Array.isArray(evaluation.loops) ||
     typeof evaluation.accepted !== "boolean" ||
     !Number.isFinite(evaluation.objectiveGain) ||
@@ -1538,6 +1692,105 @@ function resolveProfileFile(candidateRoot: string, configured: string): string {
   return resolved;
 }
 
+function assertMetaHarnessWritesAllowed(
+  candidateRoot: string,
+  profilePath: string,
+  filesWritten: readonly string[],
+): void {
+  const root = path.resolve(candidateRoot);
+  const allowedProfile = path.resolve(profilePath);
+  const allowedRoleRoots = EVOLVING_HARNESS_ROLES.map((role) =>
+    path.join(root, "artifact", role)
+  );
+  const violations = filesWritten
+    .map((writtenPath) =>
+      path.isAbsolute(writtenPath)
+        ? path.resolve(writtenPath)
+        : path.resolve(root, writtenPath),
+    )
+    .filter(
+      (writtenPath) =>
+        writtenPath !== allowedProfile &&
+        !allowedRoleRoots.some((roleRoot) => {
+          const relative = path.relative(roleRoot, writtenPath);
+          return (
+            relative !== "" &&
+            relative !== ".." &&
+            !relative.startsWith(`..${path.sep}`) &&
+            !path.isAbsolute(relative)
+          );
+        }),
+    );
+  if (violations.length > 0) {
+    throw new Error(
+      `Meta-harness attempted to write outside its candidate allowlist: ` +
+        [...new Set(violations)].sort().join(", "),
+    );
+  }
+}
+
+function assertRoleArtifactPath(
+  candidateRoot: string,
+  role: EvolvingHarnessRole,
+  resolved: string,
+  field: "soul" | "prompt",
+): void {
+  const roleRoot = path.resolve(candidateRoot, "artifact", role);
+  const relative = path.relative(roleRoot, resolved);
+  if (
+    relative === "" ||
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error(
+      `profile.roles.${role}.${field} must stay within artifact/${role}`,
+    );
+  }
+}
+
+function validateHarnessArtifactSurface(
+  candidateRoot: string,
+  referencedArtifacts: ReadonlySet<string>,
+): void {
+  const artifactRoot = path.join(candidateRoot, "artifact");
+  const actualArtifacts = listArtifactFiles(candidateRoot, artifactRoot);
+  const unexpected = actualArtifacts.filter(
+    (relativePath) => !referencedArtifacts.has(relativePath),
+  );
+  if (unexpected.length > 0) {
+    throw new Error(
+      `Harness candidate contains files outside its declared role artifacts: ` +
+        unexpected.join(", "),
+    );
+  }
+}
+
+function listArtifactFiles(candidateRoot: string, current: string): string[] {
+  const stat = fs.lstatSync(current);
+  if (stat.isSymbolicLink()) {
+    throw new Error(
+      `Harness candidate artifact must not be a symlink: ` +
+        normalizeRelativePath(path.relative(candidateRoot, current)),
+    );
+  }
+  if (stat.isFile()) {
+    return [normalizeRelativePath(path.relative(candidateRoot, current))];
+  }
+  if (!stat.isDirectory()) {
+    throw new Error(
+      `Harness candidate artifact must be a regular file or directory: ` +
+        normalizeRelativePath(path.relative(candidateRoot, current)),
+    );
+  }
+  return fs
+    .readdirSync(current)
+    .sort()
+    .flatMap((name) =>
+      listArtifactFiles(candidateRoot, path.join(current, name)),
+    );
+}
+
 function repoRelativeRolePath(repoRoot: string, absolutePath: string): string {
   const relative = path.relative(repoRoot, absolutePath);
   if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
@@ -1546,69 +1799,8 @@ function repoRelativeRolePath(repoRoot: string, absolutePath: string): string {
   return relative;
 }
 
-function fingerprintPath(repoRoot: string, relativePath: string): FrozenVerifierFileV1[] {
-  const absolutePath = path.resolve(repoRoot, relativePath);
-  const relative = path.relative(repoRoot, absolutePath);
-  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
-    throw new Error(`Frozen verifier path escapes repository: ${relativePath}`);
-  }
-  if (!fs.existsSync(absolutePath)) {
-    throw new Error(`Frozen verifier file is missing: ${relativePath}`);
-  }
-  const stat = fs.lstatSync(absolutePath);
-  if (stat.isDirectory()) {
-    return fs
-      .readdirSync(absolutePath)
-      .sort()
-      .flatMap((name) =>
-        fingerprintPath(repoRoot, path.posix.join(normalizeRelativePath(relativePath), name)),
-      );
-  }
-  if (stat.isSymbolicLink()) {
-    return [
-      {
-        path: normalizeRelativePath(relativePath),
-        kind: "symlink",
-        sha256: createHash("sha256").update(fs.readlinkSync(absolutePath)).digest("hex"),
-      },
-    ];
-  }
-  if (!stat.isFile()) return [];
-  return [
-    {
-      path: normalizeRelativePath(relativePath),
-      kind: "file",
-      sha256: createHash("sha256").update(fs.readFileSync(absolutePath)).digest("hex"),
-      mode: stat.mode & 0o777,
-    },
-  ];
-}
-
-function discoverRepoCommandPaths(repoRoot: string, command: string): string[] {
-  const found = new Set<string>();
-  for (const match of command.matchAll(/(?:^|\s)(?:["'])?(\.?\/[A-Za-z0-9_./-]+)(?:["'])?(?=\s|$)/g)) {
-    const token = match[1]!;
-    const relative = normalizeRelativePath(token.replace(/^\.\//, ""));
-    const absolute = path.resolve(repoRoot, relative);
-    if (fs.existsSync(absolute)) found.add(relative);
-  }
-  return [...found];
-}
-
-function isWithinAnyEditablePath(relativePath: string, editablePaths: string[]): boolean {
-  const normalized = normalizeRelativePath(relativePath);
-  return editablePaths.some((editablePath) => {
-    const editable = normalizeRelativePath(editablePath).replace(/\/+$/, "");
-    return normalized === editable || normalized.startsWith(`${editable}/`);
-  });
-}
-
 function normalizeRelativePath(value: string): string {
   return value.replaceAll("\\", "/").replace(/^\.\//, "");
-}
-
-function hashFile(filePath: string): string {
-  return createHash("sha256").update(fs.readFileSync(filePath)).digest("hex");
 }
 
 function directionalGain(
@@ -1620,10 +1812,7 @@ function directionalGain(
   return direction === "+" ? end - start : start - end;
 }
 
-function captureFrozenRuntime(
-  repoRoot: string,
-  config: HarnessConfig,
-): FrozenRuntimeContractV1 {
+function captureFrozenRuntime(config: HarnessConfig): FrozenRuntimeContractV1 {
   const evolvingRoleModel = (
     role: EvolvingHarnessRole,
   ): Pick<RoleSpec, "model" | "thinking"> => ({
@@ -1638,16 +1827,6 @@ function captureFrozenRuntime(
       ? {}
       : { tools: [...config.roles[role].tools] }),
   });
-  const fixedRoleArtifact = (
-    role: "setup" | "god" | "metaharness",
-  ): { soulSha256: string; promptSha256: string } => ({
-    soulSha256: hashFile(
-      resolveConfiguredRoleSoul(repoRoot, role, config.roles[role]),
-    ),
-    promptSha256: hashFile(
-      resolveConfiguredRolePrompt(repoRoot, role, config.roles[role]),
-    ),
-  });
   return {
     runner: config.runner,
     evolvingRoleModels: {
@@ -1660,29 +1839,6 @@ function captureFrozenRuntime(
       god: fixedRole("god"),
       metaharness: fixedRole("metaharness"),
     },
-    fixedRoleArtifacts: {
-      setup: fixedRoleArtifact("setup"),
-      god: fixedRoleArtifact("god"),
-      metaharness: fixedRoleArtifact("metaharness"),
-    },
-    implementationFiles: [
-      ["archive", path.join(import.meta.dirname, "archive.ts")],
-      [
-        "challenge-adapter",
-        path.join(import.meta.dirname, "challenge", "adapter.ts"),
-      ],
-      ["experiment-contracts", path.join(import.meta.dirname, "experiments.ts")],
-      ["integrity-gate", path.join(import.meta.dirname, "integrity.ts")],
-      ["inner-orchestrator", path.join(import.meta.dirname, "orchestrator.ts")],
-      ["metaharness-controller", import.meta.filename],
-      [
-        "subprocess-runner",
-        path.join(import.meta.dirname, "agents", "subprocess.ts"),
-      ],
-    ].map(([label, filePath]) => ({
-      label: label!,
-      sha256: hashFile(filePath!),
-    })),
     innerPolicy: {
       churchTriggerThreshold: config.churchTriggerThreshold,
       maxVerifyAttempts: config.maxVerifyAttempts,

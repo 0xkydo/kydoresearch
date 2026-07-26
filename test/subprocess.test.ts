@@ -605,12 +605,31 @@ process.exitCode = 99;
 
   it("retains the complete raw JSONL stream and snapshots the effective soul", async () => {
     const traceDir = path.join(tmpDir, ".autoresearch", "run", "agent");
+    const writtenPrompt = path.join(
+      tmpDir,
+      "artifact",
+      "professor",
+      "prompt.md",
+    );
+    const writtenProfile = path.join(tmpDir, "profile.json");
     const rawEvents = [
       JSON.stringify({
         type: "tool_execution_start",
         toolCallId: "tool-1",
         toolName: "read",
         args: { path: "TASK.md" },
+      }),
+      JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "tool-2",
+        toolName: "write",
+        args: { path: "artifact/professor/prompt.md" },
+      }),
+      JSON.stringify({
+        type: "tool_execution_start",
+        toolCallId: "tool-3",
+        toolName: "edit",
+        args: { filePath: writtenProfile },
       }),
       JSON.stringify({
         type: "tool_result_end",
@@ -642,7 +661,11 @@ process.stdout.write(${JSON.stringify(rawEvents)});
       }),
     );
 
-    expect(result).toMatchObject({ ok: true, output: "done" });
+    expect(result).toMatchObject({
+      ok: true,
+      output: "done",
+      filesWritten: [writtenPrompt, writtenProfile].sort(),
+    });
     expect(fs.readFileSync(path.join(traceDir, "events.ndjson"), "utf8")).toBe(rawEvents);
     expect(fs.readFileSync(path.join(traceDir, "soul.md"), "utf8")).toContain(
       "research director and evidence-driven search strategist",

@@ -34,19 +34,18 @@ The fixed campaign substrate is:
 - local-evaluation fidelity, correctness/regression command, and benchmark
   command;
 - score path and parser;
-- tracked repository files outside `editablePaths`;
 - model identity and thinking level;
 - setup, verifier, benchmark, subprocess, retry, and candidate budgets;
-- objective improvement and promotion thresholds;
-- the meta-harness proposer soul, prompt, and controller source.
+- objective improvement and promotion thresholds.
 
 At campaign creation, the controller writes
 `.autoresearch/metaharness/verifier.json`. Its fingerprint covers the challenge
-contract, frozen repository surface, fixed role artifacts, model assignments,
-runtime policies, and the controller/evaluation implementation files. The
-fingerprint is checked before and after every outer proposal and evaluation
-window. Drift pauses both loops; the controller never silently creates a new
-comparison group.
+contract, model assignments, and runtime policies. Repository file contents
+are deliberately excluded: a normal challenge sync or collaborator update is
+not evidence that the outer proposer mutated anything. The fingerprint is
+checked before and after every outer proposal and evaluation window. Actual
+declared-contract or runtime drift pauses both loops; the controller never
+silently creates a new comparison group.
 
 The mutable harness profile contains only:
 
@@ -54,11 +53,18 @@ The mutable harness profile contains only:
 - PhD soul, task prompt, and Pi tool allowlist; and
 - advisor soul, task prompt, and Pi tool allowlist.
 
-Each referenced role file must be a regular candidate-local file. Absolute
-paths, path escapes, unknown manifest fields, over-size profiles, and no-op
-profiles are rejected before evaluation. Setup is not repeated, God's
-plateau-recovery role is not evolved, and the outer proposer cannot evolve
-itself.
+The profile schema is the positive mutation allowlist. Each referenced role
+file must be a regular file inside that role's candidate-local artifact
+directory, and every file in the artifact surface must be referenced by the
+profile. Cross-role references, undeclared artifacts, absolute paths, path
+escapes, unknown manifest fields, over-size profiles, and no-op profiles are
+rejected before evaluation. Setup is not repeated, God's plateau-recovery role
+is not evolved, and the outer proposer cannot evolve itself.
+
+The outer proposal task narrows Pi to `read`, `write`, and `edit`; it does not
+receive `bash`. The subprocess runner records every write/edit target from the
+Pi event stream, and the controller rejects targets outside the assigned
+profile or its three role-local artifact directories.
 
 This boundary captures the high-leverage context construction, evidence
 retrieval, instruction, output-discipline, and tool-policy parts of a harness

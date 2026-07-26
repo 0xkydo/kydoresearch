@@ -108,6 +108,7 @@ export class PiSubprocessRunner implements AgentRunner {
 
     return new Promise((resolve) => {
       const assistantText: string[] = [];
+      const filesWritten = new Set<string>();
       let lastAssistantText = "";
       let stderr = "";
       let stdoutBuffer = "";
@@ -124,7 +125,7 @@ export class PiSubprocessRunner implements AgentRunner {
       const failedResult = (error: string): AgentResult => ({
         ok: false,
         output: assistantText.join(""),
-        filesWritten: [],
+        filesWritten: [...filesWritten].sort(),
         usage: { cost, turns },
         error,
       });
@@ -202,7 +203,9 @@ export class PiSubprocessRunner implements AgentRunner {
           return;
         }
 
-        if (!isRecord(event) || event.type !== "message_end" || !isRecord(event.message)) return;
+        if (!isRecord(event)) return;
+        recordWrittenToolPath(event, task.cwd, filesWritten);
+        if (event.type !== "message_end" || !isRecord(event.message)) return;
         const message = event.message;
         if (message.role !== "assistant") return;
 
@@ -272,7 +275,7 @@ export class PiSubprocessRunner implements AgentRunner {
           ok: true,
           output: assistantText.join(""),
           ...(structured.value ? { structured: structured.value } : {}),
-          filesWritten: [],
+          filesWritten: [...filesWritten].sort(),
           usage: { cost, turns },
         });
       });
@@ -287,6 +290,32 @@ export class PiSubprocessRunner implements AgentRunner {
       }
     });
   }
+}
+
+function recordWrittenToolPath(
+  event: Record<string, unknown>,
+  cwd: string,
+  filesWritten: Set<string>,
+): void {
+  if (
+    event.type !== "tool_execution_start" ||
+    (event.toolName !== "write" && event.toolName !== "edit") ||
+    !isRecord(event.args)
+  ) {
+    return;
+  }
+  const configuredPath =
+    typeof event.args.path === "string"
+      ? event.args.path
+      : typeof event.args.filePath === "string"
+        ? event.args.filePath
+        : undefined;
+  if (!configuredPath?.trim() || configuredPath.includes("\0")) return;
+  filesWritten.add(
+    path.isAbsolute(configuredPath)
+      ? path.normalize(configuredPath)
+      : path.resolve(cwd, configuredPath),
+  );
 }
 
 function emptyFailedResult(error: string): AgentResult {

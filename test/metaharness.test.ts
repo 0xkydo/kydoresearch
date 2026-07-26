@@ -1,7 +1,9 @@
+import { createHash } from "node:crypto";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
 import { MockAgentRunner } from "../src/agents/mock.ts";
+import type { AgentRunner } from "../src/agents/types.ts";
 import { YukonCliAdapter } from "../src/challenge/adapter.ts";
 import { detectCli, readManifest } from "../src/challenge/detect.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
@@ -10,16 +12,19 @@ import { initChallenge } from "../src/init.ts";
 import {
   captureVerifierContract,
   computeMetaHarnessParetoFrontier,
+  describeVerifierContractDrift,
   loadMetaHarnessStatus,
   MetaHarnessController,
   metaHarnessPaths,
+  normalizeVerifierContract,
   readMetaHarnessLedger,
   validateHarnessProfile,
   type HarnessProfileV1,
   type MetaHarnessEvaluationV1,
   type MetaHarnessStateV1,
+  type VerifierContractV1,
 } from "../src/metaharness.ts";
-import { loadState, statePaths } from "../src/state.ts";
+import { loadState, saveState, statePaths } from "../src/state.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
 describe("metaharness profile and verifier contracts", () => {
@@ -80,6 +85,28 @@ describe("metaharness profile and verifier contracts", () => {
       }),
     ).toEqual(profile);
 
+    fs.writeFileSync(
+      path.join(root, "artifact", "professor", "unused.md"),
+      "not referenced\n",
+    );
+    expect(() =>
+      validateHarnessProfile(root, profile, {
+        expectedCandidateId: "H0001",
+        expectedParentCandidateId: "H0000",
+        maxBytes: 100_000,
+      }),
+    ).toThrow(/outside its declared role artifacts.*unused\.md/);
+    fs.rmSync(path.join(root, "artifact", "professor", "unused.md"));
+
+    profile.roles.professor.prompt = "artifact/phd/prompt.md";
+    expect(() =>
+      validateHarnessProfile(root, profile, {
+        expectedCandidateId: "H0001",
+        expectedParentCandidateId: "H0000",
+        maxBytes: 100_000,
+      }),
+    ).toThrow(/professor\.prompt must stay within artifact\/professor/);
+
     profile.roles.professor.prompt = "../H0000/profile.json";
     expect(() =>
       validateHarnessProfile(root, profile, {
@@ -90,7 +117,7 @@ describe("metaharness profile and verifier contracts", () => {
     ).toThrow(/escapes candidate/);
   });
 
-  it("fingerprints the frozen substrate while allowing solution evolution", async () => {
+  it("fingerprints the declared contract without freezing repository files", async () => {
     const challenge = makeTmpChallenge();
     cleanups.push(challenge.cleanup);
     const initialized = await initChallenge({
@@ -98,10 +125,12 @@ describe("metaharness profile and verifier contracts", () => {
       runner: new MockAgentRunner(),
       exec: nodeExec,
     });
+    const config = structuredClone(DEFAULT_CONFIG);
     const before = await captureVerifierContract(
       challenge.repoRoot,
       initialized.state,
       nodeExec,
+      config,
     );
 
     fs.writeFileSync(
@@ -112,6 +141,7 @@ describe("metaharness profile and verifier contracts", () => {
       challenge.repoRoot,
       loadState(initialized.stateDir)!,
       nodeExec,
+      config,
     );
     expect(solutionChanged.fingerprint).toBe(before.fingerprint);
 
@@ -120,8 +150,50 @@ describe("metaharness profile and verifier contracts", () => {
       challenge.repoRoot,
       loadState(initialized.stateDir)!,
       nodeExec,
+      config,
     );
-    expect(verifierChanged.fingerprint).not.toBe(before.fingerprint);
+    expect(verifierChanged.fingerprint).toBe(before.fingerprint);
+
+    const changedState = loadState(initialized.stateDir)!;
+    changedState.challenge.verifyCommand += " --different-contract";
+    const contractChanged = await captureVerifierContract(
+      challenge.repoRoot,
+      changedState,
+      nodeExec,
+      config,
+    );
+    expect(contractChanged.fingerprint).not.toBe(before.fingerprint);
+    expect(describeVerifierContractDrift(before, contractChanged)).toEqual([
+      "challenge.verifyCommand",
+    ]);
+
+    const legacy = structuredClone(before);
+    legacy.files = [];
+    delete legacy.fingerprintScope;
+    (legacy.runtime as unknown as Record<string, unknown>).implementationFiles = [
+      { label: "inner-orchestrator", sha256: "old-source-hash" },
+    ];
+    (legacy.runtime as unknown as Record<string, unknown>).fixedRoleArtifacts = {
+      metaharness: {
+        soulSha256: "old-soul-hash",
+        promptSha256: "old-prompt-hash",
+      },
+    };
+    legacy.fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          challenge: legacy.challenge,
+          files: legacy.files,
+          runtime: legacy.runtime,
+        }),
+      )
+      .digest("hex");
+    const legacyFingerprint = legacy.fingerprint;
+    const normalized = normalizeVerifierContract(legacy);
+    expect(normalized.fingerprint).toBe(before.fingerprint);
+    expect(normalized.legacyFingerprints).toContain(legacyFingerprint);
+    expect(normalized.runtime).not.toHaveProperty("implementationFiles");
+    expect(normalized.runtime).not.toHaveProperty("fixedRoleArtifacts");
   });
 
   it("keeps non-dominated quality, reliability, and wall-time tradeoffs", () => {
@@ -217,6 +289,72 @@ describe("MetaHarnessController", () => {
     expect(controller.status().metaHarness?.generation).toBe(2);
   }, 30_000);
 
+  it("confines metaharness writes to the assigned candidate surface", async () => {
+    const challenge = makeTmpChallenge();
+    cleanups.push(challenge.cleanup);
+    const initialized = await initChallenge({
+      repoRoot: challenge.repoRoot,
+      runner: new MockAgentRunner(),
+      exec: nodeExec,
+    });
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.metaHarness.enabled = true;
+    config.metaHarness.maxGenerations = 1;
+    config.maxLoops = 2;
+    const baseRunner = new MockAgentRunner();
+    let metaharnessTools: string[] | undefined;
+    const runner: AgentRunner = {
+      async run(task) {
+        const result = await baseRunner.run(task);
+        if (task.kind !== "evolve-harness") return result;
+        metaharnessTools = task.tools;
+        return {
+          ...result,
+          filesWritten: [
+            ...result.filesWritten,
+            path.join(challenge.repoRoot, "benchmark.sh"),
+          ],
+        };
+      },
+    };
+    const manifest = readManifest(challenge.repoRoot);
+    const controller = await MetaHarnessController.create(
+      challenge.repoRoot,
+      initialized.stateDir,
+      config,
+      {
+        runner,
+        adapter: new YukonCliAdapter({
+          repoRoot: challenge.repoRoot,
+          manifest,
+          cli: detectCli(challenge.repoRoot, manifest),
+          verifyCommand: initialized.state.challenge.verifyCommand,
+          benchCommand: initialized.state.challenge.benchCommand,
+          execution: config.execution,
+          logDir: statePaths(initialized.stateDir).logsDir,
+          exec: nodeExec,
+        }),
+        exec: nodeExec,
+        emit: () => {},
+        delay: async () => {},
+      },
+    );
+
+    await controller.runUntilDone();
+
+    expect(metaharnessTools).toEqual(["read", "write", "edit"]);
+    const metaState = JSON.parse(
+      fs.readFileSync(metaHarnessPaths(initialized.stateDir).state, "utf8"),
+    ) as MetaHarnessStateV1;
+    expect(metaState.candidates.find((candidate) => candidate.candidateId === "H0001"))
+      .toMatchObject({
+        status: "failed",
+        error: expect.stringMatching(
+          /attempted to write outside its candidate allowlist.*benchmark\.sh/,
+        ),
+      });
+  }, 30_000);
+
   it("pauses both loops when a fixed runtime setting drifts on resume", async () => {
     const challenge = makeTmpChallenge();
     cleanups.push(challenge.cleanup);
@@ -250,6 +388,57 @@ describe("MetaHarnessController", () => {
       config,
       ports,
     );
+    const paths = metaHarnessPaths(initialized.stateDir);
+    const legacyVerifier = JSON.parse(
+      fs.readFileSync(paths.verifier, "utf8"),
+    ) as VerifierContractV1 & {
+      runtime: Record<string, unknown>;
+    };
+    legacyVerifier.files = [];
+    delete legacyVerifier.fingerprintScope;
+    legacyVerifier.runtime.implementationFiles = [
+      { label: "inner-orchestrator", sha256: "old-source-hash" },
+    ];
+    legacyVerifier.runtime.fixedRoleArtifacts = {
+      metaharness: {
+        soulSha256: "old-soul-hash",
+        promptSha256: "old-prompt-hash",
+      },
+    };
+    legacyVerifier.fingerprint = createHash("sha256")
+      .update(
+        JSON.stringify({
+          challenge: legacyVerifier.challenge,
+          files: legacyVerifier.files,
+          runtime: legacyVerifier.runtime,
+        }),
+      )
+      .digest("hex");
+    const legacyFingerprint = legacyVerifier.fingerprint;
+    fs.writeFileSync(paths.verifier, `${JSON.stringify(legacyVerifier, null, 2)}\n`);
+    const pausedMeta = JSON.parse(
+      fs.readFileSync(paths.state, "utf8"),
+    ) as MetaHarnessStateV1;
+    pausedMeta.phase = "paused";
+    fs.writeFileSync(paths.state, `${JSON.stringify(pausedMeta, null, 2)}\n`);
+    const pausedInner = loadState(initialized.stateDir)!;
+    pausedInner.phase = "paused";
+    pausedInner.resumePhase = "ready";
+    saveState(initialized.stateDir, pausedInner);
+
+    await MetaHarnessController.create(
+      challenge.repoRoot,
+      initialized.stateDir,
+      config,
+      ports,
+    );
+    const migratedVerifier = JSON.parse(
+      fs.readFileSync(paths.verifier, "utf8"),
+    ) as { legacyFingerprints?: string[]; runtime?: Record<string, unknown> };
+    expect(migratedVerifier.legacyFingerprints).toContain(legacyFingerprint);
+    expect(migratedVerifier.runtime).not.toHaveProperty("implementationFiles");
+    expect(migratedVerifier.runtime).not.toHaveProperty("fixedRoleArtifacts");
+    expect(loadMetaHarnessStatus(initialized.stateDir)?.phase).toBe("ready");
 
     const drifted = structuredClone(config);
     drifted.roles.professor.model = "example/different-fixed-model";
@@ -260,10 +449,20 @@ describe("MetaHarnessController", () => {
         drifted,
         ports,
       ),
-    ).rejects.toThrow(/Frozen verifier contract changed/);
+    ).rejects.toThrow(
+      /changed components: runtime\.evolvingRoleModels\.professor\.model/,
+    );
 
     expect(loadState(initialized.stateDir)?.phase).toBe("paused");
     expect(loadMetaHarnessStatus(initialized.stateDir)?.phase).toBe("paused");
+
+    await MetaHarnessController.create(
+      challenge.repoRoot,
+      initialized.stateDir,
+      config,
+      ports,
+    );
+    expect(loadMetaHarnessStatus(initialized.stateDir)?.phase).toBe("ready");
   }, 30_000);
 
   it("reuses a durable draft generation after an interrupted proposal", async () => {

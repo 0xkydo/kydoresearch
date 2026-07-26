@@ -33,7 +33,7 @@ interactive Pi process
        └─ PiSubprocessRunner         fresh isolated Pi worker
 
 optional MetaHarnessController
-  ├─ frozen verifier + runtime-policy fingerprint
+  ├─ declared verifier-contract + runtime-policy fingerprint
   ├─ immutable harness profiles      professor/PhD/advisor souls + prompts + tools
   ├─ outer evaluation ledger
   ├─ quality/reliability/time frontier
@@ -73,7 +73,7 @@ src/
   experiments.ts        versioned proposal, task, result, and metric contracts
   archive.ts            atomic candidate artifacts, snapshots, diffs, sealing,
                         and append-only experiment ledger
-  metaharness.ts        optional bilevel supervisor, frozen verifier contract,
+  metaharness.ts        optional bilevel supervisor, verifier contract,
                         profile validation, rollback, and outer frontier
   integrity.ts          pre-evaluation changed-path audit
   agents/
@@ -415,10 +415,15 @@ make one evidence-backed change to those candidate-local artifacts.
 Before evaluation, the controller validates:
 
 - exact versioned profile fields and candidate lineage;
-- candidate-relative regular-file references with no path escape or symlinks;
+- a positive mutable surface containing only `profile.json` and the declared
+  candidate-local Professor, PhD, and Advisor soul and prompt files;
+- role-local regular-file references with no path escape, cross-role reference,
+  symlink, or undeclared artifact;
+- a write/edit event list confined to that same surface; the outer proposal
+  task has no `bash` tool;
 - a bounded combined profile size;
 - a behavioral hash different from the parent;
-- the unchanged frozen verifier fingerprint.
+- the unchanged declared verifier-contract fingerprint.
 
 A validated profile is applied only at the `AgentRunner` port. The inner
 Orchestrator, candidate worktrees, integrity audit, correctness check,

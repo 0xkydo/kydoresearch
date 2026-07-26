@@ -8,7 +8,7 @@ a complete copy of the parent harness profile and its role artifacts.
 
 Before editing:
 
-1. Read the frozen verifier contract at `{{verifierContractPath}}`.
+1. Read the declared verifier contract at `{{verifierContractPath}}`.
 2. Inspect the outer evaluation ledger at `{{metaLedgerPath}}`.
 3. Inspect the current Pareto frontier at `{{metaFrontierPath}}`.
 4. Inspect the inner experiment ledger at `{{innerLedgerPath}}`.
@@ -22,6 +22,11 @@ You may change only:
 - the candidate-relative soul and prompt files referenced by that profile for
   these roles: {{editableRoles}}; and
 - the `tools` arrays for those roles.
+
+Each soul and prompt must stay under its own
+`artifact/<role>/` directory. The artifact tree may not contain undeclared
+files: if you replace or rename a role file, remove the superseded copy and
+reference the replacement from the profile.
 
 The model, thinking level, verifier, benchmark, score parser, task contracts,
 timeouts, retry budget, candidate budget, promotion rule, inner archive, and

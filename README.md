@@ -18,8 +18,8 @@ verifies, benchmarks, selects, and submits only a qualifying winner.
 
 An opt-in meta-harness can wrap that loop and evolve the professor, PhD, and
 advisor role scaffolding itself. Each harness profile is evaluated only by the
-same frozen challenge verifier and is promoted only after producing a verified
-objective improvement.
+declared challenge verifier contract and is promoted only after producing a
+verified objective improvement.
 
 It is designed for challenges such as
 [ECDSA.fail](https://www.ecdsa.fail) and
@@ -299,12 +299,14 @@ On a fresh archive, `H0000` first completes one ordinary loop so `H0001` has
 real failure and success evidence to inspect.
 
 The fixed comparison substrate is fingerprinted at
-`.autoresearch/metaharness/verifier.json`. Any drift in the challenge contract
-or tracked files outside `editablePaths`, or in the captured model and runtime
-policy, fixed role artifacts, or controller/evaluation implementation pauses
-the campaign. Candidate profiles cannot change model identity, thinking level,
-operation budgets, score parsing, promotion thresholds, setup, God, or the
-outer proposer.
+`.autoresearch/metaharness/verifier.json`. Drift in the declared challenge
+contract or captured model and runtime policy pauses the campaign. Repository
+file contents are not part of that fingerprint, so normal challenge syncs and
+kydoresearch updates do not look like metaharness mutations. Candidate
+validation uses a positive allowlist: only `profile.json` and the declared
+candidate-local Professor, PhD, and Advisor soul and prompt files may exist in
+the mutable artifact surface; the profile schema exposes only those paths and
+tool arrays.
 
 For unattended use, the outer controller provides atomic checkpoints,
 completed-loop reconciliation, bounded exponential recovery, safe rollback
@@ -587,7 +589,7 @@ All runtime data lives in `.autoresearch/` inside the challenge repository:
   logs/                     setup and main-checkout evaluation output
   notes/                    advisor, God, and submission notes
   worktrees/<candidateId>/  active or intentionally retained failed checkout
-  metaharness/              outer state, frozen verifier, profiles, traces,
+  metaharness/              outer state, verifier contract, profiles, traces,
                             evaluations, ledger, frontier, and heartbeat
 ```
 
@@ -703,9 +705,11 @@ the role's tool policy, and retains the raw JSONL event stream.
 - **The run is paused after a restart:** run `/autoresearch status`, inspect
   the saved state and logs, then use `/autoresearch` to resume.
 - **Meta-harness pauses for verifier drift:** inspect
-  `.autoresearch/metaharness/verifier.json` and the journal. Restore the frozen
-  challenge substrate or start a new campaign; do not overwrite the contract
-  to mix incomparable results.
+  `.autoresearch/metaharness/verifier.json` and the journal. The error and
+  `metaharness.verifier-drift` event identify the changed declared-contract or
+  runtime components. Repository syncs and kydoresearch source updates are not
+  verifier drift. Restore the contract or runtime setting, then run
+  `/autoresearch` to resume.
 - **Outer proposals keep failing:** inspect the candidate's `agent/` trace and
   profile validation error. The champion continues during configured cooldown
   loops unless the inner loop itself exhausted recovery.
