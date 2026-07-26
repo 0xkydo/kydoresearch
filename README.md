@@ -746,9 +746,25 @@ git clone https://github.com/0xkydo/kydoresearch.git
 cd kydoresearch
 npm ci
 npm run typecheck
-npm test
+npm run test:related
 git diff --check
 ```
+
+Use a phase capsule while iterating:
+
+```bash
+npm run test:phase -- setup
+npm run test:phase -- professor:proposal
+npm run test:phase -- phd
+npm run test:phase -- ui
+```
+
+`npm run test:explain` prints the changed files, selected tests, reason for each
+selection, skipped suites, and any conservative full-suite escalation without
+running tests. `npm run test:full` is the reconciliation gate for releases,
+scheduled main, and shared lifecycle/evaluator changes. The automated test
+paths use deterministic mock/fake/offline boundaries; they do not invoke paid
+models, real leaderboard sync, or real leaderboard submission.
 
 Load the checkout directly while developing:
 
@@ -759,5 +775,8 @@ pi -e /path/to/kydoresearch/extensions/autoresearch/index.ts
 
 See [`docs/architecture.md`](docs/architecture.md) for component boundaries,
 state-machine invariants, resume semantics, and the verification strategy.
+See [`docs/testing.md`](docs/testing.md) for phase IDs, segments, tiers,
+selection receipts, impact-map maintenance, escalation rules, and the
+human-usability protocol.
 Coding agents and contributors should also read [`AGENTS.md`](AGENTS.md)
 before changing implementation contracts or lifecycle boundaries.

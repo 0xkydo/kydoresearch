@@ -362,7 +362,7 @@ describe("/autoresearch compatibility", () => {
 });
 
 describe("/autoresearch config", () => {
-  it("creates a complete default config when closed in a fresh repo", async () => {
+  it("does not persist defaults when closed without changes in a fresh repo", async () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-fresh-config-"));
     let handler:
       | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
@@ -391,11 +391,9 @@ describe("/autoresearch config", () => {
       await handler!("config", ctx);
 
       expect(custom).toHaveBeenCalledOnce();
-      expect(
-        JSON.parse(fs.readFileSync(path.join(stateDir, "config.json"), "utf8")),
-      ).toEqual(DEFAULT_CONFIG);
+      expect(fs.existsSync(path.join(stateDir, "config.json"))).toBe(false);
       expect(notify).toHaveBeenCalledWith(
-        "config saved to .autoresearch/config.json",
+        "config closed without changes",
         "info",
       );
     } finally {

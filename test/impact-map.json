@@ -1,0 +1,412 @@
+{
+  "schemaVersion": 1,
+  "phases": [
+    "setup",
+    "professor",
+    "phd",
+    "advisor",
+    "finalization",
+    "church",
+    "metaharness",
+    "ui"
+  ],
+  "segments": {
+    "setup:baseline-review": "setup",
+    "professor:proposal": "professor",
+    "phd:implementation": "phd",
+    "advisor:review": "advisor",
+    "finalization:submission": "finalization",
+    "church:reflection": "church",
+    "metaharness:profile-validation": "metaharness",
+    "ui:dashboard": "ui",
+    "ui:config": "ui"
+  },
+  "tiers": [
+    "kernel",
+    "phase-contract",
+    "phase-flow",
+    "integration",
+    "pty",
+    "full"
+  ],
+  "productionRoots": [
+    "src/",
+    "extensions/"
+  ],
+  "documentationPatterns": [
+    "README.md",
+    "docs/**",
+    "**/*.md"
+  ],
+  "broadChangeFileThreshold": 8,
+  "broadChangePhaseThreshold": 3,
+  "suites": [
+    {
+      "id": "kernel.package",
+      "file": "test/package.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["kernel", "integration"],
+      "category": "package-install"
+    },
+    {
+      "id": "kernel.config",
+      "file": "test/config.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["kernel"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "kernel.impact-selector",
+      "file": "test/test-system/impact-selector.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["kernel"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "testkit.self",
+      "file": "test/support/phase-testkit/self.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "kernel.ui-semantics",
+      "file": "test/ui/contracts.test.ts",
+      "phases": ["ui"],
+      "segments": ["ui:dashboard"],
+      "tiers": ["kernel", "phase-contract"],
+      "category": "phase-local"
+    },
+    {
+      "id": "setup.contract",
+      "file": "test/phases/setup/capsule.test.ts",
+      "phases": ["setup"],
+      "segments": ["setup:baseline-review"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "setup.flow",
+      "file": "test/init.test.ts",
+      "phases": ["setup"],
+      "segments": ["setup:baseline-review"],
+      "tiers": ["phase-flow"],
+      "category": "phase-local"
+    },
+    {
+      "id": "professor.contract",
+      "file": "test/phases/professor/capsule.test.ts",
+      "phases": ["professor"],
+      "segments": ["professor:proposal"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "professor.proposals",
+      "file": "test/archive.test.ts",
+      "phases": ["professor", "phd", "finalization"],
+      "segments": ["professor:proposal", "phd:implementation"],
+      "tiers": ["phase-flow"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "professor.steering",
+      "file": "test/steering.test.ts",
+      "phases": ["professor", "ui"],
+      "segments": ["professor:proposal"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "phd.contract",
+      "file": "test/phases/phd/capsule.test.ts",
+      "phases": ["phd"],
+      "segments": ["phd:implementation"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "phd.integrity",
+      "file": "test/integrity.test.ts",
+      "phases": ["phd"],
+      "segments": ["phd:implementation"],
+      "tiers": ["phase-flow"],
+      "category": "phase-local"
+    },
+    {
+      "id": "phd.worktree",
+      "file": "test/worktree.test.ts",
+      "phases": ["phd", "finalization"],
+      "segments": ["phd:implementation"],
+      "tiers": ["phase-flow"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "phd.subprocess",
+      "file": "test/subprocess.test.ts",
+      "phases": ["phd"],
+      "segments": ["phd:implementation"],
+      "tiers": ["integration"],
+      "category": "phase-local"
+    },
+    {
+      "id": "advisor.contract",
+      "file": "test/phases/advisor/capsule.test.ts",
+      "phases": ["advisor"],
+      "segments": ["advisor:review"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "finalization.contract",
+      "file": "test/phases/finalization/capsule.test.ts",
+      "phases": ["finalization"],
+      "segments": ["finalization:submission"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "finalization.adapter",
+      "file": "test/adapter.test.ts",
+      "phases": ["finalization", "setup"],
+      "segments": ["finalization:submission"],
+      "tiers": ["phase-flow"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "church.contract",
+      "file": "test/phases/church/capsule.test.ts",
+      "phases": ["church"],
+      "segments": ["church:reflection"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "metaharness.contract",
+      "file": "test/phases/metaharness/capsule.test.ts",
+      "phases": ["metaharness"],
+      "segments": ["metaharness:profile-validation"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "metaharness.flow",
+      "file": "test/metaharness.test.ts",
+      "phases": ["metaharness"],
+      "segments": ["metaharness:profile-validation"],
+      "tiers": ["phase-flow"],
+      "category": "phase-local"
+    },
+    {
+      "id": "ui.widget",
+      "file": "test/widget.test.ts",
+      "phases": ["ui"],
+      "segments": ["ui:dashboard"],
+      "tiers": ["phase-contract"],
+      "category": "phase-local"
+    },
+    {
+      "id": "ui.config",
+      "file": "test/config-ui.test.ts",
+      "phases": ["ui"],
+      "segments": ["ui:config"],
+      "tiers": ["phase-contract"],
+      "category": "phase-local"
+    },
+    {
+      "id": "ui.config-interaction",
+      "file": "test/ui/config-interaction.test.ts",
+      "phases": ["ui"],
+      "segments": ["ui:config"],
+      "tiers": ["phase-flow"],
+      "category": "phase-local"
+    },
+    {
+      "id": "ui.command-interaction",
+      "file": "test/ui/command-interaction.test.ts",
+      "phases": ["ui"],
+      "segments": [],
+      "tiers": ["phase-flow"],
+      "category": "phase-local"
+    },
+    {
+      "id": "ui.commands",
+      "file": "test/commands.test.ts",
+      "phases": ["ui"],
+      "segments": [],
+      "tiers": ["integration"],
+      "category": "adjacent-boundary"
+    },
+    {
+      "id": "integration.extension-loading",
+      "file": "test/integration/pi-extension/loading.test.ts",
+      "phases": ["ui"],
+      "segments": [],
+      "tiers": ["integration"],
+      "category": "package-install"
+    },
+    {
+      "id": "pty.visible-screen",
+      "file": "test/pty/visible-screen.test.ts",
+      "phases": ["ui"],
+      "segments": ["ui:dashboard", "ui:config"],
+      "tiers": ["pty"],
+      "category": "package-install"
+    },
+    {
+      "id": "crosscut.agents-doc",
+      "file": "test/agents-doc.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "crosscut.architecture",
+      "file": "test/architecture.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "crosscut.exec",
+      "file": "test/exec.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "crosscut.readme",
+      "file": "test/readme.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "crosscut.retry",
+      "file": "test/retry.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "crosscut.taskboard",
+      "file": "test/taskboard.test.ts",
+      "phases": ["ui"],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "crosscut.telemetry",
+      "file": "test/telemetry.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "full.orchestrator",
+      "file": "test/orchestrator.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "full-loop"
+    },
+    {
+      "id": "full.orchestrator-subprocess",
+      "file": "test/orchestrator-subprocess.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "full-loop"
+    },
+    {
+      "id": "full.resilience",
+      "file": "test/resilience.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "full-loop"
+    }
+  ],
+  "rules": [
+    {
+      "patterns": ["src/init.ts", "extensions/autoresearch/prompts/setup.md", "extensions/autoresearch/prompts/tasks/init-*.md", "extensions/autoresearch/agents/setup/**"],
+      "phases": ["setup"],
+      "tiers": ["phase-contract", "phase-flow"],
+      "reason": "Setup readiness, baseline, and persistence contract"
+    },
+    {
+      "patterns": ["src/steering.ts", "extensions/autoresearch/prompts/professor.md", "extensions/autoresearch/prompts/tasks/propose.md", "extensions/autoresearch/agents/professor/**"],
+      "phases": ["professor"],
+      "tiers": ["phase-contract", "phase-flow"],
+      "reason": "Professor proposal and steering contract"
+    },
+    {
+      "patterns": ["src/integrity.ts", "src/worktree.ts", "extensions/autoresearch/prompts/phd.md", "extensions/autoresearch/prompts/tasks/implement.md", "extensions/autoresearch/prompts/tasks/write-note.md", "extensions/autoresearch/agents/phd/**"],
+      "phases": ["phd"],
+      "tiers": ["phase-contract", "phase-flow", "integration"],
+      "reason": "PhD implementation and candidate integrity contract"
+    },
+    {
+      "patterns": ["src/advisor.ts", "extensions/autoresearch/prompts/advisor.md", "extensions/autoresearch/prompts/tasks/advise.md", "extensions/autoresearch/agents/advisor/**"],
+      "phases": ["advisor"],
+      "tiers": ["phase-contract", "phase-flow"],
+      "reason": "Advisor evidence review contract"
+    },
+    {
+      "patterns": ["src/worktree.ts", "src/challenge/**"],
+      "phases": ["finalization"],
+      "tiers": ["phase-contract", "phase-flow"],
+      "reason": "Finalist application and deterministic challenge boundary"
+    },
+    {
+      "patterns": ["extensions/autoresearch/prompts/god.md", "extensions/autoresearch/prompts/tasks/church.md", "extensions/autoresearch/agents/god/**"],
+      "phases": ["church"],
+      "tiers": ["phase-contract", "phase-flow"],
+      "reason": "Church reflection contract"
+    },
+    {
+      "patterns": ["src/metaharness.ts", "extensions/autoresearch/prompts/metaharness.md", "extensions/autoresearch/agents/metaharness/**"],
+      "phases": ["metaharness"],
+      "tiers": ["phase-contract", "phase-flow"],
+      "reason": "Frozen meta-harness evaluator and profile contract"
+    },
+    {
+      "patterns": ["extensions/autoresearch/widget.ts", "extensions/autoresearch/config-ui.ts", "extensions/autoresearch/commands.ts", "extensions/autoresearch/index.ts", "extensions/autoresearch/inspect.ts", "extensions/autoresearch/*-tool.ts"],
+      "phases": ["ui"],
+      "tiers": ["kernel", "phase-contract", "phase-flow", "integration", "pty"],
+      "reason": "Interactive Pi control-plane semantics"
+    },
+    {
+      "patterns": ["src/archive.ts"],
+      "phases": ["professor", "phd", "finalization"],
+      "tiers": ["phase-contract", "phase-flow"],
+      "reason": "Shared candidate evidence and lineage boundary",
+      "escalateToFull": true
+    },
+    {
+      "patterns": ["src/orchestrator.ts", "src/state.ts", "src/phases.ts", "src/experiments.ts", "src/retry.ts", "src/exec.ts", "src/util.ts", "src/config.ts", "src/agents/types.ts", "src/agents/subprocess.ts", "src/agents/mock.ts", "src/agents/mock-scripts.ts", "src/telemetry.ts"],
+      "phases": [],
+      "tiers": ["full"],
+      "reason": "Shared lifecycle, state, task, retry, runner, or evaluator foundation",
+      "escalateToFull": true
+    },
+    {
+      "patterns": ["package.json", "package-lock.json", "tsconfig.json", "vitest.config.ts", "scripts/**", "test/impact-map.json", "test/helpers/**", "src/test-system/**", ".github/**"],
+      "phases": [],
+      "tiers": ["full"],
+      "reason": "Package, dependency, test configuration, or test infrastructure",
+      "escalateToFull": true
+    }
+  ]
+}

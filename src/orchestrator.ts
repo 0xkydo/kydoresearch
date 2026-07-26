@@ -282,7 +282,7 @@ export class Orchestrator {
         `resuming loop ${this.state.loop} from ${resumePhase ?? "saved state"} ` +
           `with ${this.state.ideas.length} idea(s)`,
       );
-      if (this.state.ideas.length === 0) {
+      if (this.state.ideas.length === 0 && !resumeAtFinalizing) {
         if (resumePhase === "loop.syncing") {
           await this.syncLeaderboard();
           if (this.aborted()) return this.abortLoop();

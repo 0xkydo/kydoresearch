@@ -1,0 +1,103 @@
+name: tests
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+  schedule:
+    - cron: "23 8 * * *"
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  selective:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - name: Select, explain, and run required tests
+        run: npm run test:related -- --base "origin/${{ github.base_ref }}" --receipt test-selection-receipt.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: test-selection-receipt
+          path: test-selection-receipt.json
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pr-pty-gallery
+          path: ${{ runner.temp }}/kydoresearch-pty-gallery
+          if-no-files-found: ignore
+
+  full:
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    env:
+      KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run test:full -- --receipt full-test-receipt.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: full-test-receipt
+          path: full-test-receipt.json
+          if-no-files-found: warn
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pty-gallery-${{ github.event_name }}
+          path: ${{ runner.temp }}/kydoresearch-pty-gallery
+          if-no-files-found: warn
+
+  pi-compatibility:
+    if: github.event_name == 'schedule' || github.event_name == 'release'
+    runs-on: ubuntu-latest
+    env:
+      KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
+    strategy:
+      fail-fast: false
+      matrix:
+        pi-version: ["0.75.0", "0.82.1"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Install selected Pi compatibility version
+        run: >-
+          npm install --no-save
+          @earendil-works/pi-ai@${{ matrix.pi-version }}
+          @earendil-works/pi-coding-agent@${{ matrix.pi-version }}
+          @earendil-works/pi-tui@${{ matrix.pi-version }}
+      - run: npm run typecheck
+      - run: npx vitest --run test/integration/pi-extension/loading.test.ts test/pty/visible-screen.test.ts
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: pty-gallery-pi-${{ matrix.pi-version }}
+          path: ${{ runner.temp }}/kydoresearch-pty-gallery
+          if-no-files-found: warn

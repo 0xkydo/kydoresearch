@@ -48,6 +48,138 @@ export type EditableSettingField =
   | "watchdogFile"
   | "submitModelName";
 
+export interface ConfigSettingUpdate {
+  ok: boolean;
+  changed: boolean;
+  error?: string;
+}
+
+/** Apply one dialog value with the same validation used by the live config UI. */
+export function applyConfigSetting(
+  config: HarnessConfig,
+  field: EditableSettingField,
+  value: string,
+): ConfigSettingUpdate {
+  const before = JSON.stringify(config);
+  const trimmed = value.trim();
+  const numeric = Number(trimmed);
+  let valid = true;
+  switch (field) {
+    case "maxIdeasPerLoop":
+      if (Number.isInteger(numeric) && numeric > 0) config.maxIdeasPerLoop = numeric;
+      else valid = false;
+      break;
+    case "churchTriggerThreshold":
+      if (Number.isInteger(numeric) && numeric >= 0) config.churchTriggerThreshold = numeric;
+      else valid = false;
+      break;
+    case "maxVerifyAttempts":
+      if (Number.isInteger(numeric) && numeric > 0) config.maxVerifyAttempts = numeric;
+      else valid = false;
+      break;
+    case "maxLoops":
+      if (trimmed === "") config.maxLoops = null;
+      else if (Number.isInteger(numeric) && numeric > 0) config.maxLoops = numeric;
+      else valid = false;
+      break;
+    case "minImprovement":
+      if (Number.isFinite(numeric) && numeric >= 0) config.minImprovement = numeric;
+      else valid = false;
+      break;
+    case "mockLoopDelayMs":
+      if (Number.isInteger(numeric) && numeric >= 0) config.mockLoopDelayMs = numeric;
+      else valid = false;
+      break;
+    case "setupTimeoutMs":
+      if (Number.isInteger(numeric) && numeric > 0) config.execution.setupTimeoutMs = numeric;
+      else valid = false;
+      break;
+    case "verifyTimeoutMs":
+      if (Number.isInteger(numeric) && numeric > 0) config.execution.verifyTimeoutMs = numeric;
+      else valid = false;
+      break;
+    case "benchmarkTimeoutMs":
+      if (Number.isInteger(numeric) && numeric > 0) {
+        config.execution.benchmarkTimeoutMs = numeric;
+      } else valid = false;
+      break;
+    case "agentMaxAttempts":
+      if (Number.isInteger(numeric) && numeric > 0) config.resilience.agentMaxAttempts = numeric;
+      else valid = false;
+      break;
+    case "commandMaxAttempts":
+      if (Number.isInteger(numeric) && numeric > 0) config.resilience.commandMaxAttempts = numeric;
+      else valid = false;
+      break;
+    case "submitMaxAttempts":
+      if (Number.isInteger(numeric) && numeric > 0) config.resilience.submitMaxAttempts = numeric;
+      else valid = false;
+      break;
+    case "maxConsecutiveLoopFailures":
+      if (Number.isInteger(numeric) && numeric > 0) {
+        config.resilience.maxConsecutiveLoopFailures = numeric;
+      } else valid = false;
+      break;
+    case "retryBaseDelayMs":
+      if (Number.isInteger(numeric) && numeric >= 0) config.resilience.retryBaseDelayMs = numeric;
+      else valid = false;
+      break;
+    case "retryMaxDelayMs":
+      if (Number.isInteger(numeric) && numeric >= 0) config.resilience.retryMaxDelayMs = numeric;
+      else valid = false;
+      break;
+    case "loopFailureBaseDelayMs":
+      if (Number.isInteger(numeric) && numeric >= 0) {
+        config.resilience.loopFailureBaseDelayMs = numeric;
+      } else valid = false;
+      break;
+    case "loopFailureMaxDelayMs":
+      if (Number.isInteger(numeric) && numeric >= 0) {
+        config.resilience.loopFailureMaxDelayMs = numeric;
+      } else valid = false;
+      break;
+    case "metaEvaluationLoops":
+      if (Number.isInteger(numeric) && numeric > 0) config.metaHarness.evaluationLoops = numeric;
+      else valid = false;
+      break;
+    case "metaMaxGenerations":
+      if (trimmed === "") config.metaHarness.maxGenerations = null;
+      else if (Number.isInteger(numeric) && numeric > 0) {
+        config.metaHarness.maxGenerations = numeric;
+      } else valid = false;
+      break;
+    case "metaMaxWallTimeMs":
+      if (trimmed === "") config.metaHarness.maxWallTimeMs = null;
+      else if (Number.isInteger(numeric) && numeric > 0) {
+        config.metaHarness.maxWallTimeMs = numeric;
+      } else valid = false;
+      break;
+    case "metaMaxRecoveryAttempts":
+      if (Number.isInteger(numeric) && numeric >= 0) {
+        config.metaHarness.maxRecoveryAttempts = numeric;
+      } else valid = false;
+      break;
+    case "watchdogFile":
+      if (trimmed) config.advisor.watchdogFile = trimmed;
+      else valid = false;
+      break;
+    case "submitModelName":
+      config.submitModelName = trimmed || undefined;
+      break;
+  }
+  if (!valid) {
+    return {
+      ok: false,
+      changed: false,
+      error: `Invalid value for ${field}: ${JSON.stringify(value)}`,
+    };
+  }
+  return {
+    ok: true,
+    changed: before !== JSON.stringify(config),
+  };
+}
+
 export interface NavState {
   pane: "left" | "right";
   left: number;

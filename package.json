@@ -16,6 +16,11 @@
   },
   "scripts": {
     "test": "vitest --run",
+    "test:kernel": "node scripts/test-impact.ts --mode related --kernel",
+    "test:phase": "node scripts/test-impact.ts --mode phase",
+    "test:related": "node scripts/test-impact.ts --mode related",
+    "test:explain": "node scripts/test-impact.ts --mode related --explain",
+    "test:full": "node scripts/test-impact.ts --mode full",
     "typecheck": "tsc --noEmit"
   },
   "peerDependencies": {

@@ -15,6 +15,20 @@ export interface StatusRenderOptions {
   running?: boolean;
 }
 
+export interface StatusSemanticModel {
+  challengeName: string;
+  phaseLabel: string;
+  phaseIcon: string;
+  loop: number;
+  directionLabel: string;
+  localScore: string;
+  submittedScore: string;
+  evaluationLabel: string;
+  candidateIds: string[];
+  evidenceLocations: string[];
+  primaryAction: string;
+}
+
 export type InitializationStage =
   | "validate"
   | "setup"
@@ -55,6 +69,41 @@ const PHASE_LABELS: Record<StatusReport["phase"], string> = {
   done: "complete",
 };
 
+/**
+ * Color-independent meaning shared by the styled TUI deck and the plain
+ * notification/RPC projection. Renderers may prioritize facts differently at
+ * narrow widths, but they do not independently reinterpret durable state.
+ */
+export function buildStatusSemanticModel(
+  challengeName: string,
+  report: StatusReport,
+): StatusSemanticModel {
+  return {
+    challengeName: oneLine(challengeName, 120),
+    phaseLabel: PHASE_LABELS[report.phase],
+    phaseIcon: phaseIcon(report.phase),
+    loop: report.loop,
+    directionLabel: scoreDirectionLabel(report.scoreDirection),
+    localScore: String(report.bestScore ?? "—"),
+    submittedScore: String(report.bestSubmittedScore ?? "—"),
+    evaluationLabel: report.localEvaluation
+      ? report.localEvaluation.fidelity === "full"
+        ? "full local evaluation"
+        : "reduced local evaluation"
+      : "evaluation unknown",
+    candidateIds: report.ideas.map((idea) => oneLine(idea.id, 80)),
+    evidenceLocations: report.ideas.map(
+      (idea) => `.autoresearch/runs/${oneLine(idea.id, 80)}/`,
+    ),
+    primaryAction:
+      report.phase === "paused"
+        ? "/autoresearch"
+        : report.phase === "done"
+          ? "/autoresearch inspect <candidate>"
+          : "/autoresearch steer <direction>",
+  };
+}
+
 /** Persistent status shown while first-run setup and baseline work is active. */
 export function renderInitializationLines(
   challengeName: string,
@@ -66,7 +115,7 @@ export function renderInitializationLines(
       : "";
   const status = initializationStatus(state.status);
   const lines = [
-    `╭─ AUTORESEARCH · ${challengeName}`,
+    `╭─ AUTORESEARCH · ${oneLine(challengeName, 120)}`,
     `│  ${status.icon} ${status.label} · INITIALIZATION`,
     `├─ ${initializationStageLabel(state.stage)}`,
     `│  ${oneLine(state.message, 108)}${attempt}`,
@@ -136,6 +185,7 @@ export function renderStatusLines(
   report: StatusReport,
   options: StatusRenderOptions = {},
 ): string[] {
+  const view = buildStatusSemanticModel(challengeName, report);
   const churchLine =
     report.churchTriggerThreshold > 0
       ? `plateau ${report.dryLoopStreak}/${report.churchTriggerThreshold} · church in ${Math.max(
@@ -144,9 +194,9 @@ export function renderStatusLines(
         )}`
       : "church trigger off";
   const lines = [
-    `╭─ AUTORESEARCH · ${challengeName}`,
-    `│  ${phaseIcon(report.phase)} LOOP ${report.loop} · ${PHASE_LABELS[report.phase].toUpperCase()}`,
-    `│  score  ${report.bestScore ?? "—"} local · ${report.bestSubmittedScore ?? "—"} submitted · ${scoreDirectionLabel(report.scoreDirection)}`,
+    `╭─ AUTORESEARCH · ${view.challengeName}`,
+    `│  ${view.phaseIcon} LOOP ${view.loop} · ${view.phaseLabel.toUpperCase()}`,
+    `│  score  ${view.localScore} local · ${view.submittedScore} submitted · ${view.directionLabel}`,
     `│  ${churchLine}`,
   ];
   if (report.localEvaluation) {
@@ -225,9 +275,10 @@ export function renderStatusDashboardLines(
   theme: Theme,
   options: StatusRenderOptions = {},
 ): string[] {
+  const view = buildStatusSemanticModel(challengeName, report);
   const viewport = Math.max(32, width);
   const lines: string[] = [
-    dashboardRule(theme, `AUTORESEARCH  ${challengeName}`, viewport, true),
+    dashboardRule(theme, `AUTORESEARCH  ${view.challengeName}`, viewport, true),
   ];
   const running = options.running === true;
   const runLabel =
@@ -241,16 +292,16 @@ export function renderStatusDashboardLines(
   lines.push(
     dashboardLine(
       `${runLabel}  ${styled(theme, "text", true, `LOOP ${report.loop}`)}  ` +
-        `${styled(theme, phaseColor(report.phase), true, PHASE_LABELS[report.phase].toUpperCase())}`,
+        `${styled(theme, phaseColor(report.phase), true, view.phaseLabel.toUpperCase())}`,
       viewport,
     ),
   );
   lines.push(
     dashboardLine(
       `${dashboardLabel(theme, "OBJECTIVE")}  ` +
-        `${styled(theme, "accent", true, String(report.bestScore ?? "—"))} local  ` +
-        `${styled(theme, "success", true, String(report.bestSubmittedScore ?? "—"))} submitted  ` +
-        `${styled(theme, "muted", false, scoreDirectionLabel(report.scoreDirection))}`,
+        `${styled(theme, "accent", true, view.localScore)} local  ` +
+        `${styled(theme, "success", true, view.submittedScore)} submitted  ` +
+        `${styled(theme, "muted", false, view.directionLabel)}`,
       viewport,
     ),
   );
@@ -480,7 +531,7 @@ export function renderStatusDashboardLines(
     lines.push(
       dashboardLine(
         `${dashboardAction(theme, "STEER", "/autoresearch steer <direction>")}   ` +
-          `${dashboardAction(theme, "INSPECT", "/autoresearch inspect [id]")}   ` +
+          `${dashboardAction(theme, "INSPECT", "/autoresearch inspect <candidate>")}   ` +
           `${dashboardAction(
             theme,
             running ? "PAUSE" : "RESUME",
@@ -498,7 +549,7 @@ export function renderStatusDashboardLines(
     );
     lines.push(
       dashboardLine(
-        `${dashboardAction(theme, "INSPECT", "/autoresearch inspect [id]")}   ` +
+        `${dashboardAction(theme, "INSPECT", "/autoresearch inspect <candidate>")}   ` +
           `${dashboardAction(
             theme,
             running ? "PAUSE" : "RESUME",
@@ -539,7 +590,12 @@ export function renderInitializationDashboardLines(
       ? ` · attempt ${state.attempt}/${state.maxAttempts ?? "?"}`
       : "";
   const lines = [
-    dashboardRule(theme, `AUTORESEARCH  ${challengeName}`, viewport, true),
+    dashboardRule(
+      theme,
+      `AUTORESEARCH  ${oneLine(challengeName, 120)}`,
+      viewport,
+      true,
+    ),
     dashboardLine(
       `${styled(theme, tone, true, `${status.icon} ${status.label}`)}  ` +
         `${styled(theme, "text", true, "INITIALIZATION")}  ·  ` +
@@ -922,7 +978,11 @@ function formatNumber(value: number): string {
 }
 
 function oneLine(value: string, maxLength: number): string {
-  const compact = value.replace(/\s+/g, " ").trim();
+  const compact = value
+    .replace(/\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))/g, "")
+    .replace(/[\u0000-\u0008\u000B\u000C\u000E-\u001A\u001C-\u001F\u007F-\u009F]/g, "�")
+    .replace(/\s+/g, " ")
+    .trim();
   return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 1)}…`;
 }
 
