@@ -62,10 +62,14 @@ describe("/autoresearch status", () => {
     await handler!("status", ctx);
 
     expect(notify).toHaveBeenCalledWith(
-      expect.stringContaining("autoresearch · status-challenge · loop 0 · phase ready"),
+      expect.stringContaining("╭─ AUTORESEARCH · status-challenge"),
       "info",
     );
-    expect(notify).toHaveBeenCalledWith(expect.stringContaining("best local 42"), "info");
+    expect(notify).toHaveBeenCalledWith(
+      expect.stringContaining("○ LOOP 0 · READY TO START"),
+      "info",
+    );
+    expect(notify).toHaveBeenCalledWith(expect.stringContaining("score  42 local"), "info");
     expect(sendMessage).not.toHaveBeenCalled();
   });
 });
@@ -451,8 +455,8 @@ describe("/autoresearch startup errors", () => {
     expect(setupFailure.setWidget).toHaveBeenCalledWith(
       "autoresearch",
       expect.arrayContaining([
-        expect.stringContaining("autoresearch · mock-challenge · initialization"),
-        expect.stringContaining("status: failed"),
+        expect.stringContaining("╭─ AUTORESEARCH · mock-challenge"),
+        expect.stringContaining("! STOPPED · INITIALIZATION"),
         expect.stringContaining(".autoresearch/logs/setup.log"),
       ]),
     );

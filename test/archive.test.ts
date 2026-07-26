@@ -170,6 +170,40 @@ describe("proposal contracts", () => {
     ).toThrow(/benchmarkFailureTail/);
   });
 
+  it("validates the autonomous Setup decision contract", () => {
+    const repoRoot = path.join(os.tmpdir(), "setup-decision-validation");
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    const task = {
+      schemaVersion: 1,
+      taskId: "init-setup-decision-1",
+      kind: "init.decide",
+      role: "setup",
+      taskPath: path.join(stateDir, "loops", "init", "setup-decision-task-1.json"),
+      stateDir,
+      resultPath: path.join(stateDir, "loops", "init", "setup-result.json"),
+      input: {
+        repoRoot,
+        manifestPath: path.join(repoRoot, "benchmark.json"),
+        knowledgeBasePath: path.join(stateDir, "knowledge-base.md"),
+        previousVerifyCommand: "./verify.sh",
+        previousBenchCommand: "./benchmark.sh",
+        decisionRequest: "Choose the documented local mode.",
+        evidencePaths: [
+          path.join(repoRoot, "benchmark.json"),
+          path.join(stateDir, "logs", "benchmark.log"),
+        ],
+      },
+    };
+
+    expect(validateResearchTask(task)).toEqual(task);
+    expect(() =>
+      validateResearchTask({
+        ...task,
+        input: { ...task.input, decisionRequest: "" },
+      }),
+    ).toThrow(/decisionRequest/);
+  });
+
   it("validates versioned task envelopes and kind-specific immutable input", () => {
     const stateDir = path.join(os.tmpdir(), "task-validation", ".autoresearch");
     const task = makeTask(stateDir, "L001-I1", "baseline");

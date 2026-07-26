@@ -181,6 +181,7 @@ export interface VerifierContractV1 {
     benchCommand: string;
     scorePath: string;
     editablePaths: string[];
+    localEvaluation?: LoopState["challenge"]["localEvaluation"];
   };
   files: FrozenVerifierFileV1[];
   runtime?: FrozenRuntimeContractV1;
@@ -1215,6 +1216,9 @@ export async function captureVerifierContract(
     benchCommand: state.challenge.benchCommand,
     scorePath: state.challenge.scorePath,
     editablePaths: [...state.challenge.editablePaths].sort(),
+    ...(state.challenge.localEvaluation
+      ? { localEvaluation: state.challenge.localEvaluation }
+      : {}),
   };
   const runtime = config ? captureFrozenRuntime(repoRoot, config) : undefined;
   const fingerprint = createHash("sha256")

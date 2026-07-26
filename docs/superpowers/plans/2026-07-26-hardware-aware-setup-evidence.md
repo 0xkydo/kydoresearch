@@ -106,7 +106,7 @@ git commit -m "Pass setup evidence to the setup agent"
 **Interfaces:**
 - Consumes: `setupCommand`, `setupLogPath`, and `setupSucceeded` from Task 1.
 - Produces: rendered Setup context that explicitly identifies the latest successful setup log as evidence.
-- Preserves: trailing `ready`/`needs-user-action` JSON schemas.
+- Amended contract: trailing `ready`/`blocked-external` JSON schemas plus a compatibility `init.decide` path for legacy `needs-user-action` output.
 
 - [ ] **Step 1: Write failing prompt-contract tests**
 

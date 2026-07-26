@@ -31,6 +31,10 @@ const setupReviewTask = fs.readFileSync(
   path.join(repoRoot, "extensions", "autoresearch", "prompts", "tasks", "init-review.md"),
   "utf8",
 );
+const setupDecisionTask = fs.readFileSync(
+  path.join(repoRoot, "extensions", "autoresearch", "prompts", "tasks", "init-decide.md"),
+  "utf8",
+);
 const churchTask = fs.readFileSync(
   path.join(repoRoot, "extensions", "autoresearch", "prompts", "tasks", "church.md"),
   "utf8",
@@ -114,17 +118,21 @@ describe("architecture documentation contract", () => {
     expect(churchTask).toContain("`**Professor:**` and `**God:**`");
   });
 
-  it("keeps Setup focused on organization and explicit readiness pauses", () => {
+  it("keeps Setup focused on organization and autonomous local decisions", () => {
     expect(setupRole).toContain("repository cartographer and experiment-contract compiler");
     expect(setupRole).toContain("Confirm that setup produced a usable environment");
     expect(setupRole).toContain("setup log");
     expect(setupRole).toContain("local hardware");
     expect(setupTask).toContain("latest successful setup invocation");
-    expect(setupTask).toContain('"status": "needs-user-action"');
+    expect(setupTask).toContain('"status": "blocked-external"');
+    expect(setupTask).toContain('"fidelity": "full or reduced"');
     expect(setupTask).toContain("timing-only override");
     expect(setupReviewTask).toContain("failed initialization baseline");
     expect(setupReviewTask).toContain("Do not turn a correctness failure into success");
-    expect(setupTask).toContain("user or another agent");
+    expect(setupDecisionTask).toContain("There is no interactive");
+    expect(setupDecisionTask).toContain("Make the decision yourself");
+    expect(setupDecisionTask).toContain('"status": "blocked-external"');
+    expect(setupTask).not.toContain('"status": "needs-user-action"');
     expect(setupTask).not.toContain("Optimization levers");
   });
 });

@@ -31,7 +31,8 @@ loop.
 The fixed campaign substrate is:
 
 - challenge identity and score direction;
-- correctness and benchmark commands;
+- local-evaluation fidelity, correctness/regression command, and benchmark
+  command;
 - score path and parser;
 - tracked repository files outside `editablePaths`;
 - model identity and thinking level;

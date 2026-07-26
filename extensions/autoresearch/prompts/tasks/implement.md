@@ -8,8 +8,20 @@ the specification at `{{specFile}}`.
 - Loop: {{loop}}
 - Attempt: {{attempt}} of {{maxVerifyAttempts}}
 - Editable paths: {{editablePaths}}
-- Fast correctness command: `{{verifyCommand}}`
+- Local validation command: `{{verifyCommand}}`
 - Main research state: `{{stateDir}}`
+
+{{#localEvaluation}}
+Local evaluation contract:
+
+```json
+{{localEvaluation}}
+```
+
+When its fidelity is `reduced`, treat `{{verifyCommand}}` as a local regression
+signal, not proof of full correctness. Preserve the recorded limitations in
+your report; official validation remains authoritative.
+{{/localEvaluation}}
 
 {{#lastVerifyError}}
 ## Previous-attempt evidence

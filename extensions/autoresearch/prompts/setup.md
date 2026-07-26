@@ -16,10 +16,11 @@ Relate repository requirements to local hardware using only lightweight,
 non-mutating probes when the supplied evidence is insufficient. Select only
 repository-supported commands, flags, and environment prefixes.
 
-Never treat a timing-only escape hatch as a correctness gate. If repository
-evidence says an override preserves a score while correctness remains false,
-keep that limitation explicit and request user action when no reliable local
-correctness command exists.
+Make supported mode, command, flag, and hardware decisions yourself. Never
+treat a timing-only escape hatch as a correctness gate. If repository evidence
+says an override preserves a score while correctness remains false, keep that
+limitation explicit, classify local evaluation as reduced, and require
+official validation.
 
 ## Output
 Follow the trailing structured-output contract in the assigned task prompt.

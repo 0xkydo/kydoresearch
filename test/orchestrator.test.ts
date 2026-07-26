@@ -132,6 +132,14 @@ describe("Orchestrator scenario matrix", () => {
 
   it("loop 2: verify-retry-then-pass, best-of-two winner submits, loser superseded", async () => {
     const h = await makeHarness(repoRoot);
+    const initialized = loadState(h.stateDir)!;
+    initialized.challenge.localEvaluation = {
+      fidelity: "reduced",
+      decision: "Use the documented reduced local regression mode.",
+      limitations: ["The official evaluator path is not exercised locally."],
+      officialValidationRequired: true,
+    };
+    saveState(h.stateDir, initialized);
     const orchestrator = h.makeOrchestrator();
     await orchestrator.runLoop(); // loop 1 (dry)
     const summary = await orchestrator.runLoop(); // loop 2
@@ -164,6 +172,11 @@ describe("Orchestrator scenario matrix", () => {
     ]) {
       expect(subs[0]!.note).toContain(heading);
     }
+    expect(subs[0]!.note).toContain("reduced local validation command");
+    expect(subs[0]!.note).toContain(
+      "The official challenge evaluator remains required for correctness and acceptance.",
+    );
+    expect(subs[0]!.note).not.toContain("The candidate passed the first harness verification");
 
     // Retry was real: journal contains a verify-failed line for L002-I1.
     const journal = fs.readFileSync(path.join(h.stateDir, "journal.ndjson"), "utf8");

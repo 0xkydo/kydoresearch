@@ -751,6 +751,9 @@ function statusFromState(
     })),
     taskboardOpen: new Taskboard(stateDir).openCount(),
     lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
+    ...(state.challenge.localEvaluation
+      ? { localEvaluation: state.challenge.localEvaluation }
+      : {}),
     recovery: state.recovery,
     ...(metaHarness ? { metaHarness } : {}),
   };
@@ -813,11 +816,11 @@ function initializationFailureStage(
     case "setup":
       return "challenge dependency setup failed";
     case "setup-agent":
-      return "Setup agent could not confirm readiness";
+      return "Setup agent could not complete its repository decision";
     case "baseline":
       return "local baseline benchmark failed";
     case "baseline-review":
-      return "Setup could not safely recover the failed baseline";
+      return "Setup could not choose a supported baseline recovery";
     case "ready":
       return "initialization failed while saving ready state";
   }

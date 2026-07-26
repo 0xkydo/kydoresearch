@@ -119,6 +119,10 @@ describe("initChallenge", () => {
 
     expect(state.challenge.verifyCommand).toBe("FIXTURE_MODE=local ./verify.sh");
     expect(state.challenge.benchCommand).toBe("FIXTURE_MODE=local ./benchmark.sh");
+    expect(state.challenge.localEvaluation).toMatchObject({
+      fidelity: "reduced",
+      officialValidationRequired: true,
+    });
     expect(shellCommands).toContain("FIXTURE_MODE=local ./benchmark.sh");
   });
 
@@ -338,6 +342,83 @@ describe("initChallenge", () => {
     });
   });
 
+  it("resolves a baseline-review judgment autonomously instead of pausing", async () => {
+    let baselineCalls = 0;
+    const setupKinds: string[] = [];
+    const exec: ExecPort = (cmd, args, opts) => {
+      const command = cmd === "/bin/bash" ? args[1] : undefined;
+      if (command === "./benchmark.sh" && ++baselineCalls === 1) {
+        return Promise.resolve({
+          stdout: "",
+          stderr: "documented local hardware mismatch",
+          code: 1,
+        });
+      }
+      return nodeExec(cmd, args, opts);
+    };
+    const baseRunner = new MockAgentRunner();
+    const runner: AgentRunner = {
+      run: (task) => {
+        setupKinds.push(task.kind);
+        if (task.kind === "init.review") {
+          return Promise.resolve({
+            ok: true,
+            output: "A supported local-mode choice is required.",
+            structured: {
+              status: "needs-user-action",
+              userAction: {
+                reason: "Choose the documented reduced local mode.",
+                location: "README.md",
+                instructions: ["Enable the local-mode flag."],
+              },
+            },
+            filesWritten: [],
+          });
+        }
+        if (task.kind === "init.decide") {
+          return Promise.resolve({
+            ok: true,
+            output: "Chose the documented reduced local mode.",
+            structured: {
+              status: "ready",
+              verifyCommand: "./verify.sh",
+              benchCommand: "./benchmark.sh",
+              localEvaluation: {
+                fidelity: "reduced",
+                decision: "Use the documented reduced mode after the baseline mismatch.",
+                limitations: ["The official hardware path remains untested."],
+                officialValidationRequired: true,
+              },
+            },
+            filesWritten: [],
+          });
+        }
+        return baseRunner.run(task);
+      },
+    };
+
+    const result = await initChallenge({
+      repoRoot,
+      runner,
+      exec,
+      delay: async () => {},
+    });
+
+    expect(setupKinds).toEqual(["init.explore", "init.review", "init.decide"]);
+    expect(result.state.phase).toBe("ready");
+    expect(result.state.challenge.localEvaluation?.fidelity).toBe("reduced");
+    expect(
+      fs.existsSync(
+        path.join(
+          result.stateDir,
+          "loops",
+          "init",
+          "setup-decision-task-review-1.json",
+        ),
+      ),
+    ).toBe(true);
+  });
+
   it("reuses a durable Setup result after an interrupted baseline", async () => {
     const stateDir = path.join(repoRoot, ".autoresearch");
     let setupCalls = 0;
@@ -394,22 +475,90 @@ describe("initChallenge", () => {
     expect(reviewCalls).toBe(1);
   });
 
-  it("pauses initialization when Setup requires work elsewhere", async () => {
+  it("asks Setup to resolve its own legacy judgment request and continues", async () => {
+    const calls: string[] = [];
+    const progress: string[] = [];
+    const runner: AgentRunner = {
+      run: (task) => {
+        calls.push(task.kind);
+        if (task.kind === "init.decide") {
+          return Promise.resolve({
+            ok: true,
+            output: "Selected the documented local mode autonomously.",
+            structured: {
+              status: "ready",
+              verifyCommand: "./verify.sh",
+              benchCommand: "./benchmark.sh",
+              localEvaluation: {
+                fidelity: "reduced",
+                decision: "Use the documented local mode on this host.",
+                limitations: ["The official evaluator path is not exercised locally."],
+                officialValidationRequired: true,
+              },
+            },
+            filesWritten: [],
+          });
+        }
+        return Promise.resolve({
+          ok: true,
+          output: "A local-mode judgment is required.",
+          structured: {
+            status: "needs-user-action",
+            userAction: {
+              reason: "Choose between the full and documented local modes.",
+              location: repoRoot,
+              instructions: [
+                "Decide whether to use the local mode.",
+              ],
+            },
+          },
+          filesWritten: [],
+        });
+      },
+    };
+
+    const result = await initChallenge({
+      repoRoot,
+      runner,
+      exec: nodeExec,
+      delay: async () => {},
+      onProgress: (event) => progress.push(event.message),
+    });
+
+    expect(calls).toEqual(["init.explore", "init.decide"]);
+    expect(progress).toContain("Setup is choosing the safest documented local mode");
+    expect(result.state.phase).toBe("ready");
+    expect(result.state.challenge.localEvaluation).toEqual({
+      fidelity: "reduced",
+      decision: "Use the documented local mode on this host.",
+      limitations: ["The official evaluator path is not exercised locally."],
+      officialValidationRequired: true,
+    });
+    expect(
+      fs.existsSync(
+        path.join(
+          repoRoot,
+          ".autoresearch",
+          "loops",
+          "init",
+          "setup-decision-task-initial.json",
+        ),
+      ),
+    ).toBe(true);
+  });
+
+  it("stops only when Setup confirms a genuine external blocker", async () => {
     const runner: AgentRunner = {
       run: () =>
         Promise.resolve({
           ok: true,
-          output: "The required dependency is not available.",
+          output: "A private required artifact is inaccessible.",
           structured: {
-            status: "needs-user-action",
-            userAction: {
-              reason: "Rust toolchain 1.90 is missing.",
-              location: repoRoot,
-              instructions: [
-                "Install Rust 1.90 with rustup.",
-                "Run ./setup.sh and confirm it succeeds.",
-              ],
-              suggestedOwner: "user",
+            status: "blocked-external",
+            externalBlocker: {
+              reason: "The required model artifact needs credentials not present here.",
+              location: "docs/setup.md",
+              instructions: ["Provide access to the private artifact."],
             },
           },
           filesWritten: [],
@@ -424,7 +573,7 @@ describe("initChallenge", () => {
         delay: async () => {},
       }),
     ).rejects.toThrow(
-      /Initialization paused.*Rust toolchain 1\.90 is missing.*Install Rust 1\.90 with rustup.*retry \/autoresearch/s,
+      /blocked by an external requirement.*needs credentials.*Provide access.*retry \/autoresearch/s,
     );
     expect(fs.existsSync(path.join(repoRoot, ".autoresearch", "state.json"))).toBe(false);
   });

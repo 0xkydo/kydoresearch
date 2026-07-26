@@ -156,8 +156,9 @@ editable paths for confirmation. Initialization then:
 3. asks the setup agent to read the completed setup log, relate repository
    guidance to local hardware, and select documented effective correctness and
    benchmark commands;
-4. records any local profile flags and reduced-fidelity or official-hardware
-   validation gaps in the knowledge base;
+4. asks Setup to make supported mode, flag, and hardware decisions itself,
+   choosing either full local evaluation or an explicitly reduced local signal
+   whose limitations require official validation;
 5. atomically checkpoints the effective commands in
    `.autoresearch/loops/init/setup-result.json`;
 6. runs one baseline with the effective benchmark command; if its first
@@ -172,15 +173,17 @@ challenge data and submit an improvement automatically.
 ### 5. Operate and resume
 
 The persistent initialization widget appears as soon as confirmation closes.
-It shows dependency setup, the Setup agent, baseline attempts, baseline-review,
-the active command, attempt counts, and the applicable log path. An
-initialization failure remains on screen with its actionable reason instead of
-disappearing as a transient notification.
+Its bordered dashboard separates current stage, local-evaluation fidelity,
+runtime command, evidence path, and recent activity. It shows dependency setup,
+the Setup agent, autonomous decision resolution, baseline attempts, and
+baseline-review. An initialization failure remains on screen with its
+actionable reason instead of disappearing as a transient notification.
 
-After initialization, the live Pi widget shows the current stage, score
-baseline, candidate titles, parents, verification attempts, benchmark deltas,
-failures, and the three most recent research events. It remains visible when a
-run pauses or completes and is restored from durable state after Pi restarts.
+After initialization, the live Pi dashboard groups the current stage, scores,
+local-evaluation fidelity, candidate titles, parents, verification attempts,
+benchmark deltas, failures, controls, and recent research events into compact
+sections. It remains visible when a run pauses or completes and is restored
+from durable state after Pi restarts.
 
 Use `/autoresearch status` for the same immediate snapshot in a notification.
 Use `/autoresearch inspect` to list current and recent candidates, then
@@ -231,7 +234,8 @@ blocked while MLX Fast model attribution is empty.
 ```text
 init (once per repository)
   validate manifest + Git → setup command → setup agent → durable setup result
-  → baseline → bounded Setup review on failure → baseline archive
+  → autonomous decision fallback when needed → baseline
+  → bounded Setup review on failure → baseline archive
 
 research loop
   sync leaderboard and competitor notes
@@ -340,8 +344,12 @@ the repository's `bin/` directory is used. If no CLI is detected, local
 research can still run, but sync is skipped and submission is disabled.
 
 The setup agent may select a faster correctness command than the performance
-benchmark. Every successful candidate still passes both the selected
-correctness gate and the manifest-backed score gate before it can win.
+benchmark. When full correctness is unavailable on the local host, Setup may
+instead select a repository-supported reduced regression signal. That choice,
+its limitations, and the need for official validation are durable and visible;
+it is never presented as full correctness. Every successful candidate still
+passes the selected local gate and the manifest-backed score gate before the
+challenge CLI performs the authoritative submission validation.
 
 ## Configuration — `.autoresearch/config.json`
 

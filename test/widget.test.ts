@@ -15,6 +15,12 @@ describe("autoresearch initialization rendering", () => {
       attempt: 1,
       maxAttempts: 2,
       logPath: ".autoresearch/logs/benchmark.log",
+      localEvaluation: {
+        fidelity: "reduced",
+        decision: "Use the documented local-iterate mode.",
+        limitations: ["The official evaluator path is not exercised locally."],
+        officialValidationRequired: true,
+      },
       recentActivity: [
         "baseline attempt 1/2 failed: local teacher-forced token mismatch",
         "Setup identified the documented reduced local mode",
@@ -22,11 +28,14 @@ describe("autoresearch initialization rendering", () => {
     });
     const rendered = lines.join("\n");
 
-    expect(rendered).toContain("autoresearch · mlxfast-challenge · initialization");
-    expect(rendered).toContain("stage: Setup is reviewing the failed baseline");
+    expect(rendered).toContain("╭─ AUTORESEARCH · mlxfast-challenge");
+    expect(rendered).toContain("● RUNNING · INITIALIZATION");
+    expect(rendered).toContain("Baseline recovery decision");
+    expect(rendered).toContain("Setup is reviewing the failed baseline");
     expect(rendered).toContain("attempt 1/2");
-    expect(rendered).toContain("command: MLXFAST_SCORE_PATH=score.json");
-    expect(rendered).toContain("log: .autoresearch/logs/benchmark.log");
+    expect(rendered).toContain("△ REDUCED LOCAL EVALUATION · official validation required");
+    expect(rendered).toContain("command  MLXFAST_SCORE_PATH=score.json");
+    expect(rendered).toContain("log      .autoresearch/logs/benchmark.log");
     expect(rendered).toContain("local teacher-forced token mismatch");
   });
 
@@ -41,9 +50,10 @@ describe("autoresearch initialization rendering", () => {
       recentActivity: [],
     }).join("\n");
 
-    expect(rendered).toContain("status: failed");
+    expect(rendered).toContain("! STOPPED · INITIALIZATION");
+    expect(rendered).toContain("Needs attention");
     expect(rendered).toContain("cannot provide a reliable correctness result");
-    expect(rendered).toContain("retry: /autoresearch");
+    expect(rendered).toContain("Retry /autoresearch");
   });
 });
 
@@ -52,6 +62,7 @@ describe("autoresearch status rendering", () => {
     const report: StatusReport = {
       phase: "loop.ideas",
       loop: 4,
+      scoreDirection: "-",
       bestScore: 10,
       bestSubmittedScore: 11,
       dryLoopStreak: 1,
@@ -89,6 +100,12 @@ describe("autoresearch status rendering", () => {
       ],
       taskboardOpen: 2,
       lastAdvisorNotes: ["Keep the verifier fixed."],
+      localEvaluation: {
+        fidelity: "reduced",
+        decision: "Use the documented local regression mode.",
+        limitations: ["Official hardware correctness is not exercised."],
+        officialValidationRequired: true,
+      },
     };
 
     const lines = renderStatusLines("demo", report, {
@@ -99,14 +116,16 @@ describe("autoresearch status rendering", () => {
     });
     const rendered = lines.join("\n");
 
-    expect(rendered).toContain("researching candidates");
+    expect(rendered).toContain("RESEARCHING CANDIDATES");
+    expect(rendered).toContain("score  10 local · 11 submitted · lower wins");
+    expect(rendered).toContain("REDUCED LOCAL EVALUATION");
     expect(rendered).toContain("1 active · 1 queued/benching · 1 failed");
-    expect(rendered).toContain("L004-I1 · verifying 2/3 · parent L002-I2");
+    expect(rendered).toContain("L004-I1 · VERIFYING 2/3 · parent L002-I2");
     expect(rendered).toContain("Fuse the lookup passes");
-    expect(rendered).toContain("L004-I2 · failed · parent baseline");
+    expect(rendered).toContain("L004-I2 · FAILED · parent baseline");
     expect(rendered).toContain("TypeError: cache key was undefined");
-    expect(rendered).toContain("L004-I3 · benching · parent L002-I2 · score 8.5 (1.5 better)");
-    expect(rendered).toContain("recent:");
+    expect(rendered).toContain("L004-I3 · BENCHING · parent L002-I2 · score 8.5 (1.5 better)");
+    expect(rendered).toContain("Recent activity");
     expect(rendered).toContain("L004-I3 · benched: local score 8.5");
     expect(rendered).toContain("/autoresearch inspect <candidate>");
   });

@@ -1,5 +1,5 @@
 import * as path from "node:path";
-import type { EvaluationCommandV1 } from "./experiments.ts";
+import type { EvaluationCommandV1, LocalEvaluationV1 } from "./experiments.ts";
 import type { IdeaStatus, Phase } from "./phases.ts";
 import type { Direction } from "./util.ts";
 import { atomicWriteJson, readJsonIfExists } from "./util.ts";
@@ -56,6 +56,8 @@ export interface ChallengeInfo {
   editablePaths: string[];
   scorePath: string;
   subjectArea?: string; // from init.explore
+  /** Setup's durable statement of what local verification can and cannot establish. */
+  localEvaluation?: LocalEvaluationV1;
 }
 
 export interface RecoveryState {

@@ -36,6 +36,7 @@ import type {
   CandidateTerminalStatus,
   EvaluationCommandV1,
   GodConversationTaskV1,
+  LocalEvaluationV1,
   PhdImplementationTaskV1,
   PhdPostmortemTaskV1,
   ProfessorProposalTaskV1,
@@ -99,6 +100,7 @@ export interface StatusReport {
   }[];
   taskboardOpen: number;
   lastAdvisorNotes: string[];
+  localEvaluation?: LocalEvaluationV1;
   recovery?: {
     scope: string;
     message: string;
@@ -159,6 +161,9 @@ export class Orchestrator {
       })),
       taskboardOpen: this.taskboard.openCount(),
       lastAdvisorNotes: lastSummary?.advisorNotes ?? [],
+      ...(this.state.challenge.localEvaluation
+        ? { localEvaluation: this.state.challenge.localEvaluation }
+        : {}),
       ...(this.state.recovery
         ? {
             recovery: {
@@ -1248,6 +1253,9 @@ export class Orchestrator {
           ...repositoryInstructionPaths,
         ],
         verifyCommand: this.state.challenge.verifyCommand,
+        ...(this.state.challenge.localEvaluation
+          ? { localEvaluation: this.state.challenge.localEvaluation }
+          : {}),
         benchmarkProhibited: true,
         ...(idea.lastVerifyError
           ? { previousVerifierReport: idea.lastVerifyError }
@@ -1910,6 +1918,23 @@ export class Orchestrator {
     const attribution = this.state.challenge.submitNeedsModel
       ? this.config.submitModelName!.trim()
       : `${roleLine("phd")} (challenge does not require --model)`;
+    const localEvaluation = this.state.challenge.localEvaluation;
+    const reducedLocalEvaluation = localEvaluation?.fidelity === "reduced";
+    const verificationNarrative = reducedLocalEvaluation
+      ? `The candidate completed the reduced local validation command \`${this.state.challenge.verifyCommand}\` in its isolated worktree. This does not establish full correctness: ${localEvaluation.limitations.join(" ")} The winner was then applied to main, rechecked with the same reduced local signal, and re-measured with \`${this.state.challenge.benchCommand}\` before official submission validation.`
+      : `The candidate passed \`${this.state.challenge.verifyCommand}\` in its isolated worktree. The winner was then applied to main, re-verified, and re-measured with \`${this.state.challenge.benchCommand}\` before submission.`;
+    const verificationStep = reducedLocalEvaluation
+      ? `3. Run the reduced local validation command: \`${this.state.challenge.verifyCommand}\`.`
+      : `3. Run the correctness gate: \`${this.state.challenge.verifyCommand}\`.`;
+    const verificationAttempts = reducedLocalEvaluation
+      ? "Local validation attempts"
+      : "Correctness attempts";
+    const verificationOutcome =
+      candidate.verifyAttempts > 1
+        ? `The candidate required ${candidate.verifyAttempts} implementation/validation attempts. Each failed local check was returned to the same PhD flow before benchmarking.`
+        : reducedLocalEvaluation
+          ? "The candidate completed the reduced local validation command on the first harness attempt."
+          : "The candidate passed the first harness verification attempt.";
 
     return [
       `# Submission: ${candidate.title}`,
@@ -1954,9 +1979,9 @@ export class Orchestrator {
       `| Prior best local score | ${priorBest ?? "n/a"} |`,
       `| Candidate score in its worktree | ${worktreeScore ?? "n/a"} |`,
       `| Candidate score after applying to main | ${score} |`,
-      `| Correctness attempts | ${candidate.verifyAttempts} |`,
+      `| ${verificationAttempts} | ${candidate.verifyAttempts} |`,
       "",
-      `The candidate passed \`${this.state.challenge.verifyCommand}\` in its isolated worktree. The winner was then applied to main, re-verified, and re-measured with \`${this.state.challenge.benchCommand}\` before submission.`,
+      verificationNarrative,
       "",
       "## Reproduction",
       "",
@@ -1964,20 +1989,24 @@ export class Orchestrator {
       "",
       `1. Run \`${this.state.challenge.setupCommand}\`.`,
       `2. Apply the candidate changes under ${this.state.challenge.editablePaths.map((editablePath) => `\`${editablePath}\``).join(", ")}.`,
-      `3. Run the correctness gate: \`${this.state.challenge.verifyCommand}\`.`,
+      verificationStep,
       `4. Run the local benchmark: \`${this.state.challenge.benchCommand}\`.`,
       `5. Inspect \`${this.state.challenge.scorePath}\`; this run produced ${score}.`,
       "",
       "## Failures and course corrections",
       "",
-      candidate.verifyAttempts > 1
-        ? `The candidate required ${candidate.verifyAttempts} implementation/verification attempts. Each failed correctness pass was returned to the same PhD flow before benchmarking.`
-        : "The candidate passed the first harness verification attempt.",
+      verificationOutcome,
       "Sibling candidates were evaluated independently and either failed, did not improve the comparison score, or were superseded.",
       "",
       "## Caveats",
       "",
       "- Scores are local measurements and may vary with machine state, benchmark noise, or a newer promoted frontier.",
+      ...(reducedLocalEvaluation
+        ? [
+            `- Local evaluation fidelity was reduced: ${localEvaluation.decision}`,
+            "- The official challenge evaluator remains required for correctness and acceptance.",
+          ]
+        : []),
       "- The challenge CLI makes the final acceptance and promotion decision.",
       "- Candidate work ran in parallel, but performance benchmarks were serialized.",
       "",

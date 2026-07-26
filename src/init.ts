@@ -11,6 +11,8 @@ import { loadConfig, saveConfig } from "./config.ts";
 import type { ExecPort } from "./exec.ts";
 import { retryOperation, type RetryDelay } from "./retry.ts";
 import type {
+  LocalEvaluationV1,
+  SetupDecisionTaskV1,
   SetupResultV1,
   SetupReviewTaskV1,
   SetupTaskV1,
@@ -35,6 +37,7 @@ export interface InitProgress {
   attempt?: number;
   maxAttempts?: number;
   logPath?: string;
+  localEvaluation?: LocalEvaluationV1;
 }
 
 /**
@@ -44,8 +47,9 @@ export interface InitProgress {
  *     never dirties submission tarballs).
  *  3. Run setupCommand (dependency install) and fail loudly if it fails.
  *  4. Run the setup agent ("init.explore") to classify the repository's
- *     existing commands, confirm readiness, and pause for outside work when
- *     needed.
+ *     existing commands and choose the best supported local evaluation mode.
+ *     A legacy request for user judgment is resolved by a separate,
+ *     autonomous Setup decision task.
  *  5. Persist the effective command result before baseline measurement.
  *  6. If the first baseline fails, let Setup review that evidence before the
  *     remaining bounded command attempt.
@@ -108,6 +112,7 @@ export async function initChallenge(opts: {
         manifest,
         revision: revision.stdout.trim(),
         setupRole: config.roles.setup,
+        setupDecisionContract: "autonomous-local-evaluation-v2",
       }),
     )
     .digest("hex");
@@ -122,6 +127,7 @@ export async function initChallenge(opts: {
   let verifyCommand: string;
   let benchCommand: string;
   let subjectArea: string | undefined;
+  let localEvaluation: LocalEvaluationV1;
   let reviewCount = 0;
   const persistedSetup = loadSetupResult(setupResultPath, checkpointFingerprint);
 
@@ -129,6 +135,7 @@ export async function initChallenge(opts: {
     verifyCommand = persistedSetup.verifyCommand;
     benchCommand = persistedSetup.benchCommand;
     subjectArea = persistedSetup.subjectArea;
+    localEvaluation = persistedSetup.localEvaluation;
     reviewCount = persistedSetup.reviewCount;
     emit(`init: resuming from durable Setup result (bench: ${benchCommand})`);
     opts.onProgress?.({
@@ -137,6 +144,7 @@ export async function initChallenge(opts: {
       message: "resuming the saved baseline command",
       command: benchCommand,
       logPath: path.join(paths.logsDir, "benchmark.log"),
+      localEvaluation,
     });
   } else {
     // Phase init.setup — dependency install before anything else.
@@ -273,9 +281,27 @@ export async function initChallenge(opts: {
     );
     if (!explore.ok) throw new Error(`Setup agent failed: ${explore.error ?? explore.output}`);
 
-    const structured = explore.structured ?? {};
-    if (structured.status === "needs-user-action") {
-      throw new Error(formatSetupUserAction(structured.userAction));
+    let structured = explore.structured ?? {};
+    const initialDecision = await resolveAutonomousSetupDecision(structured, {
+      stage: "setup-agent",
+      previousVerifyCommand: manifest.preSubmitCommand ?? manifest.benchmarkCommand,
+      previousBenchCommand: manifest.benchmarkCommand,
+      evidencePaths: [
+        path.join(repoRoot, "benchmark.json"),
+        path.join(paths.logsDir, "setup.log"),
+        paths.knowledgeBase,
+      ],
+    });
+    structured = initialDecision.structured;
+    if (
+      structured.status !== "ready" &&
+      (typeof structured.verifyCommand !== "string" ||
+        typeof structured.benchCommand !== "string")
+    ) {
+      throw new Error(
+        "Setup returned no autonomous readiness decision. " +
+          "Inspect .autoresearch/resolved-agents/setup/events.ndjson, then retry /autoresearch.",
+      );
     }
     verifyCommand = commandFromResult(
       structured.verifyCommand,
@@ -286,14 +312,16 @@ export async function initChallenge(opts: {
       typeof structured.subjectArea === "string" && structured.subjectArea.trim()
         ? structured.subjectArea.trim()
         : undefined;
+    localEvaluation = localEvaluationFromResult(structured.localEvaluation);
     writeSetupResult(setupResultPath, {
       checkpointFingerprint,
       verifyCommand,
       benchCommand,
       subjectArea,
+      localEvaluation,
       knowledgeBasePath: paths.knowledgeBase,
       reviewCount,
-      summary: explore.output,
+      summary: combineSetupSummaries(explore.output, initialDecision.summary),
     });
     opts.onProgress?.({
       stage: "setup-agent",
@@ -301,6 +329,7 @@ export async function initChallenge(opts: {
       message: "Setup agent selected effective local commands",
       command: benchCommand,
       logPath: path.join(paths.resolvedAgentsDir, "setup", "events.ndjson"),
+      localEvaluation,
     });
   }
 
@@ -316,6 +345,7 @@ export async function initChallenge(opts: {
     editablePaths: manifest.editablePaths,
     scorePath: manifest.scorePath,
     subjectArea,
+    localEvaluation,
   };
 
   // Establish the baseline score (real yukon CLIs run the benchmark once on
@@ -337,6 +367,7 @@ export async function initChallenge(opts: {
             attempt,
             maxAttempts: config.resilience.commandMaxAttempts,
             logPath: path.join(paths.logsDir, "benchmark.log"),
+            localEvaluation,
           });
           return baselineAdapter.bench(undefined, opts.signal);
         },
@@ -375,6 +406,7 @@ export async function initChallenge(opts: {
     message: "local baseline completed",
     command: benchCommand,
     logPath: path.join(paths.logsDir, "benchmark.log"),
+    localEvaluation,
   });
 
   const state = newLoopState(challenge);
@@ -393,13 +425,20 @@ export async function initChallenge(opts: {
   state.phase = "ready";
   saveState(stateDir, state);
   saveConfig(stateDir, config);
-  appendJournal(paths.journal, { phase: "ready", challenge: challenge.name, verifyCommand, benchCommand });
+  appendJournal(paths.journal, {
+    phase: "ready",
+    challenge: challenge.name,
+    verifyCommand,
+    benchCommand,
+    localEvaluation,
+  });
   emit(`init: ready (verify: ${verifyCommand} · bench: ${benchCommand})`);
   opts.onProgress?.({
     stage: "ready",
     status: "succeeded",
     message: "initialization complete",
     command: benchCommand,
+    localEvaluation,
   });
 
   return { state, config, stateDir };
@@ -458,6 +497,7 @@ export async function initChallenge(opts: {
       attempt,
       maxAttempts,
       logPath: path.join(paths.logsDir, "benchmark.log"),
+      localEvaluation,
     });
 
     const review = await telemetry.measure(
@@ -476,6 +516,7 @@ export async function initChallenge(opts: {
               attempt: agentAttempt,
               maxAttempts: config.resilience.agentMaxAttempts,
               logPath: path.join(paths.resolvedAgentsDir, "setup-review", "events.ndjson"),
+              localEvaluation,
             });
             return runner.run({
               role: "setup",
@@ -504,13 +545,26 @@ export async function initChallenge(opts: {
     if (!review.ok) {
       throw new Error(`Setup baseline review failed: ${review.error ?? review.output}`);
     }
-    const structured = review.structured ?? {};
-    if (structured.status === "needs-user-action") {
-      throw new Error(formatSetupUserAction(structured.userAction));
-    }
-    if (structured.status !== "ready") {
+    let structured = review.structured ?? {};
+    const reviewedDecision = await resolveAutonomousSetupDecision(structured, {
+      stage: "baseline-review",
+      previousVerifyCommand: verifyCommand,
+      previousBenchCommand: benchCommand,
+      evidencePaths: [
+        path.join(repoRoot, "benchmark.json"),
+        paths.knowledgeBase,
+        path.join(paths.logsDir, "benchmark.log"),
+        path.join(repoRoot, manifest.scorePath),
+      ],
+    });
+    structured = reviewedDecision.structured;
+    if (
+      structured.status !== "ready" &&
+      (typeof structured.verifyCommand !== "string" ||
+        typeof structured.benchCommand !== "string")
+    ) {
       throw new Error(
-        "Setup baseline review returned no readiness decision. " +
+        "Setup baseline review returned no autonomous readiness decision. " +
           "Inspect .autoresearch/resolved-agents/setup-review/events.ndjson, then retry /autoresearch.",
       );
     }
@@ -523,15 +577,21 @@ export async function initChallenge(opts: {
       subjectArea = structured.subjectArea.trim();
       challenge.subjectArea = subjectArea;
     }
+    localEvaluation = localEvaluationFromResult(
+      structured.localEvaluation,
+      localEvaluation,
+    );
+    challenge.localEvaluation = localEvaluation;
     reviewCount += 1;
     writeSetupResult(setupResultPath, {
       checkpointFingerprint,
       verifyCommand,
       benchCommand,
       subjectArea,
+      localEvaluation,
       knowledgeBasePath: paths.knowledgeBase,
       reviewCount,
-      summary: review.output,
+      summary: combineSetupSummaries(review.output, reviewedDecision.summary),
     });
     baselineAdapter = makeBaselineAdapter();
     opts.onProgress?.({
@@ -543,7 +603,141 @@ export async function initChallenge(opts: {
           : "Setup selected a revised benchmark command",
       command: benchCommand,
       logPath: path.join(paths.resolvedAgentsDir, "setup-review", "events.ndjson"),
+      localEvaluation,
     });
+  }
+
+  async function resolveAutonomousSetupDecision(
+    structured: Record<string, unknown>,
+    context: {
+      stage: "setup-agent" | "baseline-review";
+      previousVerifyCommand: string;
+      previousBenchCommand: string;
+      evidencePaths: string[];
+    },
+  ): Promise<{ structured: Record<string, unknown>; summary?: string }> {
+    if (structured.status === "blocked-external") {
+      throw new Error(formatSetupExternalBlocker(structured.externalBlocker));
+    }
+    if (structured.status !== "needs-user-action") return { structured };
+
+    const decisionRequest = describeSetupDecisionRequest(structured.userAction);
+    const decisionNumber = reviewCount + 1;
+    const decisionId =
+      context.stage === "setup-agent" ? "initial" : `review-${decisionNumber}`;
+    const decisionTaskPath = path.join(
+      setupTaskDir,
+      `setup-decision-task-${decisionId}.json`,
+    );
+    const decisionTask: SetupDecisionTaskV1 = {
+      schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+      taskId: `init-setup-decision-${decisionId}`,
+      kind: "init.decide",
+      role: "setup",
+      taskPath: decisionTaskPath,
+      stateDir,
+      resultPath: setupResultPath,
+      input: {
+        repoRoot,
+        manifestPath: path.join(repoRoot, "benchmark.json"),
+        knowledgeBasePath: paths.knowledgeBase,
+        previousVerifyCommand: context.previousVerifyCommand,
+        previousBenchCommand: context.previousBenchCommand,
+        decisionRequest,
+        evidencePaths: context.evidencePaths,
+      },
+    };
+    validateResearchTask(decisionTask);
+    atomicWriteJson(decisionTaskPath, decisionTask);
+    appendJournal(paths.journal, {
+      phase: "init.decide",
+      priorStage: context.stage,
+      decisionRequest: firstLine(decisionRequest),
+    });
+    emit("init: Setup is resolving its judgment call autonomously");
+    opts.onProgress?.({
+      stage: context.stage,
+      status: "running",
+      message: "Setup is choosing the safest documented local mode",
+      command: context.previousBenchCommand,
+      attempt: 1,
+      maxAttempts: config.resilience.agentMaxAttempts,
+      logPath: path.join(
+        paths.resolvedAgentsDir,
+        `setup-decision-${decisionId}`,
+        "events.ndjson",
+      ),
+    });
+
+    const decision = await telemetry.measure(
+      "setup.decide",
+      { scope: "init", attempt: decisionNumber },
+      () =>
+        retryOperation({
+          ...retryPolicy,
+          maxAttempts: config.resilience.agentMaxAttempts,
+          operation: (agentAttempt) => {
+            opts.onProgress?.({
+              stage: context.stage,
+              status: agentAttempt === 1 ? "running" : "retrying",
+              message: "Setup is choosing the safest documented local mode",
+              command: context.previousBenchCommand,
+              attempt: agentAttempt,
+              maxAttempts: config.resilience.agentMaxAttempts,
+              logPath: path.join(
+                paths.resolvedAgentsDir,
+                `setup-decision-${decisionId}`,
+                "events.ndjson",
+              ),
+            });
+            return runner.run({
+              role: "setup",
+              kind: "init.decide",
+              cwd: repoRoot,
+              stateDir,
+              input: {
+                ...decisionTask.input,
+                manifest,
+                taskPath: decisionTaskPath,
+                traceDir: path.join(
+                  paths.resolvedAgentsDir,
+                  `setup-decision-${decisionId}`,
+                ),
+              },
+              signal: opts.signal,
+            });
+          },
+          isSuccess: (result) =>
+            result.ok &&
+            (result.structured?.status === "ready" ||
+              result.structured?.status === "blocked-external"),
+          onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
+            emit(
+              `init: autonomous Setup decision failed (attempt ${attempt}/${maxAttempts}); ` +
+                `retrying in ${nextDelayMs}ms` +
+                (value ? ` · ${firstLine(value.error ?? value.output)}` : ""),
+            ),
+        }),
+      (result) =>
+        opts.signal?.aborted
+          ? "aborted"
+          : result.ok && result.structured?.status === "ready"
+            ? "ok"
+            : "error",
+    );
+
+    const resolved = decision.structured ?? {};
+    if (resolved.status === "blocked-external") {
+      throw new Error(formatSetupExternalBlocker(resolved.externalBlocker));
+    }
+    if (!decision.ok || resolved.status !== "ready") {
+      throw new Error(
+        `Setup could not resolve its local-evaluation decision autonomously: ${
+          decision.error ?? decision.output
+        }`,
+      );
+    }
+    return { structured: resolved, summary: decision.output };
   }
 }
 
@@ -555,6 +749,12 @@ function commandFromResult(value: unknown, fallback: string): string {
   return typeof value === "string" && value.trim() ? value.trim() : fallback;
 }
 
+function combineSetupSummaries(primary: string, decision: string | undefined): string {
+  return decision?.trim()
+    ? `${primary.trim()}\n\nAutonomous Setup decision:\n${decision.trim()}`
+    : primary;
+}
+
 function writeSetupResult(
   resultPath: string,
   input: {
@@ -562,6 +762,7 @@ function writeSetupResult(
     verifyCommand: string;
     benchCommand: string;
     subjectArea?: string;
+    localEvaluation: LocalEvaluationV1;
     knowledgeBasePath: string;
     reviewCount: number;
     summary: string;
@@ -576,6 +777,7 @@ function writeSetupResult(
     knowledgeBasePath: input.knowledgeBasePath,
     verifyCommand: input.verifyCommand,
     benchCommand: input.benchCommand,
+    localEvaluation: input.localEvaluation,
     checkpointFingerprint: input.checkpointFingerprint,
     reviewCount: input.reviewCount,
     ...(input.subjectArea ? { subjectArea: input.subjectArea } : {}),
@@ -597,6 +799,7 @@ function loadSetupResult(
     result.verifyCommand.trim() === "" ||
     typeof result.benchCommand !== "string" ||
     result.benchCommand.trim() === "" ||
+    !isLocalEvaluation(result.localEvaluation) ||
     typeof result.knowledgeBasePath !== "string" ||
     typeof result.summary !== "string" ||
     typeof result.reviewCount !== "number" ||
@@ -608,7 +811,50 @@ function loadSetupResult(
   return result as SetupResultV1;
 }
 
-function formatSetupUserAction(value: unknown): string {
+function localEvaluationFromResult(
+  value: unknown,
+  fallback?: LocalEvaluationV1,
+): LocalEvaluationV1 {
+  if (!isLocalEvaluation(value)) {
+    return (
+      fallback ?? {
+        fidelity: "reduced",
+        decision:
+          "Setup selected local commands without declaring their fidelity; treat them conservatively as a regression signal.",
+        limitations: ["Setup did not establish that the local commands cover the full evaluator."],
+        officialValidationRequired: true,
+      }
+    );
+  }
+  return {
+    fidelity: value.fidelity,
+    decision: value.decision.trim(),
+    limitations:
+      value.fidelity === "reduced" && value.limitations.length === 0
+        ? ["Setup selected reduced fidelity without identifying the uncovered evaluator paths."]
+        : value.limitations.map((limitation) => limitation.trim()),
+    officialValidationRequired:
+      value.fidelity === "reduced" || value.officialValidationRequired,
+  };
+}
+
+function isLocalEvaluation(value: unknown): value is LocalEvaluationV1 {
+  if (typeof value !== "object" || value === null) return false;
+  const evaluation = value as Record<string, unknown>;
+  return (
+    (evaluation.fidelity === "full" || evaluation.fidelity === "reduced") &&
+    typeof evaluation.decision === "string" &&
+    evaluation.decision.trim().length > 0 &&
+    Array.isArray(evaluation.limitations) &&
+    evaluation.limitations.every(
+      (limitation) =>
+        typeof limitation === "string" && limitation.trim().length > 0,
+    ) &&
+    typeof evaluation.officialValidationRequired === "boolean"
+  );
+}
+
+function describeSetupDecisionRequest(value: unknown): string {
   const action =
     typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   const reason =
@@ -627,22 +873,39 @@ function formatSetupUserAction(value: unknown): string {
     : typeof action.instructions === "string" && action.instructions.trim()
       ? [action.instructions.trim()]
       : [];
-  const owner =
-    typeof action.suggestedOwner === "string" && action.suggestedOwner.trim()
-      ? `Suggested owner: ${action.suggestedOwner.trim()}`
+  return [
+    reason,
+    location,
+    ...instructions.map((instruction) => `Requested action: ${instruction.trim()}`),
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function formatSetupExternalBlocker(value: unknown): string {
+  const blocker =
+    typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const reason =
+    typeof blocker.reason === "string" && blocker.reason.trim()
+      ? blocker.reason.trim()
+      : "Setup found a required external capability that is unavailable.";
+  const location =
+    typeof blocker.location === "string" && blocker.location.trim()
+      ? `Evidence: ${blocker.location.trim()}`
       : undefined;
-  const requiredAction =
-    instructions.length > 0
-      ? `Required action:\n${instructions.map((instruction) => `- ${instruction.trim()}`).join("\n")}`
-      : "Required action: Resolve the missing setup outside this agent.";
+  const instructions = Array.isArray(blocker.instructions)
+    ? blocker.instructions.filter(
+        (instruction): instruction is string =>
+          typeof instruction === "string" && instruction.trim().length > 0,
+      )
+    : [];
 
   return [
-    "Initialization paused: Setup needs user action before the harness can continue.",
+    "Initialization is blocked by an external requirement, not a Setup decision.",
     `Reason: ${reason}`,
     location,
-    requiredAction,
-    owner,
-    "Complete the requested work, then retry /autoresearch.",
+    ...instructions.map((instruction) => `- ${instruction.trim()}`),
+    "Provide the external capability, then retry /autoresearch.",
   ]
     .filter((line): line is string => line !== undefined)
     .join("\n");

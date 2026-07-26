@@ -21,6 +21,8 @@ export class MockAgentRunner implements AgentRunner {
         return this.initExplore(task);
       case "init.review":
         return this.initReview(task);
+      case "init.decide":
+        return this.initDecide(task);
       case "propose":
         return this.propose(task);
       case "implement":
@@ -56,6 +58,12 @@ export class MockAgentRunner implements AgentRunner {
         subjectArea,
         verifyCommand: manifest.preSubmitCommand ?? manifest.benchmarkCommand,
         benchCommand: manifest.benchmarkCommand,
+        localEvaluation: {
+          fidelity: "full",
+          decision: "Use the manifest-backed local verification and benchmark commands.",
+          limitations: [],
+          officialValidationRequired: false,
+        },
       },
       filesWritten: [kbPath],
     };
@@ -69,6 +77,31 @@ export class MockAgentRunner implements AgentRunner {
         status: "ready",
         verifyCommand: task.input.previousVerifyCommand,
         benchCommand: task.input.previousBenchCommand,
+        localEvaluation: {
+          fidelity: "full",
+          decision: "Retain the manifest-backed commands for a transient retry.",
+          limitations: [],
+          officialValidationRequired: false,
+        },
+      },
+      filesWritten: [],
+    };
+  }
+
+  private initDecide(task: AgentTask): AgentResult {
+    return {
+      ok: true,
+      output: "Selected the safest documented local mode without user interaction.",
+      structured: {
+        status: "ready",
+        verifyCommand: task.input.previousVerifyCommand,
+        benchCommand: task.input.previousBenchCommand,
+        localEvaluation: {
+          fidelity: "reduced",
+          decision: "Continue with the documented local mode selected by Setup.",
+          limitations: ["The local mode does not exercise the complete official evaluator."],
+          officialValidationRequired: true,
+        },
       },
       filesWritten: [],
     };

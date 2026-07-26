@@ -52,19 +52,21 @@ not devise a creative workaround for a missing verifier or dependency. Only a
 trivial, non-mutating readiness check is within scope.
 
 A timing-only override that keeps a score usable while recording failed
-correctness is not a correctness command. Do not apply such an override to
-`verifyCommand` or describe it as verified correctness. If this host cannot
-provide a reliable correctness command, return `needs-user-action` and explain
-the supported reduced-fidelity timing option separately.
+correctness is not a full correctness command. Do not describe it as verified
+correctness. If this host cannot provide full local correctness, choose the
+safest documented reduced local regression command yourself, return `ready`
+with `fidelity: "reduced"`, record every gap, and require official validation.
 
 Do not rerun the setup command. Do not run the performance benchmark. Do not
 load a large model merely to classify readiness or run expensive verification.
 The harness runs the baseline after Setup returns.
 
-If a dependency, command, or required configuration is missing, ambiguous, or
-must be handled somewhere else, stop and return `needs-user-action`. Tell the
-user what is needed, where to do it, and whether the user or another agent
-should own the work.
+Resolve ambiguous but repository-supported mode, flag, and hardware decisions
+yourself. If full evaluation is unavailable, choose reduced evaluation and
+continue. Stop only when no supported mode can execute without a genuinely
+external capability, such as unavailable credentials, an inaccessible
+required artifact, or a dependency the completed setup command could not
+install.
 
 ## Response
 
@@ -76,23 +78,31 @@ fenced JSON object and no text after it:
   "status": "ready",
   "subjectArea": "concise domain label",
   "verifyCommand": "existing correctness command",
-  "benchCommand": "existing performance benchmark command"
+  "benchCommand": "existing performance benchmark command",
+  "localEvaluation": {
+    "fidelity": "full or reduced",
+    "decision": "what Setup selected and why",
+    "limitations": [
+      "what local evaluation does not establish"
+    ],
+    "officialValidationRequired": false
+  }
 }
 ```
 
-When work is required outside Setup, do not continue. End with exactly one
-trailing fenced JSON object and no text after it:
+When a genuine external capability makes every supported local mode
+unexecutable, end with exactly one trailing fenced JSON object and no text
+after it:
 
 ```json
 {
-  "status": "needs-user-action",
-  "userAction": {
-    "reason": "why the harness is not ready",
-    "location": "where the work must happen",
+  "status": "blocked-external",
+  "externalBlocker": {
+    "reason": "why no supported local mode can execute",
+    "location": "where the blocker is evidenced",
     "instructions": [
-      "specific action to take"
-    ],
-    "suggestedOwner": "user or another agent"
+      "specific external action required"
+    ]
   }
 }
 ```

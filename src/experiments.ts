@@ -158,6 +158,22 @@ export type SetupReviewTaskV1 = ResearchTaskBaseV1<
   SetupReviewTaskInputV1
 >;
 
+export interface SetupDecisionTaskInputV1 {
+  repoRoot: string;
+  manifestPath: string;
+  knowledgeBasePath: string;
+  previousVerifyCommand: string;
+  previousBenchCommand: string;
+  decisionRequest: string;
+  evidencePaths: string[];
+}
+
+export type SetupDecisionTaskV1 = ResearchTaskBaseV1<
+  "init.decide",
+  "setup",
+  SetupDecisionTaskInputV1
+>;
+
 export interface ProfessorProposalTaskInputV1 {
   loop: number;
   objective: ObjectiveV1;
@@ -187,6 +203,8 @@ export interface PhdImplementationTaskInputV1 {
   editablePaths: string[];
   readOnlyPaths: string[];
   verifyCommand: string;
+  /** Setup's durable statement of whether this command is full or reduced validation. */
+  localEvaluation?: LocalEvaluationV1;
   benchmarkProhibited: true;
   previousVerifierReport?: string;
   requiredCompletionFields: string[];
@@ -275,6 +293,7 @@ export type MetaHarnessEvolutionTaskV1 = ResearchTaskBaseV1<
 export type ResearchTaskV1 =
   | SetupTaskV1
   | SetupReviewTaskV1
+  | SetupDecisionTaskV1
   | ProfessorProposalTaskV1
   | PhdImplementationTaskV1
   | PhdPostmortemTaskV1
@@ -323,6 +342,16 @@ export function validateResearchTask(input: unknown): ResearchTaskV1 {
       nonNegativeInteger(taskInput.benchmarkExitCode, "task.input.benchmarkExitCode");
       nonEmptyString(taskInput.benchmarkFailureTail, "task.input.benchmarkFailureTail");
       break;
+    case "init.decide":
+      expectedRole(task.role, "setup", task.kind);
+      absolutePath(taskInput.repoRoot, "task.input.repoRoot");
+      absolutePath(taskInput.manifestPath, "task.input.manifestPath");
+      absolutePath(taskInput.knowledgeBasePath, "task.input.knowledgeBasePath");
+      nonEmptyString(taskInput.previousVerifyCommand, "task.input.previousVerifyCommand");
+      nonEmptyString(taskInput.previousBenchCommand, "task.input.previousBenchCommand");
+      nonEmptyString(taskInput.decisionRequest, "task.input.decisionRequest");
+      absolutePathArray(taskInput.evidencePaths, "task.input.evidencePaths");
+      break;
     case "propose":
       expectedRole(task.role, "professor", task.kind);
       nonNegativeInteger(taskInput.loop, "task.input.loop");
@@ -349,6 +378,12 @@ export function validateResearchTask(input: unknown): ResearchTaskV1 {
       nonEmptyStringArray(taskInput.editablePaths, "task.input.editablePaths");
       stringArray(taskInput.readOnlyPaths, "task.input.readOnlyPaths");
       nonEmptyString(taskInput.verifyCommand, "task.input.verifyCommand");
+      if (taskInput.localEvaluation !== undefined) {
+        validateLocalEvaluation(
+          taskInput.localEvaluation,
+          "task.input.localEvaluation",
+        );
+      }
       if (taskInput.benchmarkProhibited !== true) {
         throw new Error("task.input.benchmarkProhibited must be true");
       }
@@ -430,11 +465,19 @@ interface ResearchResultBaseV1<Kind extends string> {
   error?: string;
 }
 
+export interface LocalEvaluationV1 {
+  fidelity: "full" | "reduced";
+  decision: string;
+  limitations: string[];
+  officialValidationRequired: boolean;
+}
+
 export interface SetupResultV1 extends ResearchResultBaseV1<"init.explore.result"> {
   subjectArea?: string;
   knowledgeBasePath: string;
   verifyCommand: string;
   benchCommand: string;
+  localEvaluation: LocalEvaluationV1;
   checkpointFingerprint: string;
   reviewCount: number;
 }
@@ -620,6 +663,18 @@ function validateObjective(input: unknown): void {
     "task.input.objective.minimumImprovement",
   );
   if (minimum < 0) throw new Error("task.input.objective.minimumImprovement must not be negative");
+}
+
+function validateLocalEvaluation(value: unknown, label: string): void {
+  const evaluation = record(value, label);
+  if (evaluation.fidelity !== "full" && evaluation.fidelity !== "reduced") {
+    throw new Error(`${label}.fidelity must be "full" or "reduced"`);
+  }
+  nonEmptyString(evaluation.decision, `${label}.decision`);
+  stringArray(evaluation.limitations, `${label}.limitations`);
+  if (typeof evaluation.officialValidationRequired !== "boolean") {
+    throw new Error(`${label}.officialValidationRequired must be boolean`);
+  }
 }
 
 function terminalStatus(value: unknown, label: string): CandidateTerminalStatus {

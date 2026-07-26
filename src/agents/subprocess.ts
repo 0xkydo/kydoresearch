@@ -13,6 +13,7 @@ const BUNDLED_TASK_PROMPTS_DIR = path.join(BUNDLED_PROMPTS_DIR, "tasks");
 const TASK_PROMPT_FILES: Partial<Record<TaskKind, string>> = {
   "init.explore": "init-explore.md",
   "init.review": "init-review.md",
+  "init.decide": "init-decide.md",
   propose: "propose.md",
   implement: "implement.md",
   "write-note": "write-note.md",

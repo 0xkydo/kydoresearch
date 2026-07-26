@@ -61,7 +61,7 @@ Before declaring readiness, Setup must:
 4. Correlate those requirements with the local host. It may use only small, non-mutating probes when the setup log and repository documentation do not already provide enough information.
 5. Select effective correctness and benchmark commands using only repository-supported commands and flags.
 6. Record the evidence, selected local mode, necessary flags, limitations, and fidelity gaps in `knowledge-base.md`.
-7. Return `needs-user-action` instead of guessing when the evidence is missing, ambiguous, or requires work outside Setup's authority.
+7. Resolve repository-supported choices autonomously. Return `blocked-external` only when every supported mode requires a capability Setup cannot obtain.
 
 Setup must not rerun setup, load a large model merely to classify readiness, run the performance benchmark, or execute another expensive validation command. The harness owns baseline measurement immediately after Setup returns.
 
@@ -99,7 +99,7 @@ For the motivating MLX Fast case, the expected result is that Setup recognizes t
 
 - A failed setup command remains a hard initialization failure.
 - A missing or unreadable setup log is actionable because Setup cannot inspect the evidence it was promised.
-- Unsupported or contradictory hardware guidance produces `needs-user-action` with the relevant location and requested action.
+- Unsupported or contradictory hardware guidance produces a documented reduced local-evaluation decision when possible, or `blocked-external` with the relevant evidence when no supported mode can execute.
 - Setup must distinguish a safe reduced-fidelity local mode from a broken environment. Reduced fidelity can be ready when the repository explicitly supports it and the limitation is documented.
 - Setup must not convert correctness failures into success unless the repository explicitly documents the local override and the returned command preserves visible failure metadata.
 
@@ -113,7 +113,7 @@ Add focused tests that verify:
 4. The prompt prohibits rerunning setup, benchmarks, large-model loads, or expensive readiness checks.
 5. Setup's returned `verifyCommand` and `benchCommand`, including environment prefixes, are persisted unchanged.
 6. The initial baseline uses Setup's returned benchmark command.
-7. Existing command fallbacks and `needs-user-action` behavior remain intact.
+7. Legacy `needs-user-action` output is converted into a bounded `init.decide` task so sessionless Setup workers cannot dead-end on an impossible interaction.
 8. No challenge-specific hardware threshold or MLX Fast flag is introduced into kydoresearch source.
 
 Tests should use temporary fixture repositories and synthetic setup-log notices. They must not depend on the developer machine's physical memory or execute a real challenge benchmark.

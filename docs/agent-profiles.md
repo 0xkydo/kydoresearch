@@ -32,6 +32,8 @@ extensions/autoresearch/
     metaharness.md
     tasks/
       init-explore.md
+      init-review.md
+      init-decide.md
       propose.md
       implement.md
       write-note.md
@@ -81,6 +83,9 @@ failure evidence, the harness may invoke one bounded review before the
 remaining command attempt. Setup identifies existing dependencies,
 correctness checks, benchmarks, editable paths, scoring direction, and
 uncertainties; it does not optimize candidate code or invent a new evaluator.
+It makes repository-supported mode and hardware decisions autonomously,
+records full or reduced local-evaluation fidelity, and stops only for a
+genuine external capability blocker.
 
 ### Professor
 
@@ -121,8 +126,9 @@ frozen.
 
 | Task kind | Role | Task prompt | Deliverable |
 |---|---|---|---|
-| `init.explore` | Setup | `tasks/init-explore.md` | Readiness classification or structured user action |
-| `init.review` | Setup | `tasks/init-review.md` | Evidence-backed command revision or structured user action after a failed baseline |
+| `init.explore` | Setup | `tasks/init-explore.md` | Readiness classification with a full or reduced local-evaluation decision |
+| `init.review` | Setup | `tasks/init-review.md` | Evidence-backed autonomous command revision after a failed baseline |
+| `init.decide` | Setup | `tasks/init-decide.md` | Compatibility fallback that resolves a prior user-judgment request autonomously |
 | `propose` | Professor | `tasks/propose.md` | Normalized experiment portfolio |
 | `implement` | PhD | `tasks/implement.md` | Scoped change and observed-check report |
 | `write-note` | PhD | `tasks/write-note.md` | Returned postmortem markdown; harness writes it |

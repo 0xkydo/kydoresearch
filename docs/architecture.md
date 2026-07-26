@@ -201,25 +201,32 @@ defined in [`agent-profiles.md`](agent-profiles.md).
    selects effective commands using only repository-supported flags.
 5. Atomically persist the returned verification and benchmark commands in
    `loops/init/setup-result.json`, keyed by the manifest, Git revision, and
-   effective Setup role. An interrupted initialization with a matching
+   effective Setup role. The checkpoint also records the full-or-reduced
+   `localEvaluation` decision. An interrupted initialization with a matching
    fingerprint resumes from this result instead of repeating successful setup
    and repository discovery.
 6. Run the baseline with the effective benchmark command and a fresh finite
    value parsed from `scorePath`. If its first attempt fails, materialize an
    `init.review` task containing the benchmark log, score path, exit code,
    failure tail, and previous commands. Setup performs one bounded
-   baseline-review and either returns repository-supported revised commands,
-   retains the command for a transient retry, or returns
-   `needs-user-action`. The second command attempt uses that decision.
+   baseline-review and either returns repository-supported revised commands or
+   retains the command for a transient retry. Setup makes supported mode and
+   flag decisions itself. If an older or custom Setup prompt still requests
+   user judgment, the harness materializes an `init.decide` task that requires
+   an autonomous full-or-reduced local-evaluation decision. Only a genuine
+   external capability blocker stops initialization. The second command
+   attempt uses that decision.
 7. Snapshot the complete baseline `editablePaths` surface under
    `runs/baseline/source/`, record its Git revision and score, set
    `bestCandidateId` to `baseline`, and persist phase `ready`.
 
 The extension installs a persistent initialization widget before step 3. Every
-structured progress event updates its current stage, command, attempt count,
-and authoritative log path. Setup-agent and baseline-review activity is
-therefore visible while Pi subprocesses run. A failure leaves the widget on
-screen with the actionable error and retry instruction.
+structured progress event updates its bordered stage, local-evaluation
+fidelity, command, attempt count, authoritative log path, and recent activity.
+Setup-agent, autonomous decision, and baseline-review work is therefore
+visible while Pi subprocesses run. A failure leaves the widget on screen with
+the actionable error and retry instruction. The research widget uses the same
+visual hierarchy for scores, candidates, controls, and recent evidence.
 
 The Setup role may use lightweight, non-mutating host probes when the setup log
 and repository instructions are insufficient. It never reruns setup, executes
@@ -228,9 +235,11 @@ invents hardware policy. Any reduced-fidelity local mode and unexercised
 official-hardware path remains explicit in `knowledge-base.md`.
 
 A timing-only escape hatch that publishes a usable score while recording
-failed correctness is not a correctness verifier. Setup must not place it in
-`verifyCommand` or claim full validation. When no reliable local correctness
-command exists, initialization pauses visibly for user action.
+failed correctness is not a full correctness verifier. Setup may select it
+only as an explicitly reduced local regression signal. The durable
+`localEvaluation` record stores the decision, limitations, fidelity, and
+official-validation requirement in `setup-result.json` and `state.json`.
+Initialization does not pause for a supported-mode judgment call.
 
 The baseline source snapshot is important: a candidate parent is an explicit
 artifact, not an assumption that Git `HEAD` represents the current best.

@@ -1,4 +1,5 @@
 import type { StatusReport } from "../../src/orchestrator.ts";
+import type { LocalEvaluationV1 } from "../../src/experiments.ts";
 
 export interface StatusRenderOptions {
   recentActivity?: string[];
@@ -20,6 +21,7 @@ export interface InitializationRenderState {
   maxAttempts?: number;
   logPath?: string;
   failure?: string;
+  localEvaluation?: LocalEvaluationV1;
   recentActivity: string[];
 }
 
@@ -48,23 +50,35 @@ export function renderInitializationLines(
     state.attempt !== undefined
       ? ` · attempt ${state.attempt}${state.maxAttempts ? `/${state.maxAttempts}` : ""}`
       : "";
+  const status = initializationStatus(state.status);
   const lines = [
-    `autoresearch · ${challengeName} · initialization`,
-    `stage: ${state.message}${attempt}`,
-    `status: ${state.status}`,
+    `╭─ AUTORESEARCH · ${challengeName}`,
+    `│  ${status.icon} ${status.label} · INITIALIZATION`,
+    `├─ ${initializationStageLabel(state.stage)}`,
+    `│  ${oneLine(state.message, 108)}${attempt}`,
   ];
-  if (state.command) lines.push(`command: ${oneLine(state.command, 120)}`);
-  if (state.logPath) lines.push(`log: ${state.logPath}`);
-  if (state.failure) lines.push(`failure: ${oneLine(state.failure, 180)}`);
+  if (state.localEvaluation) {
+    lines.push("├─ Local evaluation");
+    lines.push(...renderLocalEvaluation(state.localEvaluation));
+  }
+  if (state.command || state.logPath) {
+    lines.push("├─ Runtime");
+    if (state.command) lines.push(`│  command  ${oneLine(state.command, 102)}`);
+    if (state.logPath) lines.push(`│  log      ${oneLine(state.logPath, 106)}`);
+  }
+  if (state.failure) {
+    lines.push("├─ Needs attention");
+    lines.push(`│  ${oneLine(state.failure, 108)}`);
+  }
   const activity = state.recentActivity.filter(Boolean).slice(0, 3);
   if (activity.length > 0) {
-    lines.push("recent:");
-    lines.push(...activity.map((entry) => `  ${oneLine(entry, 140)}`));
+    lines.push("├─ Recent activity");
+    lines.push(...activity.map((entry) => `│  · ${oneLine(entry, 104)}`));
   }
   if (state.status === "failed") {
-    lines.push("retry: /autoresearch after resolving the reported issue");
+    lines.push("╰─ Retry /autoresearch after resolving the reported issue");
   } else {
-    lines.push("details: /autoresearch telemetry");
+    lines.push("╰─ Live evidence · /autoresearch telemetry");
   }
   return lines;
 }
@@ -77,18 +91,23 @@ export function renderStatusLines(
 ): string[] {
   const churchLine =
     report.churchTriggerThreshold > 0
-      ? `dry streak ${report.dryLoopStreak}/${report.churchTriggerThreshold} (church in ${Math.max(
+      ? `plateau ${report.dryLoopStreak}/${report.churchTriggerThreshold} · church in ${Math.max(
           0,
           report.churchTriggerThreshold - report.dryLoopStreak,
-        )})`
+        )}`
       : "church trigger off";
   const lines = [
-    `autoresearch · ${challengeName} · loop ${report.loop} · phase ${report.phase}`,
-    `stage: ${PHASE_LABELS[report.phase]}${renderCandidateCounts(report)}`,
-    `best local ${report.bestScore ?? "—"} · submitted ${report.bestSubmittedScore ?? "—"} · ${churchLine}`,
+    `╭─ AUTORESEARCH · ${challengeName}`,
+    `│  ${phaseIcon(report.phase)} LOOP ${report.loop} · ${PHASE_LABELS[report.phase].toUpperCase()}`,
+    `│  score  ${report.bestScore ?? "—"} local · ${report.bestSubmittedScore ?? "—"} submitted · ${scoreDirectionLabel(report.scoreDirection)}`,
+    `│  ${churchLine}`,
   ];
+  if (report.localEvaluation) {
+    lines.push("├─ Local evaluation");
+    lines.push(...renderLocalEvaluation(report.localEvaluation));
+  }
   if (report.ideas.length > 0) {
-    lines.push("candidates:");
+    lines.push(`├─ Candidates · ${renderCandidateCounts(report)}`);
     for (const idea of report.ideas) {
       const maxAttempts = idea.maxVerifyAttempts;
       const attempt =
@@ -100,22 +119,26 @@ export function renderStatusLines(
         idea.localScore !== undefined
           ? ` · score ${idea.localScore}${scoreDelta(idea.localScore, idea.comparisonScore, report.scoreDirection)}`
           : "";
-      lines.push(`  ${idea.id} · ${idea.status}${attempt}${parent}${score}`);
-      lines.push(`    ${oneLine(idea.title, 100)}`);
+      lines.push(
+        `│  ${candidateIcon(idea.status)} ${idea.id} · ${candidateStatusLabel(idea.status)}${attempt}${parent}${score}`,
+      );
+      lines.push(`│     ${oneLine(idea.title, 100)}`);
       if (idea.lastVerifyError) {
-        lines.push(`    last failure: ${oneLine(idea.lastVerifyError, 110)}`);
+        lines.push(`│     ! ${oneLine(idea.lastVerifyError, 100)}`);
       }
     }
   }
   if (report.recovery) {
+    lines.push("├─ Recovery");
     lines.push(
-      `recovery: ${report.recovery.scope} failed ${report.recovery.consecutiveFailures}× · ` +
-        `${report.recovery.message}${report.recovery.nextRetryAt ? ` · retry ${report.recovery.nextRetryAt}` : ""}`,
+      `│  ↻ ${report.recovery.scope} · ${report.recovery.consecutiveFailures} failure(s) · ` +
+        `${oneLine(report.recovery.message, 76)}${report.recovery.nextRetryAt ? ` · retry ${report.recovery.nextRetryAt}` : ""}`,
     );
   }
   if (report.metaHarness) {
+    lines.push("├─ Meta-harness");
     lines.push(
-      `metaharness: ${report.metaHarness.phase} · generation ${report.metaHarness.generation} · ` +
+      `│  ${report.metaHarness.phase} · generation ${report.metaHarness.generation} · ` +
         `champion ${report.metaHarness.championCandidateId}` +
         (report.metaHarness.activeCandidateId
           ? ` · evaluating ${report.metaHarness.activeCandidateId}`
@@ -125,18 +148,21 @@ export function renderStatusLines(
           : ""),
     );
   }
-  lines.push(`advisor: ${report.lastAdvisorNotes.length} note(s) last loop · taskboard: ${report.taskboardOpen} open`);
+  lines.push("├─ Research controls");
+  lines.push(
+    `│  advisor ${report.lastAdvisorNotes.length} note(s) · taskboard ${report.taskboardOpen} open`,
+  );
   const activity = (options.recentActivity ?? []).filter(Boolean).slice(0, 3);
   if (activity.length > 0) {
-    lines.push("recent:");
-    lines.push(...activity.map((entry) => `  ${oneLine(entry, 120)}`));
+    lines.push("├─ Recent activity");
+    lines.push(...activity.map((entry) => `│  · ${oneLine(entry, 104)}`));
   }
-  lines.push("details: /autoresearch inspect <candidate> · timing: /autoresearch telemetry");
+  lines.push("╰─ Inspect /autoresearch inspect <candidate> · Timing /autoresearch telemetry");
   return lines;
 }
 
 function renderCandidateCounts(report: StatusReport): string {
-  if (report.ideas.length === 0) return "";
+  if (report.ideas.length === 0) return "none";
   const active = report.ideas.filter(
     (idea) => idea.status === "implementing" || idea.status === "verifying",
   ).length;
@@ -151,7 +177,80 @@ function renderCandidateCounts(report: StatusReport): string {
     completed > 0 ? `${completed} complete` : "",
     failed > 0 ? `${failed} failed` : "",
   ].filter(Boolean);
-  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+  return parts.length > 0 ? parts.join(" · ") : "none";
+}
+
+function initializationStatus(
+  status: InitializationRenderState["status"],
+): { icon: string; label: string } {
+  switch (status) {
+    case "running":
+      return { icon: "●", label: "RUNNING" };
+    case "retrying":
+      return { icon: "↻", label: "RETRYING" };
+    case "succeeded":
+      return { icon: "✓", label: "COMPLETE" };
+    case "failed":
+      return { icon: "!", label: "STOPPED" };
+    case "resuming":
+      return { icon: "↻", label: "RESUMING" };
+  }
+}
+
+function initializationStageLabel(stage: InitializationStage): string {
+  switch (stage) {
+    case "setup":
+      return "Dependency setup";
+    case "setup-agent":
+      return "Repository and hardware decision";
+    case "baseline":
+      return "Local baseline";
+    case "baseline-review":
+      return "Baseline recovery decision";
+    case "ready":
+      return "Ready";
+  }
+}
+
+function renderLocalEvaluation(evaluation: LocalEvaluationV1): string[] {
+  const reduced = evaluation.fidelity === "reduced";
+  const lines = [
+    `│  ${reduced ? "△" : "✓"} ${evaluation.fidelity.toUpperCase()} LOCAL EVALUATION${
+      evaluation.officialValidationRequired ? " · official validation required" : ""
+    }`,
+    `│  ${oneLine(evaluation.decision, 106)}`,
+  ];
+  for (const limitation of evaluation.limitations.slice(0, 2)) {
+    lines.push(`│  · ${oneLine(limitation, 104)}`);
+  }
+  return lines;
+}
+
+function phaseIcon(phase: StatusReport["phase"]): string {
+  if (phase === "done") return "✓";
+  if (phase === "paused") return "!";
+  if (phase === "ready" || phase === "uninitialized") return "○";
+  return "●";
+}
+
+function scoreDirectionLabel(direction: "+" | "-" | undefined): string {
+  if (direction === "+") return "higher wins";
+  if (direction === "-") return "lower wins";
+  return "direction unknown";
+}
+
+function candidateIcon(status: string): string {
+  if (status === "failed") return "×";
+  if (status === "done-improved") return "◆";
+  if (status.startsWith("done-")) return "✓";
+  if (status === "implementing" || status === "verifying" || status === "benching") {
+    return "◐";
+  }
+  return "○";
+}
+
+function candidateStatusLabel(status: string): string {
+  return status.replaceAll("-", " ").toUpperCase();
 }
 
 function scoreDelta(
