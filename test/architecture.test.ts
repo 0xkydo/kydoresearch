@@ -66,6 +66,18 @@ describe("architecture documentation contract", () => {
     }
   });
 
+  it("documents hardware-aware setup evidence and local fidelity", () => {
+    for (const detail of [
+      "setup-log evidence",
+      "local hardware",
+      "repository-supported flags",
+      "effective benchmark command",
+      "reduced-fidelity",
+    ]) {
+      expect(architecture).toContain(detail);
+    }
+  });
+
   it("defines simple bounded roles and separate task prompts", () => {
     for (const detail of [
       "| Setup |",

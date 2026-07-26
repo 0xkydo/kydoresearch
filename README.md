@@ -153,10 +153,14 @@ editable paths for confirmation. Initialization then:
 
 1. validates the manifest and Git worktree;
 2. runs the manifest's `setupCommand`;
-3. asks the setup agent to map the repository and distinguish the fastest
-   correctness check from the performance benchmark;
-4. records one baseline benchmark and an editable-source snapshot; and
-5. starts the research loop.
+3. asks the setup agent to read the completed setup log, relate repository
+   guidance to local hardware, and select documented effective correctness and
+   benchmark commands;
+4. records any local profile flags and reduced-fidelity or official-hardware
+   validation gaps in the knowledge base;
+5. runs one baseline with the effective benchmark command, archives an
+   editable-source snapshot; and
+6. starts the research loop.
 
 Initialization itself does not submit. The research loop that follows may sync
 challenge data and submit an improvement automatically.
@@ -168,6 +172,8 @@ for a durable, abort-safe pause. Run `/autoresearch` again to resume the saved
 checkpoint.
 
 Setup and main-checkout evaluation output streams to `.autoresearch/logs/`.
+The Setup agent treats the latest successful block in `setup.log` as evidence;
+it does not rerun setup or the benchmark while classifying the repository.
 Candidate verification and benchmark output is attributed under
 `.autoresearch/runs/<candidateId>/logs/`.
 

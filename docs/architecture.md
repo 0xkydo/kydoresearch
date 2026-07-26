@@ -193,14 +193,22 @@ defined in [`agent-profiles.md`](agent-profiles.md).
    Add `.autoresearch/` to `.git/info/exclude` without changing `.gitignore`.
 3. Run `setupCommand` with `setupTimeoutMs`, streamed logs, bounded command
    retries, and abort propagation.
-4. Materialize a typed setup task and invoke the setup role to identify
-   correctness/performance commands and build the initial knowledge base,
-   using the model retry budget.
-5. Run the baseline benchmark with bounded retries and parse a fresh finite
-   value from `scorePath`.
+4. Materialize a typed setup task containing `setupCommand`, `setupLogPath`,
+   and `setupSucceeded`. The setup role reads the latest successful block as
+   setup-log evidence, relates repository requirements to local hardware, and
+   selects effective commands using only repository-supported flags.
+5. Persist the returned verification and benchmark commands, then run the
+   baseline with the effective benchmark command, bounded retries, and a fresh
+   finite value parsed from `scorePath`.
 6. Snapshot the complete baseline `editablePaths` surface under
    `runs/baseline/source/`, record its Git revision and score, set
    `bestCandidateId` to `baseline`, and persist phase `ready`.
+
+The Setup role may use lightweight, non-mutating host probes when the setup log
+and repository instructions are insufficient. It never reruns setup, executes
+the benchmark, loads a large model merely for readiness classification, or
+invents hardware policy. Any reduced-fidelity local mode and unexercised
+official-hardware path remains explicit in `knowledge-base.md`.
 
 The baseline source snapshot is important: a candidate parent is an explicit
 artifact, not an assumption that Git `HEAD` represents the current best.
