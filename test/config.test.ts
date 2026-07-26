@@ -28,6 +28,7 @@ describe("loadConfig", () => {
     expect(config.execution.verifyTimeoutMs).toBe(DEFAULT_CONFIG.execution.verifyTimeoutMs);
     expect(config.execution.benchmarkTimeoutMs).toBe(123_456);
     expect(config.resilience).toEqual(DEFAULT_CONFIG.resilience);
+    expect(config.metaHarness).toEqual(DEFAULT_CONFIG.metaHarness);
     expect(config.mockLoopDelayMs).toBe(0);
   });
 

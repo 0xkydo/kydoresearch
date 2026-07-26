@@ -1,94 +1,290 @@
 # kydoresearch
 
-A [Pi](https://github.com/earendil-works/pi) extension for Yukon AutoResearch
-challenges such as [www.ecdsa.fail](https://www.ecdsa.fail) and
-[mlx.fast](https://mlx.fast).
+Autonomous benchmark research for [Pi](https://pi.dev).
 
-It runs a durable research loop: a professor proposes ideas, parallel PhD
-agents implement them in isolated git worktrees, the harness serializes local
-verification and benchmarking, and only the best qualifying result is applied
-to the main checkout and submitted.
+<p align="left">
+  <a href="https://pi.dev/docs/latest/packages"><img alt="Pi package" src="https://img.shields.io/badge/Pi-Package-8B5CF6?style=flat-square"></a>
+  <a href="./package.json"><img alt="Package version" src="https://img.shields.io/github/package-json/v/0xkydo/kydoresearch?style=flat-square&label=version&color=2563EB"></a>
+  <a href="https://pi.dev/docs/latest"><img alt="Requires Pi 0.75.0 or newer" src="https://img.shields.io/badge/Pi-%E2%89%A50.75.0-06B6D4?style=flat-square"></a>
+  <a href="https://github.com/0xkydo/kydoresearch"><img alt="Primary language" src="https://img.shields.io/github/languages/top/0xkydo/kydoresearch?style=flat-square&color=3178C6"></a>
+  <a href="https://github.com/0xkydo/kydoresearch/commits/main"><img alt="Last commit" src="https://img.shields.io/github/last-commit/0xkydo/kydoresearch?style=flat-square&color=22C55E"></a>
+  <a href="./package.json"><img alt="MIT license" src="https://img.shields.io/badge/license-MIT-22C55E?style=flat-square"></a>
+</p>
+
+kydoresearch turns a Yukon AutoResearch challenge repository into a durable,
+repeatable multi-agent optimization loop. A professor proposes experiments,
+parallel PhD agents implement them in isolated Git worktrees, and the harness
+verifies, benchmarks, selects, and submits only a qualifying winner.
+
+An opt-in meta-harness can wrap that loop and evolve the professor, PhD, and
+advisor role scaffolding itself. Each harness profile is evaluated only by the
+same frozen challenge verifier and is promoted only after producing a verified
+objective improvement.
+
+It is designed for challenges such as
+[ECDSA.fail](https://www.ecdsa.fail) and
+[MLX Fast](https://mlx.fast), but the harness itself is driven by the
+repository's `benchmark.json`.
+
+> [!WARNING]
+> A real run is an unattended code-execution and submission workflow. It runs
+> repository commands, starts model subprocesses that may incur charges, calls
+> the challenge CLI, and can submit an improving result automatically. There is
+> currently no dry-run or per-submission approval gate. Start in a clean,
+> disposable clone or a contained environment with only the credentials it
+> needs.
+
+## What it does
+
+- A **professor** searches prior evidence and proposes falsifiable experiments
+  with explicit parent candidates.
+- Independent **PhD agents** implement those experiments in separate,
+  parent-materialized Git worktrees.
+- The harness—not an LLM—audits changed paths, runs correctness checks,
+  serializes benchmarks, and compares direction-aware scores.
+- An **advisor** reviews completed evidence and can pause the loop when a
+  configured blocker fires.
+- After repeated dry loops, **God** keeps its existing role: a warm, honest,
+  hopeful conversation that helps the professor recommit to a concrete
+  direction.
+- Every candidate remains inspectable after the run: task, parent, source,
+  diff, score, logs, integrity report, agent trace, and postmortem.
+
+The core safety invariant is that model output never goes directly from an idea
+worktree to submission. A winning candidate is copied to the main checkout,
+then passes correctness and performance gates again before submission.
+
+## Why kydoresearch
+
+- **Parallel exploration:** sibling experiments run concurrently without
+  sharing source changes.
+- **Measured promotion:** correctness precedes performance, benchmarks are
+  globally serialized, and only a meaningful improvement can win.
+- **Explicit lineage:** each candidate identifies the archived source it
+  extends; Git `HEAD` is not assumed to be the current research parent.
+- **Durable execution:** atomic state and explicit resume checkpoints survive
+  clean stops, process interruption, and Pi restarts.
+- **Filesystem memory:** an append-only ledger makes prior experiments
+  searchable while sealed run directories retain the complete evidence.
+- **Bounded failure:** one failed agent, verification attempt, or benchmark
+  does not crash the rest of the research loop.
+- **Bilevel evolution:** optional outer-loop profiles learn from the complete
+  filesystem archive while a fingerprinted verifier and last-known-good
+  rollback profile remain fixed.
 
 ## Quickstart: ecdsafail
 
-Prerequisites: Pi 0.75.0 or newer, a clean cloned challenge repository with
-`benchmark.json`, and working credentials for the models you select. Installing
-the extension is global; do it once:
+### Prerequisites
+
+- macOS or Linux with `/bin/bash` and Git
+- [Pi](https://pi.dev/docs/latest) 0.75.0 or newer
+- a clean, cloned Yukon challenge repository containing `benchmark.json`
+- working provider credentials for every configured role model
+- an authenticated challenge CLI if the run should sync or submit
+
+Install Pi if needed:
+
+```bash
+npm install -g --ignore-scripts @earendil-works/pi-coding-agent
+pi --version
+```
+
+Authenticate with Pi's `/login` command or configure the provider API keys
+required by your selected models.
+
+### 1. Install the extension
+
+Pi packages execute with your user account's permissions. Review this
+repository before installing it, then install globally:
 
 ```bash
 pi install git:github.com/0xkydo/kydoresearch
+pi list
 ```
 
-Then start Pi at the root of your ecdsafail challenge checkout:
+The installation is global and only needs to be done once. To update installed
+Pi packages later, run `pi update --extensions`.
+
+### 2. Open a clean challenge checkout
 
 ```bash
 cd /path/to/ecdsafail-challenge
-git status
+git status --short
 pi
 ```
 
-Before the first run, open `/autoresearch config`, select **settings**, and
-cycle `runner` from `mock` to `subprocess`. Review the role models and command
-timeouts, then close the panel; it saves `.autoresearch/config.json` even in a
-fresh repo. The equivalent JSON setting is:
+Do not start from a checkout with valuable uncommitted edits under the
+manifest's `editablePaths`; applying a winner replaces those paths on the main
+checkout. kydoresearch never commits challenge changes automatically.
 
-```json
-{ "runner": "subprocess" }
-```
+### 3. Configure real agents
 
-Run `/autoresearch`. Confirm the displayed setup and benchmark commands. Init
-runs the manifest's `setupCommand`, asks Setup to sort the repository's existing
-dependency, correctness, and performance pieces into the harness buckets, and
-records one baseline benchmark before the research loop starts. If required
-work belongs elsewhere, initialization pauses with instructions for the user or
-another agent. ecdsafail is detected as lower-is-better.
-
-Use `/autoresearch status` while it runs and `/autoresearch stop` to pause.
-Setup, verification, and benchmark output streams to
-`.autoresearch/logs/{setup,verify,benchmark}.log`; running `/autoresearch` again
-resumes the saved state.
-
-The real loop uses the challenge CLI to read/sync submissions and can submit an
-improving result automatically. It also starts paid model subprocesses. Review
-your challenge account, model choices, limits, and local changes before leaving
-it unattended.
-
-## The loop
+Before the first run, open:
 
 ```text
-init (once per repo)
-  validate manifest + git repo → dependency setup → setup agent → baseline
+/autoresearch config
+```
+
+Select **settings** and cycle `runner` from `mock` to `subprocess`. Review the
+professor, PhD, God, advisor, and meta-harness models, thinking levels, prompts,
+tool access, loop limits, meta-harness budgets, timeouts, and submission model.
+Closing the panel saves `.autoresearch/config.json`, including in a fresh
+repository.
+
+The minimum equivalent JSON change is:
+
+```json
+{
+  "runner": "subprocess"
+}
+```
+
+The default `mock` runner exists for the bundled fixture demo. Do not use it as
+a dry-run mode against a real challenge.
+
+### 4. Start the loop
+
+```text
+/autoresearch
+```
+
+On first use, Pi displays the detected setup command, benchmark command, and
+editable paths for confirmation. Initialization then:
+
+1. validates the manifest and Git worktree;
+2. runs the manifest's `setupCommand`;
+3. asks the setup agent to map the repository and distinguish the fastest
+   correctness check from the performance benchmark;
+4. records one baseline benchmark and an editable-source snapshot; and
+5. starts the research loop.
+
+Initialization itself does not submit. The research loop that follows may sync
+challenge data and submit an improvement automatically.
+
+### 5. Operate and resume
+
+Use `/autoresearch status` for an immediate snapshot and `/autoresearch stop`
+for a durable, abort-safe pause. Run `/autoresearch` again to resume the saved
+checkpoint.
+
+Setup and main-checkout evaluation output streams to `.autoresearch/logs/`.
+Candidate verification and benchmark output is attributed under
+`.autoresearch/runs/<candidateId>/logs/`.
+
+```bash
+tail -f .autoresearch/logs/setup.log
+tail -f .autoresearch/runs/L001-I1/logs/verify.log
+tail -f .autoresearch/runs/L001-I1/logs/benchmark.log
+```
+
+## The experiment loop
+
+```text
+init (once per repository)
+  validate manifest + Git → setup command → setup agent → baseline archive
+
 research loop
-  sync leaderboard + competitor notes → knowledge base
-  professor proposes up to maxIdeasPerLoop ideas
-  PhDs implement in parallel (one detached git worktree each)
-    verify fails → retry up to maxVerifyAttempts, then write failure notes
-    verify passes → benchmark under a global lock
+  sync leaderboard and competitor notes
+  search the knowledge base, compact experiment ledger, and selected run evidence
+  materialize an immutable professor task
+  checkpoint normalized proposals before candidate creation
+  professor proposes typed experiments with explicit archived parents
+  PhDs implement in parallel (one parent-materialized worktree each)
+    audit changed paths before evaluation
+    verify fails → retry the same requirement with the latest verifier report
+    verify passes → benchmark under a global lock with candidate-specific logs
+  archive every terminal candidate and write a result-aware postmortem
   best meaningful improvement → apply to main → re-verify → re-bench → submit
-  advisor reviews the loop; a blocker pauses it
+  advisor reviews the loop; a configured blocker pauses it
   repeated dry loops → Professor goes to church and reflects with God → next loop
 ```
 
-State lives in `.autoresearch/` inside the challenge repo. It is hidden through
-`.git/info/exclude`, rejected if it falls under the manifest's
-`editablePaths`, and never intentionally added to a submission.
+Pi subprocess sessions are deliberately fresh and ephemeral. Durable
+operational state and research memory live in `.autoresearch/`, not in child
+conversation history. When meta-harness evolution is disabled, role
+configuration remains fixed. When enabled, the outer controller may promote
+only validated candidate-local professor, PhD, and advisor souls, prompts, and
+tool policies; verifier behavior, models, budgets, schemas, God, and controller
+source remain fixed.
+
+## Optional meta-harness evolution
+
+Set `metaHarness.enabled` to `true` to evolve the research harness around
+ordinary loops. The feature is opt-in because it adds an outer model role and
+therefore additional inference cost.
+
+The meta-harness proposer reads prior harness profiles plus the complete inner
+evidence archive—source, diffs, metrics, logs, postmortems, and Pi traces—from
+the filesystem. It writes one versioned profile that can change professor,
+PhD, and advisor souls, prompts, and tool allowlists. The controller validates
+and hashes the profile, runs the configured number of ordinary research loops,
+and promotes it only if the unchanged challenge verifier records real
+direction-aware improvement and the inner-candidate success-rate gate passes.
+On a fresh archive, `H0000` first completes one ordinary loop so `H0001` has
+real failure and success evidence to inspect.
+
+The fixed comparison substrate is fingerprinted at
+`.autoresearch/metaharness/verifier.json`. Any drift in the challenge contract
+or tracked files outside `editablePaths`, or in the captured model and runtime
+policy, fixed role artifacts, or controller/evaluation implementation pauses
+the campaign. Candidate profiles cannot change model identity, thinking level,
+operation budgets, score parsing, promotion thresholds, setup, God, or the
+outer proposer.
+
+For unattended use, the outer controller provides atomic checkpoints,
+completed-loop reconciliation, bounded exponential recovery, safe rollback
+before inner artifacts become immutable, a last-known-good champion, proposal
+circuit breaking, a durable heartbeat, and explicit wall-time and generation
+budgets. See [`docs/metaharness.md`](docs/metaharness.md) for the lifecycle,
+archive, reliability behavior, limitations, and the Meta-Harness/bilevel
+research references behind the design.
 
 ## Commands
 
 | Command | Effect |
 |---|---|
-| `/autoresearch` or `/autoresearch run` | Initialize and start, or resume saved state. |
-| `/autoresearch status` | Show phase, loop, scores, ideas, dry streak, and advisor notes immediately. |
-| `/autoresearch config` | Edit runner, roles, prompts, thresholds, timeouts, advisor, and submit model. |
-| `/autoresearch stop` | Abort the active operation safely and persist a paused state. |
+| `/autoresearch` | Initialize and start, or resume saved state. |
+| `/autoresearch run` | Explicit form of `/autoresearch`. |
+| `/autoresearch status` | Show the phase, loop, scores, ideas, dry streak, advisor notes, and open task count. |
+| `/autoresearch config` | Edit runner, role models, souls, prompts, thresholds, timeouts, advisor behavior, and submission model. |
+| `/autoresearch stop` | Abort active work safely and persist a resumable paused state. |
 
-The extension also registers `taskboard` for shared work and `research_notes`
-for `.autoresearch/` notes and knowledge-base access.
+The extension also registers two tools for interactive and subprocess agents:
+
+| Tool | Purpose |
+|---|---|
+| `taskboard` | List, add, and update shared tasks in `.autoresearch/taskboard.json`. |
+| `research_notes` | List and read notes, read the knowledge base, or append knowledge. |
+
+## Supported challenge contract
+
+kydoresearch reads the Yukon v1 `benchmark.json` schema. These fields are
+required:
+
+```jsonc
+{
+  "name": "challenge-name",
+  "setupCommand": "./setup.sh",       // shell string or argv array
+  "benchmarkCommand": "./benchmark.sh",
+  "scorePath": "score.json",
+  "direction": "-",                   // "-" minimizes; "+" maximizes
+  "editablePaths": ["src/solution"]
+}
+```
+
+`preSubmitCommand` and `description` are optional. Known manifest identities
+map to the `ecdsafail` and `mlxfast` CLIs; otherwise, the first executable in
+the repository's `bin/` directory is used. If no CLI is detected, local
+research can still run, but sync is skipped and submission is disabled.
+
+The setup agent may select a faster correctness command than the performance
+benchmark. Every successful candidate still passes both the selected
+correctness gate and the manifest-backed score gate before it can win.
 
 ## Configuration — `.autoresearch/config.json`
 
-These are the current defaults from `src/config.ts`. JSON files may omit fields;
-loading merges them with these defaults.
+These are the current defaults from `src/config.ts`. Persisted JSON may omit
+fields; loading deep-merges it with these defaults.
 
 ```jsonc
 {
@@ -98,36 +294,42 @@ loading merges them with these defaults.
     "setup": {
       "model": "anthropic/claude-sonnet-5",
       "thinking": "medium",
-      "tools": ["read", "bash", "write", "grep", "find", "ls"]
+      "tools": ["read", "write", "edit", "bash"]
     },
     "professor": {
       "model": "anthropic/claude-fable-5",
       "thinking": "high",
-      "tools": ["read", "grep", "find", "ls"]
+      "tools": ["read", "bash"]
       // Optional overrides:
-      // "prompt": "professor.md", // stable role profile only
+      // "soul": ".autoresearch/agents/professor/SOUL.md",
+      // "prompt": "professor.md"
     },
     "phd": {
       "model": "anthropic/claude-sonnet-5",
       "thinking": "medium",
-      "tools": ["read", "bash", "edit", "write", "grep", "find", "ls"]
+      "tools": ["read", "write", "edit", "bash"]
     },
     "god": {
       "model": "anthropic/claude-fable-5",
       "thinking": "high",
-      "tools": ["read", "write", "grep", "find", "ls"]
+      "tools": ["read", "write"]
     },
     "advisor": {
       "model": "anthropic/claude-fable-5",
       "thinking": "medium",
-      "tools": []
+      "tools": ["read"]
+    },
+    "metaharness": {
+      "model": "anthropic/claude-fable-5",
+      "thinking": "high",
+      "tools": ["read", "write", "edit", "bash"]
     }
   },
   "churchTriggerThreshold": 3, // consecutive dry loops before church; 0 disables
   "maxVerifyAttempts": 3,
   "maxIdeasPerLoop": 5,
   "maxLoops": null, // null means unlimited
-  "minImprovement": 0.005, // relative epsilon; applied in the manifest direction
+  "minImprovement": 0.005, // 0.5% relative improvement in the manifest direction
   "mockLoopDelayMs": 0, // demo-only pause after each mock loop
   "execution": {
     "setupTimeoutMs": 1800000,
@@ -147,26 +349,91 @@ loading merges them with these defaults.
   "advisor": {
     "enabled": true,
     "watchdogFile": "WATCHDOG.md"
-  }
-  // Optional model name passed to CLIs that require `submit --model`:
+  },
+  "metaHarness": {
+    "enabled": false, // opt in to bilevel harness-profile evolution
+    "evaluationLoops": 1,
+    "maxGenerations": null,
+    "maxWallTimeMs": null,
+    "maxRecoveryAttempts": 5,
+    "retryBaseDelayMs": 1000,
+    "retryMaxDelayMs": 60000,
+    "maxConsecutiveProposalFailures": 3,
+    "proposalCooldownLoops": 2,
+    "minCandidateSuccessRate": 0.5,
+    "maxProfileBytes": 524288
+  },
+  // Optional name passed to CLIs that require `submit --model`:
   // "submitModelName": "my-model-label"
 }
 ```
 
-`thinking` accepts `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`.
-The defaults give each role a least-privilege Pi tool allowlist; an empty array
-passes `--no-tools`. Each subprocess receives a stable role profile followed by
-the current task prompt. A bare role `prompt` filename resolves under
-`extensions/autoresearch/prompts/roles/`; a path such as
-`.autoresearch/prompts/roles/custom.md` resolves from the challenge repo.
-Challenge-specific task overrides use the matching filename under
-`.autoresearch/prompts/tasks/`, such as `tasks/propose.md`.
-Older configs using `godTriggerThreshold` are loaded as
-`churchTriggerThreshold`.
+### Role settings
 
-The panel exposes professor, PhD, God, and advisor role settings and role
-profiles. The setup role runs only during init, so edit its JSON directly if
-needed. `WATCHDOG.md` provides optional advisor rules:
+- `model` uses Pi's `provider/model` reference.
+- `thinking` accepts `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`.
+- The defaults use explicit role-level Pi tool allowlists. Omitting `tools` in
+  a persisted partial role retains that role's default allowlist. A different
+  array customizes it; an empty array passes `--no-tools`.
+- Each role has a bundled
+  `extensions/autoresearch/agents/<role>/SOUL.md`. The soul contains stable
+  identity, responsibilities, boundaries, and evidence habits. There is
+  intentionally **no repository-level `SOUL.md`**.
+- A bare `soul` filename resolves inside that role's bundled directory. A path
+  such as `.autoresearch/agents/professor/SOUL.md` resolves from the challenge
+  repository.
+- `prompt` remains the dynamic task-prompt template for compatibility. A bare
+  filename resolves from `extensions/autoresearch/prompts/`; a path such as
+  `.autoresearch/prompts/custom.md` resolves from the challenge repository.
+- Challenge-specific task suffixes may override the matching file under
+  `.autoresearch/prompts/tasks/`, such as `tasks/propose.md`.
+- The setup role runs only during initialization. Edit its JSON directly when
+  its defaults need to change.
+- The meta-harness role runs only when `metaHarness.enabled` is true. Its own
+  soul, prompt, model, and thinking level stay fixed during a campaign; it
+  proposes candidate-local overrides for professor, PhD, and advisor.
+- Older configs using `godTriggerThreshold` load it as
+  `churchTriggerThreshold`.
+
+Current loop data belongs in a versioned immutable task JSON, not in a soul.
+Because ambient Pi context loading is disabled, applicable repository
+instruction files are snapshotted into the candidate archive and named in the
+PhD task explicitly. Postmortem invocations use a per-task read-only tool
+policy; the harness writes their returned Markdown.
+
+### Loop and execution settings
+
+- `maxLoops: null` is unlimited. Set a finite value before unattended use when
+  you need a hard research budget.
+- `minImprovement` is a relative threshold interpreted in the manifest's score
+  direction.
+- `maxVerifyAttempts` applies per candidate. Verification exhaustion fails
+  only that candidate.
+- Execution timeouts are milliseconds. Increase them only after inspecting the
+  corresponding streamed log.
+- `submitModelName` is used for challenge CLIs, such as MLX Fast, that require
+  `submit --model`.
+
+### Meta-harness settings
+
+- `evaluationLoops` pins one validated profile to that many complete ordinary
+  loops before promotion or rollback.
+- `maxGenerations`, `maxWallTimeMs`, and the ordinary `maxLoops` are
+  independent campaign budgets. Null means unlimited.
+- `maxRecoveryAttempts`, `retryBaseDelayMs`, and `retryMaxDelayMs` bound
+  exponential recovery from fatal inner-loop failures.
+- `maxConsecutiveProposalFailures` opens the proposal circuit breaker;
+  `proposalCooldownLoops` controls how long the last-known-good champion runs
+  before another outer proposal.
+- `minCandidateSuccessRate` prevents a profile from being promoted when its
+  inner candidates fail too often, even if one score improves.
+- `maxProfileBytes` bounds the candidate manifest and referenced role files.
+
+### Advisor watchdog
+
+The advisor can add notes or pause the loop with a blocker. Its optional
+repository-relative `WATCHDOG.md` supports a severity threshold and simple
+rules:
 
 ```md
 severity-threshold: nit
@@ -176,7 +443,7 @@ rules:
   text: "Two dry loops; consider changing idea family."
 ```
 
-See [`docs/agent-profiles.md`](docs/agent-profiles.md) for the five complete
+See [`docs/agent-profiles.md`](docs/agent-profiles.md) for the six complete
 role contracts, including their authority, evidence policy, and output schemas.
 
 ## Overnight failure policy
@@ -201,11 +468,87 @@ Successful idea work is checkpointed throughout. An unfinished loop does not
 count toward `maxLoops`, so a transient failure on the final configured loop
 cannot make the harness declare completion early.
 
+## State, memory, and recovery
+
+All runtime data lives in `.autoresearch/` inside the challenge repository:
+
+```text
+.autoresearch/
+  state.json                authoritative loop state and resume checkpoints
+  config.json               runner, role, limit, timeout, and advisor settings
+  journal.ndjson            append-only operational transitions
+  ledger.ndjson             compact index of completed candidate experiments
+  knowledge-base.md         human-readable research navigation
+  leaderboard.json          last parsed submission snapshot
+  taskboard.json            shared persisted task board
+  loops/                    immutable loop tasks and non-candidate traces
+  runs/<candidateId>/       sealed empirical evidence for each candidate
+  resolved-agents/          effective role configuration snapshots
+  ideas/                    compatibility idea specifications
+  logs/                     setup and main-checkout evaluation output
+  notes/                    advisor, God, and submission notes
+  worktrees/<candidateId>/  active or intentionally retained failed checkout
+  metaharness/              outer state, frozen verifier, profiles, traces,
+                            evaluations, ledger, frontier, and heartbeat
+```
+
+The directory is added to `.git/info/exclude`, not `.gitignore`, and
+initialization refuses to continue if `.autoresearch/` falls under an editable
+path. The harness never intentionally includes it in a submission.
+
+`state.json` is written atomically and is the operational resume source of
+truth. `ledger.ndjson` is the professor's compact search index. `runs/`
+contains the evidence behind every ledger entry. A sealed run is immutable,
+and resume repairs a sealed candidate whose ledger entry was interrupted.
+
+The useful files in a candidate run are:
+
+| Path | What it tells you |
+|---|---|
+| `task.json` | The immutable role requirement for this candidate. |
+| `proposal.json` | Observation, hypothesis, intervention, expected result, falsifier, and evidence references. |
+| `parent.json` | Explicit parent candidate, base revision, and archived parent source. |
+| `source/` | The exact editable files that were evaluated. |
+| `diff.patch` | What changed relative to the declared parent candidate. |
+| `metrics.json` | Score, comparison score, commands, timing, and terminal outcome. |
+| `integrity.json` | Whether anything outside the allowed editable surface changed. |
+| `logs/` | Candidate-specific verifier and benchmark output. |
+| `postmortem.md` | What the experiment taught the research program. |
+| `agent/` | Effective soul, immutable task context, invocation metadata, and raw Pi JSONL trace. |
+
+Successful and superseded worktrees are removed only after their evidence is
+sealed and indexed. Failed worktrees remain for diagnosis.
+
+A local checkpoint prevents ordinary resume from repeating a recorded
+submission. No local state file can make the external CLI transactional,
+however: a hard kill after remote acceptance but before the local result is
+persisted leaves a narrow duplicate-submission risk.
+
+## Security and operational guidance
+
+kydoresearch inherits [Pi's security
+model](https://pi.dev/docs/latest/security): Pi extensions and agent tools run
+with the permissions of the account that launched them. Project trust, tool
+allowlists, and Git worktrees are not operating-system sandboxes.
+
+For real or unattended runs:
+
+1. use a disposable clone, container, VM, or other OS-level sandbox;
+2. expose only the source tree and credentials the challenge requires;
+3. review `benchmark.json`, setup scripts, role souls, prompts, and tool access;
+4. set finite `maxLoops`, appropriate timeouts, and provider spending limits;
+5. inspect the challenge account and current Git diff before and after the run;
+6. use `/autoresearch stop` instead of killing Pi when possible.
+
+The harness isolates competing candidates for Git coordination and audits
+their changed paths before evaluation. It does not isolate model subprocesses
+or challenge commands from the host operating system.
+
 ## Mock demo
 
-The repository includes deterministic mock agents and
-`fixtures/mock-challenge/`, so the complete state machine can be exercised
-without model calls or a real leaderboard:
+The repository includes deterministic agents and
+`fixtures/mock-challenge/`, so the complete orchestration path can be exercised
+without provider calls or a real leaderboard:
 
 ```bash
 cp -R fixtures/mock-challenge /tmp/kydoresearch-mock
@@ -217,43 +560,76 @@ pi -e /path/to/kydoresearch/extensions/autoresearch/index.ts
 # In Pi: /autoresearch
 ```
 
-The default `"runner": "mock"` is intended for this fixture. For real research,
-`"runner": "subprocess"` starts bounded `pi --mode json` processes using each
-role's model, thinking level, prompt, and tool allowlist.
+The default `"runner": "mock"` is intended for this fixture. The fixture still
+uses real Git worktrees, shell commands, verification, scoring, archives,
+notes, and a local mock challenge CLI.
+
+For real research, `"runner": "subprocess"` starts a fresh bounded
+`pi --mode json --no-session` worker for each role invocation. It prefers the
+active Pi executable, disables ambient extensions, skills, prompt templates,
+and context files, appends the effective role soul as system context, applies
+the role's tool policy, and retains the raw JSONL event stream.
 
 ## Troubleshooting
 
 - **Pi is too old:** run `pi --version`. kydoresearch requires Pi 0.75.0 or
   newer. Run `pi update`, restart Pi, and retry `/autoresearch`.
+- **`/autoresearch` is unavailable after install:** run `pi list` and confirm
+  `git:github.com/0xkydo/kydoresearch` is present, then restart Pi. Re-run
+  `pi install git:github.com/0xkydo/kydoresearch` if it is missing.
 - **No `benchmark.json`:** Pi is not at a Yukon challenge root. `cd` into the
   cloned challenge repository and retry.
 - **Not a git repository:** clone the challenge rather than copying only its
   source files. Confirm `git rev-parse --is-inside-work-tree` prints `true`.
-- **Setup fails:** read `.autoresearch/logs/setup.log`, run the manifest's
-  `setupCommand` manually, fix the reported dependency error, and retry.
+- **Setup fails:** inspect `.autoresearch/logs/setup.log`, run the manifest's
+  `setupCommand` manually, fix the dependency error, and retry.
 - **Benchmark command is missing or fails:** inspect `benchmarkCommand` in
   `benchmark.json`, confirm its executable exists and is executable, then read
-  `.autoresearch/logs/benchmark.log`.
-- **A long command appears stuck:** `/autoresearch status` shows the current
-  phase. Tail the matching file in `.autoresearch/logs/`; increase the
-  `execution` timeout only after confirming the process is making progress.
+  the applicable main-checkout log or
+  `.autoresearch/runs/<candidateId>/logs/benchmark.log`.
+- **A long command appears stuck:** `/autoresearch status` shows the active
+  phase. Tail the matching main-checkout or candidate log; increase its timeout
+  only after confirming useful progress.
 - **The loop uses canned ideas:** open `/autoresearch config` and change
   `runner` from `mock` to `subprocess`.
+- **A role subprocess fails immediately:** verify the configured
+  `provider/model`, provider authentication, soul and prompt paths, and tool
+  allowlist. Confirm the same model works in a normal Pi session.
+- **A candidate is rejected before verification:** inspect its
+  `integrity.json` and `diff.patch`. The changed-path audit found an edit
+  outside the declared surface or another integrity mismatch.
+- **The run is paused after a restart:** run `/autoresearch status`, inspect
+  the saved state and logs, then use `/autoresearch` to resume.
+- **Meta-harness pauses for verifier drift:** inspect
+  `.autoresearch/metaharness/verifier.json` and the journal. Restore the frozen
+  challenge substrate or start a new campaign; do not overwrite the contract
+  to mix incomparable results.
+- **Outer proposals keep failing:** inspect the candidate's `agent/` trace and
+  profile validation error. The champion continues during configured cooldown
+  loops unless the inner loop itself exhausted recovery.
+- **Failed worktrees remain:** this is intentional. Inspect
+  `.autoresearch/worktrees/<candidateId>/` and the sealed run evidence before
+  removing one with normal Git worktree hygiene.
 
 ## Development
 
 ```bash
-npm install
+git clone https://github.com/0xkydo/kydoresearch.git
+cd kydoresearch
+npm ci
 npm run typecheck
 npm test
+git diff --check
 ```
 
-For local extension development:
+Load the checkout directly while developing:
 
 ```bash
 cd /path/to/challenge-repo
 pi -e /path/to/kydoresearch/extensions/autoresearch/index.ts
 ```
 
-See [`docs/architecture.md`](docs/architecture.md) for the state machine and
-component boundaries.
+See [`docs/architecture.md`](docs/architecture.md) for component boundaries,
+state-machine invariants, resume semantics, and the verification strategy.
+Coding agents and contributors should also read [`AGENTS.md`](AGENTS.md)
+before changing implementation contracts or lifecycle boundaries.

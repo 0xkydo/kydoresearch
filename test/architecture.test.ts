@@ -9,18 +9,18 @@ const architecture = fs.readFileSync(
   "utf8",
 );
 const profiles = fs.readFileSync(path.join(repoRoot, "docs", "agent-profiles.md"), "utf8");
-const roleFiles = ["setup", "professor", "phd", "god", "advisor"].map((role) =>
+const roleFiles = ["setup", "professor", "phd", "god", "advisor", "metaharness"].map((role) =>
   fs.readFileSync(
-    path.join(repoRoot, "extensions", "autoresearch", "prompts", "roles", `${role}.md`),
+    path.join(repoRoot, "extensions", "autoresearch", "agents", role, "SOUL.md"),
     "utf8",
   ),
 );
 const godRole = fs.readFileSync(
-  path.join(repoRoot, "extensions", "autoresearch", "prompts", "roles", "god.md"),
+  path.join(repoRoot, "extensions", "autoresearch", "agents", "god", "SOUL.md"),
   "utf8",
 );
 const setupRole = fs.readFileSync(
-  path.join(repoRoot, "extensions", "autoresearch", "prompts", "roles", "setup.md"),
+  path.join(repoRoot, "extensions", "autoresearch", "agents", "setup", "SOUL.md"),
   "utf8",
 );
 const setupTask = fs.readFileSync(
@@ -71,6 +71,7 @@ describe("architecture documentation contract", () => {
       "| PhD |",
       "| God |",
       "| Advisor |",
+      "| Meta-harness |",
       "Shared boundaries",
       "Default tools",
       "tasks/church.md",
@@ -93,9 +94,8 @@ describe("architecture documentation contract", () => {
   });
 
   it("keeps Setup focused on organization and explicit readiness pauses", () => {
-    expect(setupRole).toContain("readiness and organization, not invention");
-    expect(setupRole).toContain("already installed and usable");
-    expect(setupRole).not.toMatch(/^## Personality$/m);
+    expect(setupRole).toContain("repository cartographer and experiment-contract compiler");
+    expect(setupRole).toContain("Confirm that setup produced a usable environment");
     expect(setupTask).toContain('"status": "needs-user-action"');
     expect(setupTask).toContain("user or another agent");
     expect(setupTask).not.toContain("Optimization levers");

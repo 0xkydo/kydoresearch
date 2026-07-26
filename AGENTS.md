@@ -1,325 +1,193 @@
-# AGENTS.md
+# Repository Instructions for Coding Agents
 
-This file is the operating guide for agents working anywhere in this
-repository. It applies to the whole tree.
+## Purpose
 
-## What this repository is
+`kydoresearch` is a Pi extension plus a Pi-independent TypeScript core for
+durable autonomous research loops against Yukon benchmark repositories. This
+file governs changes to the repository; it is not a runtime role soul.
 
-`kydoresearch` is a TypeScript [Pi](https://github.com/earendil-works/pi)
-extension for Yukon AutoResearch challenges. It runs a durable research loop:
+Read these before architectural changes:
 
-1. initialize and benchmark a challenge checkout;
-2. ask a Professor agent for independent ideas;
-3. let PhD agents implement those ideas in isolated git worktrees;
-4. verify candidates and benchmark them under a global lock;
-5. apply the best meaningful candidate to the main checkout;
-6. re-verify, re-benchmark, and submit through the challenge adapter;
-7. record Advisor feedback and, after repeated dry loops, a church reflection.
+1. `README.md` for the human product contract.
+2. `docs/architecture.md` for component boundaries, lifecycle, retry, and
+   recovery behavior.
+3. `docs/pi-native-agent-plan.md` for Pi-native agent and evidence decisions.
+4. `docs/metaharness.md` for the optional bilevel controller and frozen
+   evaluator contract.
+5. `docs/agent-profiles.md` before changing roles, prompts, tools, or schemas.
 
-The extension-facing layer is deliberately thin. The orchestration core is
-Pi-independent and receives model, process, challenge, and event ports so it
-can be exercised deterministically.
+Start with `git status --short --branch`. Preserve unrelated user changes.
 
-## Read this first
+## Fixed Product Decisions
 
-Before changing code:
+- Keep the Pi extension as the interactive control plane. The orchestration
+  core must not import Pi UI APIs.
+- Keep Pi workers ephemeral and sessionless. Durable memory belongs in the
+  filesystem, not child conversations.
+- Keep meta-harness evolution opt-in. It may evolve only candidate-local
+  Professor, PhD, and Advisor souls, prompts, and tool allowlists through
+  `src/metaharness.ts`.
+- The meta-harness must not mutate the verifier, models, thinking levels,
+  budgets, retries, score parser, promotion rule, setup or God roles, outer
+  proposer, schemas, controller source, or prior evidence.
+- There is no repository-level `SOUL.md`. The only stable souls are the six
+  role-local files under `extensions/autoresearch/agents/`.
+- Leave God's role, trigger, and tone unchanged: God remains a warm, honest,
+  hopeful plateau-recovery conversation, not a search controller.
+- Do not add automatic commits to challenge repositories.
+- Do not claim that tool allowlists or worktrees are an operating-system
+  security sandbox.
+- Preserve legacy `{ "title", "spec" }` proposals, version-1 state, the
+  legacy `god` resume phase, and `godTriggerThreshold` config migration.
 
-1. Run `git status --short --branch`. The worktree may contain user changes;
-   preserve them and do not reset, overwrite, or reformat unrelated work.
-2. Read `README.md` for the user-facing contract.
-3. Read `docs/architecture.md` for state transitions, persistence,
-   concurrency, retry, and component boundaries.
-4. Read `docs/agent-profiles.md` before changing roles, task prompts, model
-   configuration, or agent output schemas.
-5. Read `GOAL.md` when the request is to continue the production-readiness
-   roadmap or when its safety rules are relevant.
-
-`GOAL.md` also documents a one-work-item/one-commit autonomous workflow. Follow
-that commit/checklist workflow only when the user asks to advance that roadmap.
-For ordinary tasks, stay within the user's requested scope and do not commit,
-edit the progress log, or change checklist state unless asked.
-
-Do not read or execute material under `~/.claude/`, `~/.agents/`, or
-`.claude/skills/`; those belong to other agent systems and are not repository
-instructions.
-
-## Non-negotiable safety rules
-
-- Never run a real leaderboard `submit` or `sync` while developing or testing.
-  Stub the command boundary and use the bundled mock challenge.
-- Never invoke real paid LLM subprocesses in automated tests. Test
-  `PiSubprocessRunner` with a fake `pi` executable that emits canned JSON
-  events.
-- Never modify `~/Desktop/repos/ecdsafail-challenge`. If real-challenge shape
-  must be inspected, work on a disposable copy such as `/tmp/ecdsa-dev` and
-  keep all submission/sync paths disabled.
-- Never commit challenge state or generated artifacts: `.autoresearch/`,
-  challenge worktrees, logs, notes, scores, or fixture runtime output.
-- Do not weaken correctness gates, manufacture measurements, edit score files
-  to simulate success, or conflate a correctness failure with a performance
-  result.
-- Treat agent and command output as untrusted data. Validate structured
-  payloads and keep facts, inferences, and unknowns distinguishable.
-- Preserve abort behavior. Long-running subprocesses, retries, waits,
-  verification, and benchmarks must honor `AbortSignal`.
-- A bug fix starts with a failing regression test whenever practical.
-
-## Repository map
+## System Boundary
 
 ```text
-extensions/autoresearch/
-  index.ts              Pi extension entry point and session restoration
-  commands.ts           /autoresearch run|status|config|stop lifecycle
-  config-ui.ts          interactive harness and role configuration
-  widget.ts             compact live status rendering
-  notes-tool.ts         .autoresearch note/knowledge-base tool
-  taskboard-tool.ts     shared taskboard tool registration
-  prompts/
-    roles/*.md          stable role identity and standing boundaries
-    tasks/*.md          invocation-specific procedure and output contract
-
-src/
-  orchestrator.ts       durable research-loop state machine
-  init.ts               manifest/git checks, setup, exploration, baseline
-  config.ts             config schema, defaults, migration, deep merge
-  state.ts              persisted state schema and atomic snapshots
-  phases.ts             loop phases and idea terminal statuses
-  retry.ts              bounded retry/backoff and abort-aware delay
-  exec.ts               bounded streaming process abstraction
-  worktree.ts           isolated worktrees and winner application
-  advisor.ts            WATCHDOG.md parsing and blocker filtering
-  taskboard.ts          atomic shared task persistence
-  util.ts               atomic JSON, journaling, scoring, mutex
-  agents/
-    types.ts            AgentRunner port, roles, tasks, result schemas
-    subprocess.ts       real pi JSON subprocess runner
-    mock.ts             deterministic fixture runner
-    mock-scripts.ts     canned mock research behavior
-  challenge/
-    types.ts            challenge adapter port and manifest types
-    detect.ts           benchmark.json parsing and CLI detection
-    adapter.ts          only boundary allowed to run challenge commands
-
-fixtures/mock-challenge/ deterministic, local-only end-to-end challenge
-test/                    Vitest unit, integration, resume, and contract tests
-docs/                    architecture and agent-role contracts
-scripts/codex-loop.sh    optional GOAL.md autonomous worker
+interactive Pi
+  -> extensions/autoresearch/       commands, UI, tools, notifications
+  -> src/metaharness.ts             optional durable bilevel supervisor
+  -> src/orchestrator.ts            durable research state machine
+       -> src/experiments.ts        versioned research contracts
+       -> src/archive.ts            sealed candidate evidence and ledger
+       -> src/worktree.ts           isolated parent-materialized candidates
+       -> src/integrity.ts          pre-evaluation changed-path audit
+       -> src/challenge/            deterministic command boundary
+       -> src/agents/subprocess.ts  fresh isolated Pi invocation
 ```
 
-## Core architecture and invariants
+`AgentRunner`, `ChallengeAdapter`, and `ExecPort` are deliberate ports. Extend
+those boundaries rather than coupling the core to the extension.
 
-The normal state flow is:
+## Role and Prompt Ownership
 
-```text
-ready
-  -> loop.syncing
-  -> loop.proposing
-  -> loop.ideas
-  -> loop.finalizing
-  -> loop.end
-  -> church? -> next loop | paused | done
-```
+- Setup classifies existing harness inputs and readiness; it does not optimize.
+- Professor proposes evidence-backed, falsifiable, explicit-parent experiments.
+- PhD implements one bounded task in one detached worktree.
+- Advisor is a passive, read-only evidence watchdog.
+- God handles the church reflection after repeated dry loops.
+- Meta-harness diagnoses outer-loop evidence and writes only its assigned draft
+  profile and candidate-local Professor/PhD/Advisor artifacts.
 
-Keep these invariants intact:
+Stable identity and standing boundaries belong in
+`extensions/autoresearch/agents/<role>/SOUL.md`. Dynamic task procedure and
+structured output live in prompt templates and versioned task JSON. Do not put
+current loop state into souls. Preserve the harness as the owner of worktrees,
+verification, benchmarks, winner selection, state, submission, pause, and
+resume.
 
-- `Orchestrator` depends on `AgentRunner`, `ChallengeAdapter`, `ExecPort`, and
-  an event callback. Do not import Pi UI APIs into `src/`.
-- `YukonCliAdapter` is the sole challenge-command boundary for setup,
-  correctness, benchmark, submission, submission history, and sync.
-- Idea pipelines may run in parallel, but git worktree registry mutations are
-  serialized and only one benchmark may execute at a time.
-- Every PhD edits a detached worktree. Only a selected candidate's complete
-  `editablePaths` are copied to the main checkout.
-- A candidate must pass verification and benchmarking again on main before
-  submission is allowed.
-- Score comparisons must use the manifest direction (`"+"` maximize or `"-"`
-  minimize) through `isImprovement`/`betterScore`; do not add raw
-  higher-is-better assumptions.
-- `minImprovement` is a relative, direction-aware threshold and must behave
-  sensibly for negative and zero scores.
-- One idea's model, verify, or benchmark failure must not kill sibling ideas or
-  the whole loop. Failed worktrees are intentionally retained for diagnosis.
-- Retry counts are total attempts, including the first call. Preserve bounded
-  exponential backoff and the overnight circuit breaker.
-- Advisory operations such as leaderboard refresh, notes, Advisor, and church
-  have documented fallbacks. Proposal and submission are durable checkpoints.
-- Submission retries reconcile remote submissions first. Never mark an
-  ambiguous or exhausted submission successful.
-- Persist resume/idempotency state before moving past an externally visible
-  effect. `resumePhase`, `pendingSummary`, terminal idea state, cleanup queues,
-  and recovery state exist to prevent duplicate work and submissions.
-- `state.json` is the authoritative atomic snapshot; `journal.ndjson` is an
-  append-only operational history. Use the helpers in `state.ts` and `util.ts`
-  rather than ad hoc writes.
-- `.autoresearch/` must remain outside the manifest's editable paths and hidden
-  with `.git/info/exclude`, never by modifying the challenge's `.gitignore`.
+## Durable State and Evidence
 
-When changing state or phase behavior, reason through interruption at every
-await point, backward compatibility with older snapshots, duplicate external
-effects, cleanup after resume, and aborts that must not consume research
-attempts.
+`.autoresearch/` must stay outside `editablePaths` and be hidden with
+`.git/info/exclude`, never a challenge `.gitignore` edit.
 
-## Agent prompt contracts
+- `state.json` is the authoritative atomic operational checkpoint.
+- `journal.ndjson` is append-only operational history.
+- `ledger.ndjson` is the compact append-only terminal candidate index.
+- `runs/<candidateId>/` contains authoritative empirical evidence.
+- `knowledge-base.md` is navigation, not the sole memory store.
+- Pi traces retain effective soul, rendered context, invocation metadata, and
+  raw JSONL events.
+- Failed worktrees are retained; successful worktrees are disposable only
+  after archive sealing and indexing.
 
-Prompts are intentionally split:
+Every terminal candidate must retain immutable task, proposal, and parent
+records; exact editable-source snapshot; parent-relative diff; metrics and
+evaluation provenance; integrity result; verifier and benchmark logs;
+postmortem; sealed run record; and exactly one ledger entry. Resume must repair
+a sealed candidate missing its ledger entry.
 
-- `prompts/roles/<role>.md` defines stable identity, beliefs, style, authority,
-  and standing safety rules. Role files must not contain task placeholders or
-  assume a specific invocation.
-- `prompts/tasks/<task>.md` defines current context, procedure, deliverable,
-  and the trailing structured output schema.
+Git `HEAD` is not the research parent. Every candidate names an explicit
+archived parent, and the complete archived `editablePaths` surface is
+materialized into its detached worktree. Deletions must propagate. Siblings
+may run in parallel, but worktree registry mutations are serialized and the
+benchmark lock globally serializes performance measurement.
 
-The bundled roles are Setup, Professor, PhD, God, and Advisor. The task kinds
-are `init.explore`, `propose`, `implement`, `write-note`, `church`, and
-`advise`.
+## Overnight Reliability Rules
 
-Preserve these boundaries:
+- Retry counts are total attempts, including the first call.
+- Keep bounded exponential backoff and preserve `AbortSignal` through process
+  execution, retries, and waits.
+- Setup, proposal, implementation, verification, benchmark, submission, and
+  worktree operations use the configured retry budgets.
+- One idea's model, integrity, verify, or benchmark failure must not kill
+  sibling ideas or the loop.
+- Advisory sync, leaderboard fetch, notes, Advisor, and church work have
+  non-fatal fallbacks. Cached leaderboard evidence is preferable to stopping.
+- Submission is not advisory. Reconcile remote submissions before each retry,
+  preserve an exhausted candidate as resumable, and never mark an ambiguous
+  submission successful.
+- Snapshot the main editable surface before finalist application. A failed
+  finalist falls through to the next qualifying candidate; restore the
+  snapshot if none ships.
+- Persist cleanup queues and retry them at later checkpoints.
+- Repeated systemic loop failures resume the same durable phase with longer
+  backoff until the configured circuit breaker pauses for human review.
+- Persist idempotency state before externally visible effects. Never duplicate
+  proposals, candidate archives, cleanup, or submissions on resume.
 
-- Setup classifies existing harness inputs and readiness; it does not invent
-  new verification machinery.
-- Professor proposes evidence-backed, falsifiable, independent experiments.
-- PhD makes scoped worktree edits and reports observed evidence honestly.
-- God is a stable identity; the church dialogue and its trigger belong only in
-  the church task.
-- Advisor is independent and uses `nit`, `concern`, or `blocker` according to
-  evidence and operational risk.
-- The harness—not an agent—owns worktrees, verification, benchmarks, winner
-  selection, state, submission, pause, and resume.
-- Challenge overrides may replace task files under
-  `.autoresearch/prompts/tasks/`; retain the expected structured schema so the
-  harness can parse the result.
+Meta-harness recovery is separate from inner-loop recovery. Pin one validated
+profile to a complete evaluation window, re-check the frozen evaluator fingerprint
+before proposal and after evaluation, reconcile completed loops
+from durable history, and roll back only before immutable proposal output
+exists. Otherwise fail-stop.
 
-Update `docs/agent-profiles.md` and its contract tests when changing these
-responsibilities or schemas.
+## Pi Worker and Safety Rules
 
-## TypeScript conventions
+The subprocess runner must use a fresh `pi --mode json -p --no-session`
+process, disable ambient extensions/skills/templates/context files, append the
+role soul as system context, apply tool policy, keep traces inside
+`.autoresearch/`, and terminate process groups on timeout or abort.
 
-- The project is ESM (`"type": "module"`). Local imports include the `.ts`
-  extension.
-- Use `node:` specifiers for Node built-ins.
-- The compiler is strict and enables `noUncheckedIndexedAccess`. Prefer
-  `unknown` plus explicit narrowing over `any` or unchecked casts.
-- Use `import type` for type-only dependencies.
-- Follow the existing style: two-space indentation, double quotes, semicolons,
-  trailing commas in multiline structures, and small focused helpers.
-- Keep public data and port shapes explicit with interfaces or discriminated
-  unions. Preserve exhaustive phase/status handling.
-- Inject side-effectful behavior (`ExecPort`, runners, delays, adapters) so
-  tests remain deterministic.
-- Convert expected subprocess/provider failures into typed results at their
-  boundary. Throw only when the caller's recovery policy is supposed to handle
-  the failure.
-- Error messages shown through extension commands should explain what failed,
-  where to inspect logs, and what the user can do next.
-- Use atomic writes for durable JSON. Do not introduce read-modify-write races
-  around shared state, taskboard data, git metadata, or benchmarks.
-- There is no configured formatter or linter. Avoid unrelated formatting
-  churn.
+Because ambient context loading is disabled, implementation tasks explicitly
+reference archived snapshots of applicable `AGENTS.md`, `CLAUDE.md`, and
+scoped instructions. Postmortems run outside the main checkout with read-only
+tools; the harness writes their returned markdown.
 
-## Configuration changes
+Never run real leaderboard `submit` or `sync` during development. Never invoke
+paid LLMs in tests. Use fake Pi executables and the mock challenge. Never
+modify `~/Desktop/repos/ecdsafail-challenge`; inspect only a disposable copy
+with submission paths disabled.
 
-`src/config.ts` is the source of truth for persisted settings. When adding or
-changing a setting, inspect and usually update all of:
+Run candidate integrity auditing after implementation and before evaluation.
+Never weaken correctness gates, manufacture scores, edit score files to fake
+success, or conflate correctness and performance. Treat agent and process
+output as untrusted. Use direction-aware `isImprovement`/`betterScore`; do not
+assume higher is better.
 
-1. the `HarnessConfig`/nested interface;
-2. `DEFAULT_CONFIG`;
-3. `loadConfig` deep-merge and any legacy migration behavior;
-4. `extensions/autoresearch/config-ui.ts` if the field is user-editable there;
-5. the README JSONC example and explanatory text;
-6. config, config-UI, README-contract, and behavior tests.
+## TypeScript and Configuration
 
-Partial on-disk configs must continue to receive new defaults. Do not silently
-drop legacy fields without a migration path.
+The project is strict ESM. Use `.ts` on local imports, `node:` built-ins,
+`import type` for types, `unknown` plus narrowing rather than `any`, two-space
+indentation, double quotes, semicolons, and trailing commas in multiline
+structures. Keep side effects behind injectable ports and use atomic helpers
+for durable writes.
 
-## Testing
+For config changes update `HarnessConfig`, `DEFAULT_CONFIG`, deep merge and
+migration, config UI when applicable, README examples, and config/UI/contract
+tests. Partial on-disk configs must receive all new defaults.
 
-Install dependencies and run the full gate:
+## Verification and Definition of Done
+
+Use:
 
 ```bash
 npm install
 npm run typecheck
 npm test
+git diff --check
 ```
 
-For a focused iteration:
+Focused suites include `test/orchestrator.test.ts`,
+`test/resilience.test.ts`, `test/subprocess.test.ts`, `test/archive.test.ts`,
+`test/worktree.test.ts`, `test/integrity.test.ts`, `test/adapter.test.ts`,
+`test/orchestrator-subprocess.test.ts`, and `test/metaharness.test.ts`.
 
-```bash
-npm test -- test/orchestrator.test.ts
-```
+State-machine changes need success, isolated failure, abort, pause/resume,
+idempotency, cleanup, and legacy-snapshot coverage at affected phases. Start a
+bug fix with a failing regression test when practical. Do not change assertions
+merely to make failures green.
 
-Testing conventions:
-
-- Vitest includes `test/**/*.test.ts` with a 30-second per-test timeout.
-- Use `test/helpers/tmp-challenge.ts` for git-backed fixture checkouts. Clean
-  worktrees before removing temporary repositories and use `try/finally`.
-- Prefer the bundled mock challenge for end-to-end state-machine coverage.
-- Use fake `pi` shims for subprocess JSON parsing, crashes, timeout, and abort.
-- Inject fake exec ports and zero-delay retry functions rather than sleeping or
-  calling real services.
-- Cover both score directions and meaningful-improvement thresholds.
-- State-machine changes need success, isolated failure, abort, pause/resume,
-  idempotency, and cleanup coverage at affected phases.
-- Command/UI changes should cover immediate rendering and graceful errors.
-- Documentation is executable contract here:
-  `test/readme.test.ts`, `test/architecture.test.ts`, and
-  `test/package.test.ts` intentionally couple docs/package metadata to code.
-- UI-affecting changes should also get a manual Pi/TUI smoke test in a
-  disposable challenge checkout when the required local tools are available.
-  Keep runner mode mocked and never reach sync or submit.
-
-Do not update assertions merely to make a failing test green. First determine
-whether the implementation, test expectation, or documented contract is wrong.
-
-## Common change checklists
-
-### State machine, retry, or persistence
-
-- Preserve a durable checkpoint before and after the changed operation.
-- Check abort behavior and whether an attempt should be charged.
-- Check loop-level versus idea-level failure containment.
-- Check resume from current and legacy snapshots.
-- Check external-effect idempotency and cleanup queues.
-- Update architecture documentation and the resume/failure matrices.
-
-### Challenge detection or command execution
-
-- Support Yukon command fields represented as shell strings or argv arrays.
-- Keep POSIX-safe quoting and finite numeric score validation.
-- Remove stale score output before a benchmark and require fresh output.
-- Stream long-running setup/verify/benchmark output to the matching log.
-- Preserve configured timeouts and abort propagation.
-- Test against the mock CLI; use only a non-networked scratch copy for
-  real-challenge layout validation.
-
-### Extension commands or TUI
-
-- Keep Pi API usage under `extensions/autoresearch/`.
-- Verify fresh repos where `.autoresearch/` does not yet exist.
-- Ensure status/error output appears immediately rather than waiting for
-  another model turn.
-- Restore widgets safely on session start and make `/autoresearch stop`
-  persist a resumable pause.
-
-### Packaging or dependencies
-
-- Keep `package.json` and the root of `package-lock.json` aligned.
-- Preserve `pi.extensions` pointing to the loadable extension entry.
-- Pi-provided runtime packages are optional wildcard peer dependencies and
-  concrete dev dependencies for local typechecking/tests.
-- Verify both local `-e` loading and the installed-package contract without
-  making networked model or leaderboard calls.
-
-## Definition of done
-
-Before handing off a change:
-
-1. inspect the final diff and confirm unrelated user changes are untouched;
-2. run the narrow regression test while iterating;
-3. run `npm run typecheck` and the full `npm test`;
-4. update README/architecture/agent-profile docs when their contracts changed;
-5. confirm no `.autoresearch/`, worktree, log, score, or temp artifacts are
-   staged;
-6. report what changed, what was verified, and any remaining risk.
-
-Do not create a commit or push unless the user or the explicit GOAL.md workflow
-asks for it.
+Before handoff inspect the final diff, confirm unrelated changes are untouched,
+run focused and full gates, update contract documentation, and verify no
+`.autoresearch/`, worktree, log, score, or temporary artifacts are staged.
+Do not commit or push unless the user explicitly asks.

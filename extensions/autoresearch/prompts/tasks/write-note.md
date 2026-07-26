@@ -28,9 +28,9 @@ Distinguish observation from causal interpretation. A worse score disproves the
 tested configuration, not necessarily the whole idea family. Recommend one
 concrete next experiment only when the evidence supports it.
 
-Write only the requested note file. Do not edit challenge code, rerun the
-experiment, benchmark, submit, sync, or alter other research state.
+Do not edit challenge code or research state, rerun the experiment, benchmark,
+submit, or sync.
 
 ## Response
 
-After writing the file, briefly summarize the durable lesson.
+Return the complete markdown note. The harness owns the postmortem file write.

@@ -13,7 +13,7 @@ describe("ConfigPanel", () => {
     const tui = { requestRender: () => {} } as unknown as TUI;
     const panel = new ConfigPanel(
       structuredClone(DEFAULT_CONFIG),
-      { pane: "right", left: 4, right: 0 },
+      { pane: "right", left: 5, right: 0 },
       tui,
       theme,
       () => {},
@@ -24,5 +24,24 @@ describe("ConfigPanel", () => {
     expect(rendered).toContain("mock loop delay   0 ms");
     expect(rendered).toContain("agent attempts    3");
     expect(rendered).toContain("submit attempts   5");
+  });
+
+  it("shows role-local soul and dynamic prompt as separate settings", () => {
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const tui = { requestRender: () => {} } as unknown as TUI;
+    const panel = new ConfigPanel(
+      structuredClone(DEFAULT_CONFIG),
+      { pane: "right", left: 0, right: 0 },
+      tui,
+      theme,
+      () => {},
+    );
+
+    const rendered = panel.render(160).join("\n");
+    expect(rendered).toContain("soul              SOUL.md");
+    expect(rendered).toContain("prompt            professor.md");
   });
 });

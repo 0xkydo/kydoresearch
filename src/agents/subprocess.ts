@@ -9,16 +9,20 @@ const BUNDLED_PROMPTS_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../extensions/autoresearch/prompts",
 );
-const BUNDLED_ROLE_PROMPTS_DIR = path.join(BUNDLED_PROMPTS_DIR, "roles");
 const BUNDLED_TASK_PROMPTS_DIR = path.join(BUNDLED_PROMPTS_DIR, "tasks");
-const TASK_PROMPT_FILES: Record<TaskKind, string> = {
+const TASK_PROMPT_FILES: Partial<Record<TaskKind, string>> = {
   "init.explore": "init-explore.md",
   propose: "propose.md",
   implement: "implement.md",
   "write-note": "write-note.md",
   church: "church.md",
+  "god-conversation": "church.md",
   advise: "advise.md",
 };
+const BUNDLED_AGENTS_DIR = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  "../../extensions/autoresearch/agents",
+);
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_KILL_GRACE_MS = 5_000;
 
@@ -45,7 +49,7 @@ export class PiSubprocessRunner implements AgentRunner {
       return Promise.resolve(emptyFailedResult("pi subprocess aborted before start"));
     }
 
-    const role = this.roles[task.role];
+    const role = { ...this.roles[task.role], ...(task.roleOverride ?? {}) };
     let prompt: string;
     try {
       prompt = loadAndRenderPrompt(role, task);
@@ -57,20 +61,47 @@ export class PiSubprocessRunner implements AgentRunner {
       );
     }
 
+    let soulPath: string;
+    const configuredSoul = role.soul?.trim() || undefined;
+    try {
+      soulPath = resolveSoulPath(configuredSoul, task);
+    } catch (error) {
+      return Promise.resolve(
+        emptyFailedResult(
+          `Failed to load soul "${configuredSoul || `${task.role}/SOUL.md`}": ${errorMessage(error)}`,
+        ),
+      );
+    }
+
+    let traceFile: number | undefined;
+    try {
+      const trace = prepareTrace(task, soulPath, prompt);
+      traceFile = trace?.file;
+      if (trace?.soulPath) soulPath = trace.soulPath;
+    } catch (error) {
+      return Promise.resolve(emptyFailedResult(`Failed to prepare pi trace: ${errorMessage(error)}`));
+    }
+
     const args = [
       "--mode",
       "json",
       "-p",
       "--no-session",
+      "--no-extensions",
+      "--no-skills",
+      "--no-prompt-templates",
+      "--no-context-files",
       "--model",
       role.model,
     ];
     if (role.thinking !== undefined) args.push("--thinking", role.thinking);
-    if (role.tools !== undefined) {
-      const tools = role.tools.map((tool) => tool.trim()).filter(Boolean);
+    const configuredTools = task.tools ?? role.tools;
+    if (configuredTools !== undefined) {
+      const tools = configuredTools.map((tool) => tool.trim()).filter(Boolean);
       if (tools.length > 0) args.push("--tools", tools.join(","));
       else args.push("--no-tools");
     }
+    args.push("--append-system-prompt", soulPath);
     args.push(prompt);
 
     return new Promise((resolve) => {
@@ -98,13 +129,18 @@ export class PiSubprocessRunner implements AgentRunner {
 
       let proc: ReturnType<typeof spawn>;
       try {
-        proc = spawn("pi", args, {
+        const invocation = resolvePiInvocation(args);
+        proc = spawn(invocation.command, invocation.args, {
           cwd: task.cwd,
           detached: process.platform !== "win32",
           shell: false,
           stdio: ["ignore", "pipe", "pipe"],
         });
       } catch (error) {
+        if (traceFile !== undefined) {
+          fs.closeSync(traceFile);
+          traceFile = undefined;
+        }
         resolve(failedResult(`Failed to start pi: ${errorMessage(error)}`));
         return;
       }
@@ -140,6 +176,10 @@ export class PiSubprocessRunner implements AgentRunner {
         if (timeoutHandle) clearTimeout(timeoutHandle);
         if (killHandle) clearTimeout(killHandle);
         task.signal?.removeEventListener("abort", onAbort);
+        if (traceFile !== undefined) {
+          fs.closeSync(traceFile);
+          traceFile = undefined;
+        }
       };
 
       const finish = (result: AgentResult): void => {
@@ -178,6 +218,10 @@ export class PiSubprocessRunner implements AgentRunner {
       };
 
       proc.stdout!.on("data", (data: Buffer | string) => {
+        if (traceFile !== undefined) {
+          if (typeof data === "string") fs.writeSync(traceFile, data);
+          else fs.writeSync(traceFile, data);
+        }
         stdoutBuffer += data.toString();
         const lines = stdoutBuffer.split("\n");
         stdoutBuffer = lines.pop() ?? "";
@@ -258,8 +302,12 @@ function loadAndRenderPrompt(role: RoleSpec, task: AgentTask): string {
   const rolePromptPath = resolveRolePromptPath(configuredPath, task.stateDir);
   const taskPromptPath = resolveTaskPromptPath(task.kind, task.stateDir);
   const roleTemplate = fs.readFileSync(rolePromptPath, "utf8").trimEnd();
-  const taskTemplate = fs.readFileSync(taskPromptPath, "utf8").trimStart();
-  const template = `${roleTemplate}\n\n---\n\n${taskTemplate}`;
+  const taskTemplate = taskPromptPath
+    ? fs.readFileSync(taskPromptPath, "utf8").trimStart()
+    : "";
+  const template = taskTemplate
+    ? `${roleTemplate}\n\n---\n\n${taskTemplate}`
+    : roleTemplate;
   return renderPrompt(template, {
     ...task.input,
     role: task.role,
@@ -271,7 +319,7 @@ function loadAndRenderPrompt(role: RoleSpec, task: AgentTask): string {
 
 function resolveRolePromptPath(configuredPath: string, stateDir: string): string {
   if (path.basename(configuredPath) === configuredPath) {
-    return path.join(BUNDLED_ROLE_PROMPTS_DIR, configuredPath);
+    return path.join(BUNDLED_PROMPTS_DIR, configuredPath);
   }
   if (path.isAbsolute(configuredPath)) {
     throw new Error("repo-relative prompt paths cannot be absolute");
@@ -286,10 +334,145 @@ function resolveRolePromptPath(configuredPath: string, stateDir: string): string
   return resolved;
 }
 
-function resolveTaskPromptPath(kind: TaskKind, stateDir: string): string {
+function resolveTaskPromptPath(kind: TaskKind, stateDir: string): string | undefined {
   const filename = TASK_PROMPT_FILES[kind];
+  if (!filename) return undefined;
   const customPath = path.join(stateDir, "prompts", "tasks", filename);
   return fs.existsSync(customPath) ? customPath : path.join(BUNDLED_TASK_PROMPTS_DIR, filename);
+}
+
+function resolveSoulPath(configuredPath: string | undefined, task: AgentTask): string {
+  const soulPath =
+    configuredPath === undefined
+      ? path.join(BUNDLED_AGENTS_DIR, task.role, "SOUL.md")
+      : resolveRoleFilePath(configuredPath, task.stateDir, path.join(BUNDLED_AGENTS_DIR, task.role));
+  fs.accessSync(soulPath, fs.constants.R_OK);
+  return soulPath;
+}
+
+function resolveRoleFilePath(configuredPath: string, stateDir: string, bundledDir: string): string {
+  if (path.basename(configuredPath) === configuredPath) {
+    return path.join(bundledDir, configuredPath);
+  }
+  if (path.isAbsolute(configuredPath)) {
+    throw new Error("repo-relative role paths cannot be absolute");
+  }
+
+  const repoRoot = path.dirname(stateDir);
+  const resolved = path.resolve(repoRoot, configuredPath);
+  const relative = path.relative(repoRoot, resolved);
+  if (relative === ".." || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error("repo-relative role path escapes the challenge repo");
+  }
+  return resolved;
+}
+
+function prepareTrace(
+  task: AgentTask,
+  sourceSoulPath: string,
+  renderedPrompt: string,
+): { file: number; soulPath: string } | undefined {
+  const traceDir = optionalInputPath(task.input, "traceDir");
+  const explicitTracePath =
+    optionalInputPath(task.input, "tracePath") ?? optionalInputPath(task.input, "runTracePath");
+  if (traceDir === undefined && explicitTracePath === undefined) return undefined;
+
+  const eventsPath =
+    explicitTracePath === undefined
+      ? path.join(resolveTracePath(traceDir!, task.stateDir), "events.ndjson")
+      : resolveTracePath(explicitTracePath, task.stateDir);
+  const agentDir =
+    traceDir === undefined ? path.dirname(eventsPath) : resolveTracePath(traceDir, task.stateDir);
+  fs.mkdirSync(path.dirname(eventsPath), { recursive: true });
+  fs.mkdirSync(agentDir, { recursive: true });
+
+  const soulSnapshotPath = path.join(agentDir, "soul.md");
+  if (path.resolve(sourceSoulPath) !== path.resolve(soulSnapshotPath)) {
+    fs.copyFileSync(sourceSoulPath, soulSnapshotPath);
+  }
+  fs.writeFileSync(path.join(agentDir, "context.md"), renderedPrompt);
+  fs.writeFileSync(
+    path.join(agentDir, "invocation.json"),
+    `${JSON.stringify(
+      {
+        schemaVersion: 1,
+        role: task.role,
+        kind: task.kind,
+        cwd: task.cwd,
+        stateDir: task.stateDir,
+        taskTools: task.tools,
+        roleOverride: task.roleOverride,
+        input: task.input,
+        startedAt: new Date().toISOString(),
+      },
+      null,
+      2,
+    )}\n`,
+  );
+  return {
+    file: fs.openSync(eventsPath, "a"),
+    soulPath: soulSnapshotPath,
+  };
+}
+
+function optionalInputPath(input: Record<string, unknown>, key: string): string | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`task input ${key} must be a non-empty path string`);
+  }
+  return value.trim();
+}
+
+function resolveTracePath(configuredPath: string, stateDir: string): string {
+  const stateRoot = path.resolve(stateDir);
+  const resolved = path.isAbsolute(configuredPath)
+    ? path.resolve(configuredPath)
+    : path.resolve(stateRoot, configuredPath);
+  const relative = path.relative(stateRoot, resolved);
+  if (
+    relative === ".." ||
+    relative.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relative)
+  ) {
+    throw new Error("trace path escapes the autoresearch state directory");
+  }
+  return resolved;
+}
+
+/**
+ * Mirrors Pi's official subagent launcher: reuse the script or compiled
+ * executable that started this process, and fall back to PATH for generic
+ * runtimes where no usable Pi entry script is available.
+ */
+function resolvePiInvocation(args: string[]): { command: string; args: string[] } {
+  const currentScript = process.argv[1];
+  const isBunVirtualScript = currentScript?.startsWith("/$bunfs/root/");
+  if (
+    currentScript &&
+    !isBunVirtualScript &&
+    isPiEntryScript(currentScript) &&
+    fs.existsSync(currentScript)
+  ) {
+    return { command: process.execPath, args: [currentScript, ...args] };
+  }
+
+  const execName = path.basename(process.execPath).toLowerCase();
+  const isGenericRuntime = /^(node|bun)(\.exe)?$/.test(execName);
+  if (!isGenericRuntime) {
+    return { command: process.execPath, args };
+  }
+
+  return { command: "pi", args };
+}
+
+function isPiEntryScript(scriptPath: string): boolean {
+  const basename = path.basename(scriptPath).toLowerCase();
+  if (/^pi(?:\.(?:js|cjs|mjs|ts))?$/.test(basename)) return true;
+  if (!/^cli\.(?:js|cjs|mjs|ts)$/.test(basename)) return false;
+
+  const normalized = scriptPath.replaceAll(path.sep, "/").toLowerCase();
+  return normalized.includes("/pi-coding-agent/") || normalized.includes("/packages/coding-agent/");
 }
 
 function renderPrompt(template: string, context: Record<string, unknown>): string {

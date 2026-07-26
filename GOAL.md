@@ -1,5 +1,11 @@
 # GOAL — Make kydoresearch production-ready
 
+> Follow-up: the original production-readiness checklist is complete. The
+> current optional bilevel harness-evolution work is specified in
+> `docs/metaharness.md`; its fixed-verifier and unattended-reliability
+> contracts supersede any earlier assumption that role scaffolding is always
+> static.
+
 You are working continuously on this repo. Each session: read this file, read
 `docs/architecture.md`, check off progress below, pick the highest unchecked
 item, implement it with tests, verify, commit. Small commits, one concern each.

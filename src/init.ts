@@ -1,15 +1,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentRunner } from "./agents/types.ts";
+import { candidateRunPaths, snapshotEditableSource } from "./archive.ts";
 import { YukonCliAdapter } from "./challenge/adapter.ts";
 import { detectCli, isInsideEditablePaths, readManifest } from "./challenge/detect.ts";
 import type { HarnessConfig } from "./config.ts";
 import { loadConfig, saveConfig } from "./config.ts";
 import type { ExecPort } from "./exec.ts";
 import { retryOperation, type RetryDelay } from "./retry.ts";
+import type { SetupTaskV1 } from "./experiments.ts";
+import { EXPERIMENT_SCHEMA_VERSION, validateResearchTask } from "./experiments.ts";
 import type { ChallengeInfo, LoopState } from "./state.ts";
 import { newLoopState, saveState, STATE_DIR_NAME, statePaths } from "./state.ts";
-import { appendJournal } from "./util.ts";
+import { appendJournal, atomicWriteJson } from "./util.ts";
 
 export interface InitResult {
   state: LoopState;
@@ -58,6 +61,9 @@ export async function initChallenge(opts: {
   const stateDir = path.join(repoRoot, STATE_DIR_NAME);
   const paths = statePaths(stateDir);
   fs.mkdirSync(paths.ideasDir, { recursive: true });
+  fs.mkdirSync(paths.loopsDir, { recursive: true });
+  fs.mkdirSync(paths.runsDir, { recursive: true });
+  fs.mkdirSync(paths.resolvedAgentsDir, { recursive: true });
   fs.mkdirSync(paths.logsDir, { recursive: true });
   fs.mkdirSync(paths.notesDir, { recursive: true });
   fs.mkdirSync(paths.worktreesDir, { recursive: true });
@@ -105,6 +111,25 @@ export async function initChallenge(opts: {
   // confirms readiness, and writes the knowledge base.
   emit("init: classifying repo and confirming readiness");
   appendJournal(paths.journal, { phase: "init.knowledge" });
+  const setupTaskDir = path.join(paths.loopsDir, "init");
+  fs.mkdirSync(setupTaskDir, { recursive: true });
+  const setupTaskPath = path.join(setupTaskDir, "setup-task.json");
+  const setupTask: SetupTaskV1 = {
+    schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+    taskId: "init-setup",
+    kind: "init.explore",
+    role: "setup",
+    taskPath: setupTaskPath,
+    stateDir,
+    resultPath: path.join(setupTaskDir, "setup-result.json"),
+    input: {
+      repoRoot,
+      manifestPath: path.join(repoRoot, "benchmark.json"),
+      knowledgeBasePath: paths.knowledgeBase,
+    },
+  };
+  validateResearchTask(setupTask);
+  atomicWriteJson(setupTaskPath, setupTask);
   const explore = await retryOperation({
     ...retryPolicy,
     maxAttempts: config.resilience.agentMaxAttempts,
@@ -114,7 +139,13 @@ export async function initChallenge(opts: {
         kind: "init.explore",
         cwd: repoRoot,
         stateDir,
-        input: { manifest, setupCommand: manifest.setupCommand },
+        input: {
+          ...setupTask.input,
+          manifest,
+          setupCommand: manifest.setupCommand,
+          taskPath: setupTaskPath,
+          traceDir: path.join(paths.resolvedAgentsDir, "setup"),
+        },
         signal: opts.signal,
       }),
     isSuccess: (result) => result.ok,
@@ -189,6 +220,21 @@ export async function initChallenge(opts: {
 
   const state = newLoopState(challenge);
   state.bestScore = baseline.score;
+  state.bestCandidateId = "baseline";
+  const baselinePaths = candidateRunPaths(stateDir, "baseline");
+  snapshotEditableSource(repoRoot, baselinePaths.source, challenge.editablePaths);
+  const revision = await exec("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
+  if (revision.code !== 0 || revision.stdout.trim() === "") {
+    throw new Error(`Unable to record baseline Git revision: ${revision.stderr.trim()}`);
+  }
+  atomicWriteJson(path.join(baselinePaths.root, "baseline.json"), {
+    schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+    candidateId: "baseline",
+    baseRevision: revision.stdout.trim(),
+    score: baseline.score,
+    capturedAt: new Date().toISOString(),
+    editablePaths: challenge.editablePaths,
+  });
   state.phase = "ready";
   saveState(stateDir, state);
   saveConfig(stateDir, config);

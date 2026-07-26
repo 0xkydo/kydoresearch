@@ -35,7 +35,7 @@ describe("README contract", () => {
     for (const key of objectKeys(DEFAULT_CONFIG)) {
       expect(configBlock, `README config example is missing ${key}`).toContain(`"${key}"`);
     }
-    for (const optionalKey of ["prompt", "tools", "submitModelName"]) {
+    for (const optionalKey of ["soul", "prompt", "tools", "submitModelName"]) {
       expect(configBlock, `README config example is missing ${optionalKey}`).toContain(
         `"${optionalKey}"`,
       );

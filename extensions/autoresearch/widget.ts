@@ -27,6 +27,18 @@ export function renderStatusLines(challengeName: string, report: StatusReport): 
         `${report.recovery.message}${report.recovery.nextRetryAt ? ` · retry ${report.recovery.nextRetryAt}` : ""}`,
     );
   }
+  if (report.metaHarness) {
+    lines.push(
+      `metaharness: ${report.metaHarness.phase} · generation ${report.metaHarness.generation} · ` +
+        `champion ${report.metaHarness.championCandidateId}` +
+        (report.metaHarness.activeCandidateId
+          ? ` · evaluating ${report.metaHarness.activeCandidateId}`
+          : "") +
+        (report.metaHarness.recoveryAttempts > 0
+          ? ` · recovery ${report.metaHarness.recoveryAttempts}`
+          : ""),
+    );
+  }
   lines.push(`advisor: ${report.lastAdvisorNotes.length} note(s) last loop · taskboard: ${report.taskboardOpen} open`);
   return lines;
 }

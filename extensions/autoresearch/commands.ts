@@ -10,10 +10,19 @@ import { detectCli, readManifest } from "../../src/challenge/detect.ts";
 import { loadConfig, saveConfig } from "../../src/config.ts";
 import { nodeExec } from "../../src/exec.ts";
 import { initChallenge } from "../../src/init.ts";
-import type { OrchestratorEvent } from "../../src/orchestrator.ts";
+import {
+  loadMetaHarnessStatus,
+  MetaHarnessController,
+} from "../../src/metaharness.ts";
+import type { OrchestratorEvent, StatusReport } from "../../src/orchestrator.ts";
 import { Orchestrator } from "../../src/orchestrator.ts";
 import { loadState, STATE_DIR_NAME, statePaths } from "../../src/state.ts";
-import type { ConfigPanelResult, EditableSettingField, NavState } from "./config-ui.ts";
+import type {
+  ConfigPanelResult,
+  ConfigurableRole,
+  EditableSettingField,
+  NavState,
+} from "./config-ui.ts";
 import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
 import { renderStatusLines } from "./widget.ts";
 
@@ -27,7 +36,7 @@ export interface AutoresearchCommandOptions {
 
 interface RunHandle {
   controller: AbortController;
-  orchestrator: Orchestrator;
+  orchestrator: { status(): StatusReport; runUntilDone(): Promise<void> };
   challengeName: string;
   running: Promise<void>;
 }
@@ -122,8 +131,9 @@ export function registerAutoresearchCommand(
     if (config.runner === "mock" && config.maxLoops === null) config.maxLoops = 8;
     const state = loadState(stateDir)!;
     const controller = new AbortController();
-    const orchestrator = new Orchestrator(repoRoot, stateDir, config, {
-      runner: makeRunner(config.runner, stateDir),
+    const runner = makeRunner(config.runner, stateDir);
+    const ports = {
+      runner,
       adapter: new YukonCliAdapter({
         repoRoot,
         manifest,
@@ -135,9 +145,24 @@ export function registerAutoresearchCommand(
         exec: nodeExec,
       }),
       exec: nodeExec,
-      emit: (ev) => surfaceEvent(ctx, ev),
+      emit: (ev: OrchestratorEvent) => surfaceEvent(ctx, ev),
       signal: controller.signal,
-    });
+    };
+    let orchestrator: RunHandle["orchestrator"];
+    try {
+      orchestrator = config.metaHarness.enabled
+        ? await MetaHarnessController.create(repoRoot, stateDir, config, ports)
+        : new Orchestrator(repoRoot, stateDir, config, ports);
+    } catch (error) {
+      notify(
+        ctx,
+        `failed to start ${config.metaHarness.enabled ? "metaharness" : "autoresearch"}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "error",
+      );
+      return;
+    }
 
     // Fire-and-forget: the loop must not block pi's turn. Mock agents make no
     // LLM calls so they never contend with the interactive session.
@@ -160,7 +185,11 @@ export function registerAutoresearchCommand(
 
     active = { controller, orchestrator, challengeName: state.challenge.name, running };
     if (ctx.hasUI) ctx.ui.setStatus(WIDGET_KEY, "autoresearch: running");
-    notify(ctx, `autoresearch loop started for ${state.challenge.name} (runner: ${config.runner})`);
+    notify(
+      ctx,
+      `autoresearch loop started for ${state.challenge.name} ` +
+        `(runner: ${config.runner}${config.metaHarness.enabled ? ", metaharness: enabled" : ""})`,
+    );
     updateWidget(ctx);
 
     // In headless print mode, pi exits when the handler returns — block until done.
@@ -193,18 +222,21 @@ export function registerAutoresearchCommand(
           taskboardOpen: 0,
           lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
           recovery: state.recovery,
+          ...(loadMetaHarnessStatus(stateDir)
+            ? { metaHarness: loadMetaHarnessStatus(stateDir) }
+            : {}),
         });
     notify(ctx, lines.join("\n"));
   }
 
-  /** Bundled role profiles plus per-challenge role overrides. */
+  /** Bundled dynamic prompts plus per-challenge prompt overrides. */
   function listPromptFiles(repoRoot: string): { label: string; value: string }[] {
-    const bundledRoles = path.join(import.meta.dirname, "prompts", "roles");
+    const bundledPrompts = path.join(import.meta.dirname, "prompts");
     const customRoot = path.join(repoRoot, STATE_DIR_NAME, "prompts");
     const customRoles = path.join(customRoot, "roles");
     const entries: { label: string; value: string }[] = [];
     for (const [dir, labelPrefix, valuePrefix, bundled] of [
-      [bundledRoles, "roles/", "", true],
+      [bundledPrompts, "", "", true],
       [customRoles, `${STATE_DIR_NAME}/prompts/roles/`, `${STATE_DIR_NAME}/prompts/roles/`, false],
       // Keep legacy flat custom role prompts selectable.
       [customRoot, `${STATE_DIR_NAME}/prompts/`, `${STATE_DIR_NAME}/prompts/`, false],
@@ -214,6 +246,29 @@ export function registerAutoresearchCommand(
         entries.push({
           label: `${labelPrefix}${file}${bundled ? " (bundled)" : ""}`,
           value: `${valuePrefix}${file}`,
+        });
+      }
+    }
+    return entries;
+  }
+
+  /** Bundled role soul plus per-challenge overrides in .autoresearch/agents/<role>/. */
+  function listSoulFiles(
+    repoRoot: string,
+    role: ConfigurableRole,
+  ): { label: string; value: string }[] {
+    const bundled = path.join(import.meta.dirname, "agents", role);
+    const custom = path.join(repoRoot, STATE_DIR_NAME, "agents", role);
+    const entries: { label: string; value: string }[] = [];
+    for (const [dir, prefix] of [
+      [bundled, ""],
+      [custom, `${STATE_DIR_NAME}/agents/${role}/`],
+    ] as const) {
+      if (!fs.existsSync(dir)) continue;
+      for (const file of fs.readdirSync(dir).filter((name) => name.endsWith(".md")).sort()) {
+        entries.push({
+          label: `${prefix}${file}${prefix ? "" : " (bundled)"}`,
+          value: `${prefix}${file}`,
         });
       }
     }
@@ -265,6 +320,26 @@ export function registerAutoresearchCommand(
       loopFailureMaxDelayMs: [
         "Maximum failed-loop recovery delay in milliseconds:",
         String(config.resilience.loopFailureMaxDelayMs),
+      ],
+      metaEvaluationLoops: [
+        "Inner loops used to evaluate one harness profile:",
+        String(config.metaHarness.evaluationLoops),
+      ],
+      metaMaxGenerations: [
+        "Maximum harness generations (empty = unlimited):",
+        config.metaHarness.maxGenerations === null
+          ? ""
+          : String(config.metaHarness.maxGenerations),
+      ],
+      metaMaxWallTimeMs: [
+        "Metaharness campaign wall-time budget in milliseconds (empty = unlimited):",
+        config.metaHarness.maxWallTimeMs === null
+          ? ""
+          : String(config.metaHarness.maxWallTimeMs),
+      ],
+      metaMaxRecoveryAttempts: [
+        "Fatal inner-loop recovery attempts before fail-stop:",
+        String(config.metaHarness.maxRecoveryAttempts),
       ],
       watchdogFile: ["Advisor watchdog file (repo-relative):", config.advisor.watchdogFile],
       submitModelName: ["Model name for submit --model (empty = none):", config.submitModelName ?? ""],
@@ -333,6 +408,20 @@ export function registerAutoresearchCommand(
           config.resilience.loopFailureMaxDelayMs = asInt;
         }
         break;
+      case "metaEvaluationLoops":
+        if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.evaluationLoops = asInt;
+        break;
+      case "metaMaxGenerations":
+        if (trimmed === "") config.metaHarness.maxGenerations = null;
+        else if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.maxGenerations = asInt;
+        break;
+      case "metaMaxWallTimeMs":
+        if (trimmed === "") config.metaHarness.maxWallTimeMs = null;
+        else if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.maxWallTimeMs = asInt;
+        break;
+      case "metaMaxRecoveryAttempts":
+        if (Number.isInteger(asInt) && asInt >= 0) config.metaHarness.maxRecoveryAttempts = asInt;
+        break;
       case "watchdogFile":
         if (trimmed) config.advisor.watchdogFile = trimmed;
         break;
@@ -361,10 +450,14 @@ export function registerAutoresearchCommand(
         `maxConsecutiveLoopFailures: ${config.resilience.maxConsecutiveLoopFailures}`,
         `retryBackoffMs: ${config.resilience.retryBaseDelayMs}..${config.resilience.retryMaxDelayMs}`,
         `loopFailureBackoffMs: ${config.resilience.loopFailureBaseDelayMs}..${config.resilience.loopFailureMaxDelayMs}`,
+        `metaHarness: ${config.metaHarness.enabled ? "enabled" : "disabled"} ` +
+          `(eval loops ${config.metaHarness.evaluationLoops}, generations ${
+            config.metaHarness.maxGenerations ?? "unlimited"
+          }, wall ${config.metaHarness.maxWallTimeMs ?? "unlimited"}ms)`,
         `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
         ...CONFIGURABLE_ROLES.map(
           (role) =>
-            `role ${role}: ${config.roles[role].model}${config.roles[role].thinking ? ` (${config.roles[role].thinking})` : ""} · ${config.roles[role].prompt ?? `roles/${role}.md`}`,
+            `role ${role}: ${config.roles[role].model}${config.roles[role].thinking ? ` (${config.roles[role].thinking})` : ""} · soul ${config.roles[role].soul ?? "SOUL.md"} · prompt ${config.roles[role].prompt ?? `${role}.md`}`,
         ),
       ].join("\n");
       console.log(summary);
@@ -384,11 +477,22 @@ export function registerAutoresearchCommand(
           if (value?.trim()) config.roles[result.role].model = value.trim();
           break;
         }
+        case "editSoul": {
+          const files = listSoulFiles(ctx.cwd, result.role);
+          const current = config.roles[result.role].soul ?? "SOUL.md";
+          const choice = await ctx.ui.select(
+            `Soul for ${result.role} (current: ${current})`,
+            files.map((file) => file.label),
+          );
+          const picked = files.find((file) => file.label === choice);
+          if (picked) config.roles[result.role].soul = picked.value;
+          break;
+        }
         case "editPrompt": {
           const files = listPromptFiles(ctx.cwd);
-          const current = config.roles[result.role].prompt ?? `roles/${result.role}.md`;
+          const current = config.roles[result.role].prompt ?? `${result.role}.md`;
           const choice = await ctx.ui.select(
-            `Role prompt for ${result.role} (current: ${current})`,
+            `Prompt for ${result.role} (current: ${current})`,
             files.map((f) => f.label),
           );
           const picked = files.find((f) => f.label === choice);

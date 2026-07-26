@@ -26,9 +26,12 @@ export class MockAgentRunner implements AgentRunner {
       case "write-note":
         return this.writeNote(task);
       case "church":
+      case "god-conversation":
         return this.goToChurch(task);
       case "advise":
         return this.advise(task);
+      case "evolve-harness":
+        return this.evolveHarness(task);
     }
   }
 
@@ -116,6 +119,49 @@ export class MockAgentRunner implements AgentRunner {
       output: notes.map((n) => `[${n.severity}] ${n.text}`).join("\n") || "No advisor notes this loop.",
       structured: { notes },
       filesWritten: [],
+    };
+  }
+
+  private evolveHarness(task: AgentTask): AgentResult {
+    const profilePath = task.input.profilePath as string;
+    const candidateDirectory = task.input.candidateDirectory as string;
+    const candidateId = task.input.candidateId as string;
+    const generation = task.input.generation as number;
+    const profile = JSON.parse(fs.readFileSync(profilePath, "utf8")) as {
+      hypothesis: {
+        observation: string;
+        mechanism: string;
+        intervention: string;
+        expectedResult: string;
+        falsifiedWhen: string;
+        risks: string[];
+        evidenceRefs: string[];
+      };
+      roles: { professor: { prompt: string } };
+    };
+    const professorPrompt = path.join(
+      candidateDirectory,
+      profile.roles.professor.prompt,
+    );
+    fs.appendFileSync(
+      professorPrompt,
+      `\n\n<!-- mock metaharness generation ${generation}: inspect raw failure evidence before proposing -->\n`,
+    );
+    profile.hypothesis = {
+      observation: `Generation ${generation} has access to completed inner-loop evidence.`,
+      mechanism: "Explicit raw-evidence inspection should reduce blind proposal repetition.",
+      intervention: "Add a generation-tagged evidence-inspection reminder to the professor prompt.",
+      expectedResult: "Maintain verifier validity while improving proposal grounding.",
+      falsifiedWhen: "The evaluation window produces no verified objective gain.",
+      risks: ["The reminder may be redundant with the professor soul."],
+      evidenceRefs: ["ledger.ndjson", "runs/"],
+    };
+    fs.writeFileSync(profilePath, `${JSON.stringify(profile, null, 2)}\n`);
+    return {
+      ok: true,
+      output: `Prepared metaharness candidate ${candidateId}.`,
+      structured: { candidateId, profilePath },
+      filesWritten: [profilePath, professorPrompt],
     };
   }
 }

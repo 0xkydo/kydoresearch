@@ -67,21 +67,32 @@ export class YukonCliAdapter implements ChallengeAdapter {
       this.execution?.setupTimeoutMs,
       signal,
     );
-    return { ok: result.code === 0, raw: tail(result), exitCode: result.code };
+    return {
+      ok: result.code === 0,
+      raw: tail(result),
+      exitCode: result.code,
+      timedOut: result.timedOut,
+    };
   }
 
-  async verify(cwd?: string, signal?: AbortSignal): Promise<ScoreResult> {
+  async verify(cwd?: string, signal?: AbortSignal, logFile?: string): Promise<ScoreResult> {
     const result = await this.runCommand(
       "verify",
       this.verifyCommand,
       cwd ?? this.repoRoot,
       this.execution?.verifyTimeoutMs,
       signal,
+      logFile,
     );
-    return { ok: result.code === 0, raw: tail(result), exitCode: result.code };
+    return {
+      ok: result.code === 0,
+      raw: tail(result),
+      exitCode: result.code,
+      timedOut: result.timedOut,
+    };
   }
 
-  async bench(cwd?: string, signal?: AbortSignal): Promise<ScoreResult> {
+  async bench(cwd?: string, signal?: AbortSignal, logFile?: string): Promise<ScoreResult> {
     const dir = cwd ?? this.repoRoot;
     const scoreFile = path.join(dir, this.manifest.scorePath);
     if (fs.existsSync(scoreFile)) fs.rmSync(scoreFile); // stale score guard
@@ -91,8 +102,16 @@ export class YukonCliAdapter implements ChallengeAdapter {
       dir,
       this.execution?.benchmarkTimeoutMs,
       signal,
+      logFile,
     );
-    if (result.code !== 0) return { ok: false, raw: tail(result), exitCode: result.code };
+    if (result.code !== 0) {
+      return {
+        ok: false,
+        raw: tail(result),
+        exitCode: result.code,
+        timedOut: result.timedOut,
+      };
+    }
     if (!fs.existsSync(scoreFile)) {
       return {
         ok: false,
@@ -124,8 +143,9 @@ export class YukonCliAdapter implements ChallengeAdapter {
     cwd: string,
     timeout: number | undefined,
     signal: AbortSignal | undefined,
+    logFileOverride?: string,
   ): Promise<ExecResult> {
-    const logFile = this.logDir ? path.join(this.logDir, `${phase}.log`) : undefined;
+    const logFile = logFileOverride ?? (this.logDir ? path.join(this.logDir, `${phase}.log`) : undefined);
     const startedAt = new Date();
     if (logFile) {
       fs.mkdirSync(path.dirname(logFile), { recursive: true });
