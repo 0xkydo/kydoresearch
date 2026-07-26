@@ -1,5 +1,10 @@
 # Codex Goal: Finish and Audit the Pi-Native Agent Harness
 
+> Archived goal: this document specified the completed Pi-native inner-loop
+> milestone. Its no-meta-harness constraint applied to that milestone and was
+> superseded by the later opt-in wrapper in `src/metaharness.ts`; see
+> `docs/metaharness.md` for the current outer-loop contract.
+
 Use the following as the complete goal message for a fresh Codex session:
 
 ---
@@ -21,8 +26,9 @@ design, filesystem memory, and search sections:
 https://aman.ai/primers/ai/autoresearch-and-metaharness/#the-experiment-lifecycle
 
 Use those ideas to improve the existing agent experiment lifecycle, memory,
-and evidence-based search. Do **not** implement the article's self-evolving
-meta-harness loop.
+and evidence-based search. This archived milestone did not implement the
+article's self-evolving meta-harness loop; a later explicit product request
+added the bounded outer controller.
 
 ## Fixed product decisions
 
@@ -51,9 +57,8 @@ Treat these as non-negotiable:
   Moving its unchanged behavior into the common soul layout is allowed;
   changing its purpose, trigger semantics, tone, or making it a search/meta
   controller is not.
-- Do not add a meta-harness or any loop that mutates, evaluates, selects, or
-  promotes the harness's own prompts, souls, schemas, tools, policies, source,
-  or architecture.
+- For this archived milestone, do not mix meta-harness changes into the
+  Pi-native inner-loop workstream. The later wrapper is a separate component.
 - Preserve parallel PhD execution, serialized Git worktree registry changes,
   the one-at-a-time benchmark lock, deterministic verification and scoring,
   direction-aware improvement, main-checkout re-verification/re-benchmarking,
@@ -267,8 +272,8 @@ Work through the existing plan without redesigning the architecture:
      increment; do not add a worker-only completion extension unless a failing
      acceptance criterion proves it necessary.
 7. Update documentation and the completion record only to match verified
-   behavior. Keep the explanation explicit that there is no meta-harness loop,
-   no repo-level soul, and no change to God.
+   behavior. Keep the explanation explicit that this milestone did not include
+   a meta-harness loop, a repo-level soul, or a change to God.
 
 ## Acceptance criteria
 
@@ -300,8 +305,9 @@ Do not call the goal complete until all of the following are true:
 - `npm test` passes;
 - README, architecture, and the plan completion checklist describe actual
   behavior;
-- no meta-harness loop, root `SOUL.md`, SDK/RPC migration, vector database,
-  OS-sandbox claim, or unrelated architectural rewrite was introduced.
+- no meta-harness loop was introduced in this milestone, and no root
+  `SOUL.md`, SDK/RPC migration, vector database, OS-sandbox claim, or unrelated
+  architectural rewrite was introduced.
 
 At the end, report:
 

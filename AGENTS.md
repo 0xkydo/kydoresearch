@@ -16,6 +16,8 @@ Read these before making architectural changes:
 2. `docs/architecture.md` for implemented component boundaries and lifecycle.
 3. `docs/pi-native-agent-plan.md` for design decisions, risks, and acceptance
    criteria.
+4. `docs/metaharness.md` for the optional bilevel controller, frozen-verifier
+   contract, and reliability rules.
 
 ## Fixed Product Decisions
 
@@ -25,10 +27,14 @@ Do not change these without an explicit user request:
   core must remain usable without importing Pi SDK internals.
 - Keep Pi workers ephemeral and sessionless. Durable memory belongs in the
   filesystem, not child Pi conversations.
-- Do not add a meta-harness loop. The harness must not mutate, evaluate,
-  select, or promote its own souls, prompts, schemas, tools, policies, source,
-  or architecture.
-- There is no repository-level `SOUL.md`. The only souls are the five
+- Keep meta-harness evolution opt-in. It may mutate, evaluate, select, and
+  promote candidate-local professor, PhD, and advisor souls, prompts, and tool
+  allowlists only through `src/metaharness.ts`.
+- The meta-harness must not mutate the fixed verifier, model identity,
+  thinking level, budgets, score parser, promotion thresholds, setup or God
+  roles, outer proposer, task/profile schemas, controller source, or prior
+  evidence.
+- There is no repository-level `SOUL.md`. The only souls are the six
   role-local files under `extensions/autoresearch/agents/`.
 - Leave God's role, trigger, and tone unchanged. God remains the warm, honest,
   hopeful plateau-recovery conversation after repeated dry loops; God is not a
@@ -44,6 +50,7 @@ Do not change these without an explicit user request:
 ```text
 interactive Pi
   -> extensions/autoresearch/       commands, UI, config, tools, notifications
+  -> src/metaharness.ts             optional durable bilevel supervisor
   -> src/orchestrator.ts            durable state machine
        -> src/experiments.ts        versioned research contracts
        -> src/archive.ts            candidate evidence and terminal ledger
@@ -68,6 +75,10 @@ extending these boundaries over coupling the core to the Pi extension.
 - **Advisor:** read-only evidence watchdog. It does not become another
   professor or implementer.
 - **God:** unchanged plateau-recovery conversation.
+- **Meta-harness:** outer-loop evidence diagnostician. It may write only the
+  assigned draft profile and candidate-local professor/PhD/advisor role
+  artifacts. It does not edit the challenge, evaluator, archive, prior
+  profiles, or itself.
 
 Stable role behavior belongs in a role's `SOUL.md`. Invocation-specific data
 belongs in a versioned task JSON. Dynamic prompt templates are a compatibility
@@ -87,6 +98,8 @@ Memory ownership:
 - `knowledge-base.md`: human-readable navigation, not the sole memory store.
 - Pi JSONL traces: complete per-invocation model and tool lifecycle evidence.
 - Worktrees: disposable execution surfaces; failed worktrees are retained.
+- `metaharness/`: outer state, frozen verifier contract, candidate profiles,
+  evaluation ledger, frontier, proposer traces, and heartbeat.
 
 Every terminal candidate must have, before cleanup:
 
@@ -133,6 +146,15 @@ sealed candidate missing its ledger entry.
   is sealed and indexed.
 - Submission state is the local idempotency marker. Preserve the existing
   duplicate-submission tests.
+- Pin one validated harness profile to a complete inner evaluation window.
+  Never change profiles after immutable professor output or candidate runs
+  exist for that loop.
+- Reconcile completed evaluation loops from inner durable history after
+  interruption; do not double-count them.
+- Re-hash a profile on activation and verify the frozen evaluator fingerprint
+  before proposal and after evaluation.
+- Roll back only to the last-known-good profile and only before the active
+  inner loop has materialized immutable proposal output. Otherwise fail-stop.
 
 ## Pi Worker Rules
 
@@ -180,6 +202,7 @@ harness, not the postmortem worker, writes the returned markdown.
 | `extensions/autoresearch/agents/*/SOUL.md` | Stable runtime role behavior |
 | `extensions/autoresearch/prompts/*.md` | Dynamic compatibility prompts |
 | `src/orchestrator.ts` | Loop phases, candidate lifecycle, resume, selection |
+| `src/metaharness.ts` | Optional outer profile evolution, verifier fingerprint, rollback, frontier |
 | `src/experiments.ts` | Versioned proposal/task/result/metrics contracts |
 | `src/archive.ts` | Atomic artifacts, snapshots, diffs, sealing, ledger |
 | `src/integrity.ts` | Git-status-based pre-evaluation audit |
@@ -215,6 +238,7 @@ npx vitest --run test/integrity.test.ts
 npx vitest --run test/adapter.test.ts
 npx vitest --run test/orchestrator.test.ts
 npx vitest --run test/orchestrator-subprocess.test.ts
+npx vitest --run test/metaharness.test.ts
 ```
 
 When changing a contract, update its runtime validation and archive tests.

@@ -10,7 +10,8 @@ describe("coding-agent documentation contract", () => {
   it("preserves the fixed architecture and product constraints", () => {
     for (const requirement of [
       "Keep the Pi extension",
-      "Do not add a meta-harness loop",
+      "Keep meta-harness evolution opt-in",
+      "frozen evaluator fingerprint",
       "no repository-level `SOUL.md`",
       "Leave God's role",
       "Git `HEAD` is not the research parent",
@@ -28,5 +29,6 @@ describe("coding-agent documentation contract", () => {
     expect(instructions).toContain("README.md");
     expect(instructions).toContain("docs/architecture.md");
     expect(instructions).toContain("docs/pi-native-agent-plan.md");
+    expect(instructions).toContain("docs/metaharness.md");
   });
 });

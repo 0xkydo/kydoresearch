@@ -10,7 +10,11 @@ import { detectCli, readManifest } from "../../src/challenge/detect.ts";
 import { loadConfig, saveConfig } from "../../src/config.ts";
 import { nodeExec } from "../../src/exec.ts";
 import { initChallenge } from "../../src/init.ts";
-import type { OrchestratorEvent } from "../../src/orchestrator.ts";
+import {
+  loadMetaHarnessStatus,
+  MetaHarnessController,
+} from "../../src/metaharness.ts";
+import type { OrchestratorEvent, StatusReport } from "../../src/orchestrator.ts";
 import { Orchestrator } from "../../src/orchestrator.ts";
 import { loadState, STATE_DIR_NAME, statePaths } from "../../src/state.ts";
 import type {
@@ -32,7 +36,7 @@ export interface AutoresearchCommandOptions {
 
 interface RunHandle {
   controller: AbortController;
-  orchestrator: Orchestrator;
+  orchestrator: { status(): StatusReport; runUntilDone(): Promise<void> };
   challengeName: string;
   running: Promise<void>;
 }
@@ -127,8 +131,9 @@ export function registerAutoresearchCommand(
     if (config.runner === "mock" && config.maxLoops === null) config.maxLoops = 8;
     const state = loadState(stateDir)!;
     const controller = new AbortController();
-    const orchestrator = new Orchestrator(repoRoot, stateDir, config, {
-      runner: makeRunner(config.runner, stateDir),
+    const runner = makeRunner(config.runner, stateDir);
+    const ports = {
+      runner,
       adapter: new YukonCliAdapter({
         repoRoot,
         manifest,
@@ -140,9 +145,24 @@ export function registerAutoresearchCommand(
         exec: nodeExec,
       }),
       exec: nodeExec,
-      emit: (ev) => surfaceEvent(ctx, ev),
+      emit: (ev: OrchestratorEvent) => surfaceEvent(ctx, ev),
       signal: controller.signal,
-    });
+    };
+    let orchestrator: RunHandle["orchestrator"];
+    try {
+      orchestrator = config.metaHarness.enabled
+        ? await MetaHarnessController.create(repoRoot, stateDir, config, ports)
+        : new Orchestrator(repoRoot, stateDir, config, ports);
+    } catch (error) {
+      notify(
+        ctx,
+        `failed to start ${config.metaHarness.enabled ? "metaharness" : "autoresearch"}: ${
+          error instanceof Error ? error.message : String(error)
+        }`,
+        "error",
+      );
+      return;
+    }
 
     // Fire-and-forget: the loop must not block pi's turn. Mock agents make no
     // LLM calls so they never contend with the interactive session.
@@ -165,7 +185,11 @@ export function registerAutoresearchCommand(
 
     active = { controller, orchestrator, challengeName: state.challenge.name, running };
     if (ctx.hasUI) ctx.ui.setStatus(WIDGET_KEY, "autoresearch: running");
-    notify(ctx, `autoresearch loop started for ${state.challenge.name} (runner: ${config.runner})`);
+    notify(
+      ctx,
+      `autoresearch loop started for ${state.challenge.name} ` +
+        `(runner: ${config.runner}${config.metaHarness.enabled ? ", metaharness: enabled" : ""})`,
+    );
     updateWidget(ctx);
 
     // In headless print mode, pi exits when the handler returns — block until done.
@@ -197,6 +221,9 @@ export function registerAutoresearchCommand(
           })),
           taskboardOpen: 0,
           lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
+          ...(loadMetaHarnessStatus(stateDir)
+            ? { metaHarness: loadMetaHarnessStatus(stateDir) }
+            : {}),
         });
     notify(ctx, lines.join("\n"));
   }
@@ -255,6 +282,26 @@ export function registerAutoresearchCommand(
         "Benchmark command timeout in milliseconds:",
         String(config.execution.benchmarkTimeoutMs),
       ],
+      metaEvaluationLoops: [
+        "Inner loops used to evaluate one harness profile:",
+        String(config.metaHarness.evaluationLoops),
+      ],
+      metaMaxGenerations: [
+        "Maximum harness generations (empty = unlimited):",
+        config.metaHarness.maxGenerations === null
+          ? ""
+          : String(config.metaHarness.maxGenerations),
+      ],
+      metaMaxWallTimeMs: [
+        "Metaharness campaign wall-time budget in milliseconds (empty = unlimited):",
+        config.metaHarness.maxWallTimeMs === null
+          ? ""
+          : String(config.metaHarness.maxWallTimeMs),
+      ],
+      metaMaxRecoveryAttempts: [
+        "Fatal inner-loop recovery attempts before fail-stop:",
+        String(config.metaHarness.maxRecoveryAttempts),
+      ],
       watchdogFile: ["Advisor watchdog file (repo-relative):", config.advisor.watchdogFile],
       submitModelName: ["Model name for submit --model (empty = none):", config.submitModelName ?? ""],
     };
@@ -292,6 +339,20 @@ export function registerAutoresearchCommand(
       case "benchmarkTimeoutMs":
         if (Number.isInteger(asInt) && asInt > 0) config.execution.benchmarkTimeoutMs = asInt;
         break;
+      case "metaEvaluationLoops":
+        if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.evaluationLoops = asInt;
+        break;
+      case "metaMaxGenerations":
+        if (trimmed === "") config.metaHarness.maxGenerations = null;
+        else if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.maxGenerations = asInt;
+        break;
+      case "metaMaxWallTimeMs":
+        if (trimmed === "") config.metaHarness.maxWallTimeMs = null;
+        else if (Number.isInteger(asInt) && asInt > 0) config.metaHarness.maxWallTimeMs = asInt;
+        break;
+      case "metaMaxRecoveryAttempts":
+        if (Number.isInteger(asInt) && asInt >= 0) config.metaHarness.maxRecoveryAttempts = asInt;
+        break;
       case "watchdogFile":
         if (trimmed) config.advisor.watchdogFile = trimmed;
         break;
@@ -314,6 +375,10 @@ export function registerAutoresearchCommand(
         `setupTimeoutMs: ${config.execution.setupTimeoutMs}`,
         `verifyTimeoutMs: ${config.execution.verifyTimeoutMs}`,
         `benchmarkTimeoutMs: ${config.execution.benchmarkTimeoutMs}`,
+        `metaHarness: ${config.metaHarness.enabled ? "enabled" : "disabled"} ` +
+          `(eval loops ${config.metaHarness.evaluationLoops}, generations ${
+            config.metaHarness.maxGenerations ?? "unlimited"
+          }, wall ${config.metaHarness.maxWallTimeMs ?? "unlimited"}ms)`,
         `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
         ...CONFIGURABLE_ROLES.map(
           (role) =>

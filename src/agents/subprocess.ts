@@ -39,7 +39,7 @@ export class PiSubprocessRunner implements AgentRunner {
       return Promise.resolve(emptyFailedResult("pi subprocess aborted before start"));
     }
 
-    const role = this.roles[task.role];
+    const role = { ...this.roles[task.role], ...(task.roleOverride ?? {}) };
     let prompt: string;
     try {
       prompt = loadAndRenderPrompt(role, task);
@@ -377,6 +377,7 @@ function prepareTrace(
         cwd: task.cwd,
         stateDir: task.stateDir,
         taskTools: task.tools,
+        roleOverride: task.roleOverride,
         input: task.input,
         startedAt: new Date().toISOString(),
       },

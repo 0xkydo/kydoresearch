@@ -13,7 +13,7 @@ describe("ConfigPanel", () => {
     const tui = { requestRender: () => {} } as unknown as TUI;
     const panel = new ConfigPanel(
       structuredClone(DEFAULT_CONFIG),
-      { pane: "right", left: 4, right: 0 },
+      { pane: "right", left: 5, right: 0 },
       tui,
       theme,
       () => {},

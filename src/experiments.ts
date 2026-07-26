@@ -228,13 +228,37 @@ export type GodConversationTaskV1 = ResearchTaskBaseV1<
   GodConversationTaskInputV1
 >;
 
+export interface MetaHarnessEvolutionTaskInputV1 {
+  generation: number;
+  candidateId: string;
+  parentCandidateId: string;
+  candidateDirectory: string;
+  profilePath: string;
+  parentProfilePath: string;
+  metaLedgerPath: string;
+  metaFrontierPath: string;
+  innerLedgerPath: string;
+  innerRunsDirectory: string;
+  candidatesDirectory: string;
+  verifierContractPath: string;
+  editableRoles: string[];
+  maxProfileBytes: number;
+}
+
+export type MetaHarnessEvolutionTaskV1 = ResearchTaskBaseV1<
+  "evolve-harness",
+  "metaharness",
+  MetaHarnessEvolutionTaskInputV1
+>;
+
 export type ResearchTaskV1 =
   | SetupTaskV1
   | ProfessorProposalTaskV1
   | PhdImplementationTaskV1
   | PhdPostmortemTaskV1
   | AdvisorTaskV1
-  | GodConversationTaskV1;
+  | GodConversationTaskV1
+  | MetaHarnessEvolutionTaskV1;
 
 /**
  * Runtime boundary for agent- or configuration-originated task data. This is
@@ -330,6 +354,27 @@ export function validateResearchTask(input: unknown): ResearchTaskV1 {
       stringArray(taskInput.recentRunPaths, "task.input.recentRunPaths");
       absolutePath(taskInput.notePath, "task.input.notePath");
       break;
+    case "evolve-harness":
+      expectedRole(task.role, "metaharness", task.kind);
+      positiveInteger(taskInput.generation, "task.input.generation");
+      nonEmptyString(taskInput.candidateId, "task.input.candidateId");
+      nonEmptyString(taskInput.parentCandidateId, "task.input.parentCandidateId");
+      for (const field of [
+        "candidateDirectory",
+        "profilePath",
+        "parentProfilePath",
+        "metaLedgerPath",
+        "metaFrontierPath",
+        "innerLedgerPath",
+        "innerRunsDirectory",
+        "candidatesDirectory",
+        "verifierContractPath",
+      ] as const) {
+        absolutePath(taskInput[field], `task.input.${field}`);
+      }
+      nonEmptyStringArray(taskInput.editableRoles, "task.input.editableRoles");
+      positiveInteger(taskInput.maxProfileBytes, "task.input.maxProfileBytes");
+      break;
     default:
       throw new Error(`Unsupported task kind ${String(task.kind)}`);
   }
@@ -377,13 +422,20 @@ export interface GodConversationResultV1 extends ResearchResultBaseV1<"god-conve
   notePath: string;
 }
 
+export interface MetaHarnessEvolutionResultV1
+  extends ResearchResultBaseV1<"evolve-harness.result"> {
+  candidateId: string;
+  profilePath: string;
+}
+
 export type ResearchResultV1 =
   | SetupResultV1
   | ProfessorProposalResultV1
   | PhdImplementationResultV1
   | PhdPostmortemResultV1
   | AdvisorResultV1
-  | GodConversationResultV1;
+  | GodConversationResultV1
+  | MetaHarnessEvolutionResultV1;
 
 export interface EvaluationCommandV1 {
   command: string;
