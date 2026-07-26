@@ -8,6 +8,10 @@ const architecture = fs.readFileSync(
   path.join(repoRoot, "docs", "architecture.md"),
   "utf8",
 );
+const testWorkflow = fs.readFileSync(
+  path.join(repoRoot, ".github", "workflows", "test.yml"),
+  "utf8",
+);
 const profiles = fs.readFileSync(path.join(repoRoot, "docs", "agent-profiles.md"), "utf8");
 const roleFiles = ["setup", "professor", "phd", "god", "advisor", "metaharness"].map((role) =>
   fs.readFileSync(
@@ -142,5 +146,14 @@ describe("architecture documentation contract", () => {
     expect(architecture).toContain("structured diagnostic");
     expect(architecture).toContain("ready-with-limitations");
     expect(profiles).toContain("first-run profile review");
+  });
+
+  it("uses runner-only GitHub contexts at step scope", () => {
+    expect(testWorkflow).not.toMatch(
+      /^ {4}env:\n(?: {6}.+\n)* {6}[A-Z_]+:.*\$\{\{\s*runner\./m,
+    );
+    expect(testWorkflow).toMatch(
+      /^ {8}env:\n {10}KYDO_PTY_ARTIFACT_DIR:.*\$\{\{\s*runner\.temp\s*\}\}/m,
+    );
   });
 });

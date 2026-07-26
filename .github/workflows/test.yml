@@ -17,8 +17,6 @@ jobs:
   selective:
     if: github.event_name == 'pull_request'
     runs-on: ubuntu-latest
-    env:
-      KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
     steps:
       - uses: actions/checkout@v4
         with:
@@ -31,6 +29,8 @@ jobs:
       - run: npm run typecheck
       - name: Select, explain, and run required tests
         run: npm run test:related -- --base "origin/${{ github.base_ref }}" --receipt test-selection-receipt.json
+        env:
+          KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -47,8 +47,6 @@ jobs:
   full:
     if: github.event_name != 'pull_request'
     runs-on: ubuntu-latest
-    env:
-      KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
@@ -58,6 +56,8 @@ jobs:
       - run: npm ci
       - run: npm run typecheck
       - run: npm run test:full -- --receipt full-test-receipt.json
+        env:
+          KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
       - uses: actions/upload-artifact@v4
         if: always()
         with:
@@ -74,8 +74,6 @@ jobs:
   pi-compatibility:
     if: github.event_name == 'schedule' || github.event_name == 'release'
     runs-on: ubuntu-latest
-    env:
-      KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
     strategy:
       fail-fast: false
       matrix:
@@ -95,6 +93,8 @@ jobs:
           @earendil-works/pi-tui@${{ matrix.pi-version }}
       - run: npm run typecheck
       - run: npx vitest --run test/integration/pi-extension/loading.test.ts test/pty/visible-screen.test.ts
+        env:
+          KYDO_PTY_ARTIFACT_DIR: ${{ runner.temp }}/kydoresearch-pty-gallery
       - uses: actions/upload-artifact@v4
         if: always()
         with:
