@@ -143,6 +143,40 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     ]);
   });
 
+  it("applies a validated harness profile as a per-task role override", async () => {
+    const recordPath = path.join(tmpDir, "profile-override-invocation.json");
+    process.env.FAKE_PI_RECORD = recordPath;
+    writeRecordingFakePi();
+    const stateDir = path.join(tmpDir, ".autoresearch");
+    const soulPath = path.join(stateDir, "metaharness", "candidate", "SOUL.md");
+    const promptPath = path.join(stateDir, "metaharness", "candidate", "prompt.md");
+    fs.mkdirSync(path.dirname(soulPath), { recursive: true });
+    fs.writeFileSync(soulPath, "Evolved professor soul.\n");
+    fs.writeFileSync(promptPath, "Evolved prompt for loop {{loop}}.\n");
+    const task = makeTask(tmpDir, {
+      stateDir,
+      roleOverride: {
+        soul: path.relative(tmpDir, soulPath),
+        prompt: path.relative(tmpDir, promptPath),
+        tools: ["read"],
+      },
+    });
+
+    await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(task);
+
+    const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as {
+      args: string[];
+    };
+    expect(invocation.args.at(-1)).toContain("Evolved prompt for loop 2.");
+    expect(
+      fs.readFileSync(
+        invocation.args[invocation.args.indexOf("--append-system-prompt") + 1]!,
+        "utf8",
+      ),
+    ).toContain("Evolved professor soul.");
+    expect(invocation.args[invocation.args.indexOf("--tools") + 1]).toBe("read");
+  });
+
   it("allows a task to narrow the role tool allowlist", async () => {
     const recordPath = path.join(tmpDir, "task-tools-invocation.json");
     process.env.FAKE_PI_RECORD = recordPath;

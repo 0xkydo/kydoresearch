@@ -46,6 +46,7 @@ import { auditCandidateIntegrity } from "./integrity.ts";
 import type { Phase } from "./phases.ts";
 import { isIdeaTerminal } from "./phases.ts";
 import type { Idea, LoopState, LoopSummary } from "./state.ts";
+import type { MetaHarnessStatus } from "./metaharness.ts";
 import { loadState, saveState, statePaths } from "./state.ts";
 import { Taskboard } from "./taskboard.ts";
 import { appendJournal, atomicWriteJson, betterScore, isImprovement, Mutex } from "./util.ts";
@@ -81,6 +82,7 @@ export interface StatusReport {
   ideas: { id: string; title: string; status: string; verifyAttempts: number; localScore?: number }[];
   taskboardOpen: number;
   lastAdvisorNotes: string[];
+  metaHarness?: MetaHarnessStatus;
 }
 
 export class Orchestrator {

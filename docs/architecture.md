@@ -10,6 +10,11 @@ candidate lineage, worktrees, deterministic evaluation, pause, and resume.
 Pi is the ephemeral model/tool runtime for one role invocation. It is not the
 workflow engine or the durable memory store.
 
+When enabled, `MetaHarnessController` wraps complete ordinary research loops.
+It evolves versioned harness profiles while continuing to use the same
+Pi-independent Orchestrator and deterministic ChallengeAdapter. The fixed
+challenge verifier remains outside both editable surfaces.
+
 ```text
 interactive Pi process
   └─ extensions/autoresearch/
@@ -26,10 +31,20 @@ interactive Pi process
        ├─ integrity gate             changed-path audit
        ├─ ChallengeAdapter           deterministic verify/bench/submit
        └─ PiSubprocessRunner         fresh isolated Pi worker
+
+optional MetaHarnessController
+  ├─ frozen verifier + runtime-policy fingerprint
+  ├─ immutable harness profiles      professor/PhD/advisor souls + prompts + tools
+  ├─ outer evaluation ledger
+  ├─ quality/reliability/time frontier
+  └─ one or more complete Orchestrator loops per profile
 ```
 
-There is no meta-harness loop. The system does not mutate, score, or promote
-its own souls, prompts, task schemas, tools, policies, or harness source.
+Meta-harness evolution is opt-in. It may mutate, score, and promote only
+candidate-local professor, PhD, and advisor souls, prompts, and tool
+allowlists. It cannot change model identity, thinking level, task/profile
+schemas, operation budgets, score parsing, verifier commands, promotion
+thresholds, setup or God behavior, the outer proposer, or controller source.
 
 ## Components
 
@@ -54,6 +69,8 @@ src/
   experiments.ts        versioned proposal, task, result, and metric contracts
   archive.ts            atomic candidate artifacts, snapshots, diffs, sealing,
                         and append-only experiment ledger
+  metaharness.ts        optional bilevel supervisor, frozen verifier contract,
+                        profile validation, rollback, and outer frontier
   integrity.ts          pre-evaluation changed-path audit
   agents/
     mock.ts             deterministic fixture runner
@@ -95,12 +112,16 @@ The roles are:
   diffs, and logs;
 - **God:** the existing warm, honest, hopeful plateau-recovery conversation.
   Its purpose and behavior are unchanged.
+- **meta-harness:** outer-loop diagnostician that selectively inspects the
+  complete inner and outer archives, then writes one attributable profile
+  candidate. It cannot modify prior evidence, the challenge, the evaluator,
+  its own role, or the controller.
 
 The soul says how a role behaves. A versioned task JSON says what one
 invocation must do. `src/experiments.ts` defines setup, professor proposal, PhD
-implementation, PhD postmortem, advisor, and God task variants. Each envelope
-records a schema version, task ID, role/kind pair, absolute task/state/result
-paths, and kind-specific input.
+implementation, PhD postmortem, advisor, God, and meta-harness evolution task
+variants. Each envelope records a schema version, task ID, role/kind pair,
+absolute task/state/result paths, and kind-specific input.
 
 Professor proposals are normalized into a canonical schema containing an
 explicit parent, search mode, edit family, evidence references, observation,
@@ -235,9 +256,9 @@ Core invariants:
 
 ## Search and memory
 
-Search remains professor-directed sequential-best experimentation; this is not
-a population controller. The current best candidate is the default parent,
-and parallel siblings may share it.
+Inner search remains professor-directed sequential-best experimentation. The
+current best challenge candidate is the default parent, and parallel siblings
+may share it.
 
 Before proposing, the professor receives an immutable task pointing to:
 
@@ -255,6 +276,49 @@ auditable without adding vector storage or persistent child Pi sessions.
 The normalized proposal set and base Git revision are checkpointed in
 `professor-result.json` before any candidate run is materialized, so resume
 cannot conflict with half-created immutable runs.
+
+## Optional meta-harness evolution
+
+The outer loop treats a complete professor/PhD/advisor role configuration as
+an executable search artifact. `H0000` snapshots the configured role souls,
+prompts, and tool policies and remains the initial last-known-good rollback
+profile. A fresh archive completes one ordinary `H0000` loop before proposing
+`H0001`, so the first diagnosis has raw inner evidence. Each generation then
+clones its champion into a new candidate directory. The meta-harness agent may
+make one evidence-backed change to those candidate-local artifacts.
+
+Before evaluation, the controller validates:
+
+- exact versioned profile fields and candidate lineage;
+- candidate-relative regular-file references with no path escape or symlinks;
+- a bounded combined profile size;
+- a behavioral hash different from the parent;
+- the unchanged frozen verifier fingerprint.
+
+A validated profile is applied only at the `AgentRunner` port. The inner
+Orchestrator, candidate worktrees, integrity audit, correctness check,
+benchmark, main-checkout re-evaluation, submission path, and score selection
+remain unchanged. One profile is pinned to an evaluation window of one or more
+complete inner loops.
+
+The outer objective is direction-aware verified improvement in the challenge
+score during that window. Candidate success rate is a required reliability
+gate, not an LLM judgment. A profile with no verified objective gain is
+rejected even if its proposer predicts an improvement. The outer ledger also
+retains wall time and failure rate and derives a Pareto frontier over objective
+gain, reliability, and time.
+
+The meta-harness proposer receives filesystem paths to:
+
+- the outer profile ledger, frontier, prior profiles, and proposer traces;
+- the inner compact experiment ledger;
+- all sealed inner candidate evidence, including source, diffs, metrics,
+  verifier/benchmark logs, postmortems, and Pi JSONL events; and
+- the immutable verifier contract.
+
+This provides full-history selective retrieval without packing the campaign
+into one prompt. See [`docs/metaharness.md`](metaharness.md) for the complete
+profile contract, budgets, and limitations.
 
 Memory ownership is intentionally split:
 
@@ -327,6 +391,17 @@ The main filesystem layout is:
   notes/
   logs/
   worktrees/<candidateId>/
+
+  metaharness/
+    state.json
+    verifier.json
+    ledger.ndjson
+    frontier.json
+    journal.ndjson
+    heartbeat.json
+    generations/generation-0001/task.json
+    candidates/H0000/{profile.json,artifact/}
+    candidates/H0001/{profile.json,artifact/,agent/,evaluation.json}
 ```
 
 Candidate run writers use atomic replacement. Task, proposal, and parent
@@ -362,6 +437,20 @@ A `done-improved` idea with its persisted submission record remains the local
 idempotency marker. The harness prevents replay after the adapter result is
 stored, although no local state file can make a remote submission and a hard
 process kill transactionally atomic.
+
+Outer state is independently atomic. An active profile records its start
+score, target loop count, completed loop IDs, idea/failure counts, and last
+reconciled inner loop. Resume reconstructs progress from durable inner
+`history`, so a loop completed immediately before interruption is counted
+exactly once.
+
+Fatal inner-loop failures use bounded exponential backoff. If retry exhaustion
+occurs before professor output or candidates are materialized, a new profile
+may be rejected and rolled back to the champion. After immutable inner
+artifacts exist, the campaign pauses instead of mixing profiles inside one
+experiment. Repeated outer-proposer failures open a cooldown circuit breaker;
+champion-driven inner research continues during cooldown. Evaluator drift
+always fail-stops.
 
 ## Challenge command boundary
 
@@ -400,6 +489,9 @@ Focused suites cover:
 - role-local soul resolution, system-prompt injection, trace capture, active
   Pi executable reuse, malformed events, timeouts, and aborts;
 - per-candidate verify and benchmark log attribution.
+- metaharness profile validation and path confinement, frozen-verifier drift,
+  role override activation, outer Pareto selection, and end-to-end profile
+  evaluation through ordinary mock challenge loops.
 
 The full scenario matrix continues to cover parallel agents, retries,
 nonzero benchmarks, advisor blockers, every resumable phase, live

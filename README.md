@@ -16,6 +16,11 @@ repeatable multi-agent optimization loop. A professor proposes experiments,
 parallel PhD agents implement them in isolated Git worktrees, and the harness
 verifies, benchmarks, selects, and submits only a qualifying winner.
 
+An opt-in meta-harness can wrap that loop and evolve the professor, PhD, and
+advisor role scaffolding itself. Each harness profile is evaluated only by the
+same frozen challenge verifier and is promoted only after producing a verified
+objective improvement.
+
 It is designed for challenges such as
 [ECDSA.fail](https://www.ecdsa.fail) and
 [MLX Fast](https://mlx.fast), but the harness itself is driven by the
@@ -63,6 +68,9 @@ then passes correctness and performance gates again before submission.
   searchable while sealed run directories retain the complete evidence.
 - **Bounded failure:** one failed agent, verification attempt, or benchmark
   does not crash the rest of the research loop.
+- **Bilevel evolution:** optional outer-loop profiles learn from the complete
+  filesystem archive while a fingerprinted verifier and last-known-good
+  rollback profile remain fixed.
 
 ## Quickstart: ecdsafail
 
@@ -118,9 +126,10 @@ Before the first run, open:
 ```
 
 Select **settings** and cycle `runner` from `mock` to `subprocess`. Review the
-professor, PhD, God, and advisor models, thinking levels, prompts, tool access,
-loop limits, timeouts, and submission model. Closing the panel saves
-`.autoresearch/config.json`, including in a fresh repository.
+professor, PhD, God, advisor, and meta-harness models, thinking levels, prompts,
+tool access, loop limits, meta-harness budgets, timeouts, and submission model.
+Closing the panel saves `.autoresearch/config.json`, including in a fresh
+repository.
 
 The minimum equivalent JSON change is:
 
@@ -192,8 +201,43 @@ research loop
 
 Pi subprocess sessions are deliberately fresh and ephemeral. Durable
 operational state and research memory live in `.autoresearch/`, not in child
-conversation history. The harness does not run a meta-harness loop and does not
-mutate or promote its own souls, prompts, schemas, tools, policies, or source.
+conversation history. When meta-harness evolution is disabled, role
+configuration remains fixed. When enabled, the outer controller may promote
+only validated candidate-local professor, PhD, and advisor souls, prompts, and
+tool policies; verifier behavior, models, budgets, schemas, God, and controller
+source remain fixed.
+
+## Optional meta-harness evolution
+
+Set `metaHarness.enabled` to `true` to evolve the research harness around
+ordinary loops. The feature is opt-in because it adds an outer model role and
+therefore additional inference cost.
+
+The meta-harness proposer reads prior harness profiles plus the complete inner
+evidence archive—source, diffs, metrics, logs, postmortems, and Pi traces—from
+the filesystem. It writes one versioned profile that can change professor,
+PhD, and advisor souls, prompts, and tool allowlists. The controller validates
+and hashes the profile, runs the configured number of ordinary research loops,
+and promotes it only if the unchanged challenge verifier records real
+direction-aware improvement and the inner-candidate success-rate gate passes.
+On a fresh archive, `H0000` first completes one ordinary loop so `H0001` has
+real failure and success evidence to inspect.
+
+The fixed comparison substrate is fingerprinted at
+`.autoresearch/metaharness/verifier.json`. Any drift in the challenge contract
+or tracked files outside `editablePaths`, or in the captured model and runtime
+policy, fixed role artifacts, or controller/evaluation implementation pauses
+the campaign. Candidate profiles cannot change model identity, thinking level,
+operation budgets, score parsing, promotion thresholds, setup, God, or the
+outer proposer.
+
+For unattended use, the outer controller provides atomic checkpoints,
+completed-loop reconciliation, bounded exponential recovery, safe rollback
+before inner artifacts become immutable, a last-known-good champion, proposal
+circuit breaking, a durable heartbeat, and explicit wall-time and generation
+budgets. See [`docs/metaharness.md`](docs/metaharness.md) for the lifecycle,
+archive, reliability behavior, limitations, and the Meta-Harness/bilevel
+research references behind the design.
 
 ## Commands
 
@@ -274,6 +318,11 @@ fields; loading deep-merges it with these defaults.
       "model": "anthropic/claude-fable-5",
       "thinking": "medium",
       "tools": ["read"]
+    },
+    "metaharness": {
+      "model": "anthropic/claude-fable-5",
+      "thinking": "high",
+      "tools": ["read", "write", "edit", "bash"]
     }
   },
   "godTriggerThreshold": 3, // consecutive dry loops; 0 disables the God turn
@@ -290,6 +339,19 @@ fields; loading deep-merges it with these defaults.
   "advisor": {
     "enabled": true,
     "watchdogFile": "WATCHDOG.md"
+  },
+  "metaHarness": {
+    "enabled": false, // opt in to bilevel harness-profile evolution
+    "evaluationLoops": 1,
+    "maxGenerations": null,
+    "maxWallTimeMs": null,
+    "maxRecoveryAttempts": 5,
+    "retryBaseDelayMs": 1000,
+    "retryMaxDelayMs": 60000,
+    "maxConsecutiveProposalFailures": 3,
+    "proposalCooldownLoops": 2,
+    "minCandidateSuccessRate": 0.5,
+    "maxProfileBytes": 524288
   }
   // Optional name passed to CLIs that require `submit --model`:
   // "submitModelName": "my-model-label"
@@ -315,6 +377,9 @@ fields; loading deep-merges it with these defaults.
   `.autoresearch/prompts/custom.md` resolves from the challenge repository.
 - The setup role runs only during initialization. Edit its JSON directly when
   its defaults need to change.
+- The meta-harness role runs only when `metaHarness.enabled` is true. Its own
+  soul, prompt, model, and thinking level stay fixed during a campaign; it
+  proposes candidate-local overrides for professor, PhD, and advisor.
 
 Current loop data belongs in a versioned immutable task JSON, not in a soul.
 Because ambient Pi context loading is disabled, applicable repository
@@ -334,6 +399,21 @@ policy; the harness writes their returned Markdown.
   corresponding streamed log.
 - `submitModelName` is used for challenge CLIs, such as MLX Fast, that require
   `submit --model`.
+
+### Meta-harness settings
+
+- `evaluationLoops` pins one validated profile to that many complete ordinary
+  loops before promotion or rollback.
+- `maxGenerations`, `maxWallTimeMs`, and the ordinary `maxLoops` are
+  independent campaign budgets. Null means unlimited.
+- `maxRecoveryAttempts`, `retryBaseDelayMs`, and `retryMaxDelayMs` bound
+  exponential recovery from fatal inner-loop failures.
+- `maxConsecutiveProposalFailures` opens the proposal circuit breaker;
+  `proposalCooldownLoops` controls how long the last-known-good champion runs
+  before another outer proposal.
+- `minCandidateSuccessRate` prevents a profile from being promoted when its
+  inner candidates fail too often, even if one score improves.
+- `maxProfileBytes` bounds the candidate manifest and referenced role files.
 
 ### Advisor watchdog
 
@@ -369,6 +449,8 @@ All runtime data lives in `.autoresearch/` inside the challenge repository:
   logs/                     setup and main-checkout evaluation output
   notes/                    advisor, God, and submission notes
   worktrees/<candidateId>/  active or intentionally retained failed checkout
+  metaharness/              outer state, frozen verifier, profiles, traces,
+                            evaluations, ledger, frontier, and heartbeat
 ```
 
 The directory is added to `.git/info/exclude`, not `.gitignore`, and
@@ -479,6 +561,13 @@ the role's tool policy, and retains the raw JSONL event stream.
   outside the declared surface or another integrity mismatch.
 - **The run is paused after a restart:** run `/autoresearch status`, inspect
   the saved state and logs, then use `/autoresearch` to resume.
+- **Meta-harness pauses for verifier drift:** inspect
+  `.autoresearch/metaharness/verifier.json` and the journal. Restore the frozen
+  challenge substrate or start a new campaign; do not overwrite the contract
+  to mix incomparable results.
+- **Outer proposals keep failing:** inspect the candidate's `agent/` trace and
+  profile validation error. The champion continues during configured cooldown
+  loops unless the inner loop itself exhausted recovery.
 - **Failed worktrees remain:** this is intentional. Inspect
   `.autoresearch/worktrees/<candidateId>/` and the sealed run evidence before
   removing one with normal Git worktree hygiene.

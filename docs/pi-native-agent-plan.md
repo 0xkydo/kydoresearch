@@ -1,5 +1,11 @@
 # Pi-Native Agent Architecture Implementation Plan
 
+> Historical milestone note: this plan governed the Pi-native inner-loop
+> refactor. Its original prohibition on a meta-harness was superseded by the
+> later explicit, opt-in bilevel feature documented in
+> [`metaharness.md`](metaharness.md). The inner-loop boundaries and completed
+> workstreams below remain the foundation of that wrapper.
+
 ## Purpose
 
 Refine kydoresearch into a portable, Pi-native autonomous research harness
@@ -18,10 +24,10 @@ The target is a durable research loop in which:
 - later candidates are materialized from an explicit parent artifact rather
   than implicitly from Git `HEAD`.
 
-This plan incorporates the relevant Meta-Harness/autoresearch lessons about
-filesystem memory, trace-rich evaluation, evidence-first proposal generation,
-and inspectable candidate lineage. It intentionally does **not** implement a
-meta-harness optimization loop.
+This milestone incorporated the relevant Meta-Harness/autoresearch lessons
+about filesystem memory, trace-rich evaluation, evidence-first proposal
+generation, and inspectable candidate lineage. The later optional outer loop
+reuses those artifacts without changing this inner Orchestrator.
 
 ## Product decisions and user constraints
 
@@ -34,9 +40,10 @@ These decisions are fixed for this implementation:
 2. **There is no repository-level `SOUL.md`.**
    `SOUL.md` means one role-local operating document for each of setup,
    professor, PhD, advisor, and God.
-3. **There is no meta-harness loop.**
-   The harness does not mutate, evaluate, or promote its own prompts, policies,
-   task formats, tools, or source code.
+3. **Keep the inner loop independent from meta-harness policy.**
+   The later `MetaHarnessController` wraps complete inner loops at the
+   `AgentRunner` port. The inner Orchestrator still does not mutate its own
+   prompts, policies, task formats, tools, or source code.
 4. **Keep the Pi extension unless a concrete Pi limitation requires another
    host architecture.**
    No such limitation has been identified. The extension is appropriate for
@@ -712,9 +719,10 @@ The implementation is complete when:
 - README and architecture documentation describe the new behavior;
 - a comprehensive Codex goal message exists for a fresh follow-up session.
 
-## Explicit non-goals
+## Explicit non-goals for the Pi-native inner-loop milestone
 
-- No meta-harness or self-modifying prompt loop.
+- No meta-harness implementation inside this milestone; the later opt-in
+  wrapper is isolated in `src/metaharness.ts`.
 - No change to God's role.
 - No population-based or Pareto search controller.
 - No vector database or mandatory embedding index.

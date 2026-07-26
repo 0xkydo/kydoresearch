@@ -92,6 +92,7 @@ export function statePaths(stateDir: string) {
     logsDir: path.join(stateDir, "logs"),
     notesDir: path.join(stateDir, "notes"),
     worktreesDir: path.join(stateDir, "worktrees"),
+    metaHarnessDir: path.join(stateDir, "metaharness"),
   };
 }
 

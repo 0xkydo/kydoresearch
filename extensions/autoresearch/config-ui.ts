@@ -3,7 +3,13 @@ import { matchesKey, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import type { HarnessConfig, ThinkingLevel } from "../../src/config.ts";
 
 /** Roles editable in the config panel. Setup runs once at init, so it is excluded. */
-export const CONFIGURABLE_ROLES = ["professor", "phd", "god", "advisor"] as const;
+export const CONFIGURABLE_ROLES = [
+  "professor",
+  "phd",
+  "god",
+  "advisor",
+  "metaharness",
+] as const;
 export type ConfigurableRole = (typeof CONFIGURABLE_ROLES)[number];
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
@@ -18,6 +24,10 @@ export type EditableSettingField =
   | "setupTimeoutMs"
   | "verifyTimeoutMs"
   | "benchmarkTimeoutMs"
+  | "metaEvaluationLoops"
+  | "metaMaxGenerations"
+  | "metaMaxWallTimeMs"
+  | "metaMaxRecoveryAttempts"
   | "watchdogFile"
   | "submitModelName";
 
@@ -47,7 +57,7 @@ interface Row {
   kind: "cycle" | "edit";
 }
 
-const LEFT_WIDTH = 12;
+const LEFT_WIDTH = 14;
 const LABEL_WIDTH = 18;
 
 export class ConfigPanel {
@@ -79,6 +89,12 @@ export class ConfigPanel {
     return [
       { id: "runner", label: "runner", value: c.runner, kind: "cycle" },
       { id: "advisorEnabled", label: "advisor", value: c.advisor.enabled ? "enabled" : "disabled", kind: "cycle" },
+      {
+        id: "metaHarnessEnabled",
+        label: "metaharness",
+        value: c.metaHarness.enabled ? "enabled" : "disabled",
+        kind: "cycle",
+      },
       { id: "maxIdeasPerLoop", label: "max ideas/loop", value: String(c.maxIdeasPerLoop), kind: "edit" },
       { id: "godTriggerThreshold", label: "god threshold", value: c.godTriggerThreshold === 0 ? "off" : String(c.godTriggerThreshold), kind: "edit" },
       { id: "maxVerifyAttempts", label: "verify attempts", value: String(c.maxVerifyAttempts), kind: "edit" },
@@ -91,6 +107,34 @@ export class ConfigPanel {
         id: "benchmarkTimeoutMs",
         label: "benchmark timeout",
         value: `${c.execution.benchmarkTimeoutMs} ms`,
+        kind: "edit",
+      },
+      {
+        id: "metaEvaluationLoops",
+        label: "meta eval loops",
+        value: String(c.metaHarness.evaluationLoops),
+        kind: "edit",
+      },
+      {
+        id: "metaMaxGenerations",
+        label: "meta generations",
+        value: c.metaHarness.maxGenerations === null
+          ? "unlimited"
+          : String(c.metaHarness.maxGenerations),
+        kind: "edit",
+      },
+      {
+        id: "metaMaxWallTimeMs",
+        label: "meta wall budget",
+        value: c.metaHarness.maxWallTimeMs === null
+          ? "unlimited"
+          : `${c.metaHarness.maxWallTimeMs} ms`,
+        kind: "edit",
+      },
+      {
+        id: "metaMaxRecoveryAttempts",
+        label: "meta recoveries",
+        value: String(c.metaHarness.maxRecoveryAttempts),
         kind: "edit",
       },
       { id: "watchdogFile", label: "watchdog file", value: c.advisor.watchdogFile, kind: "edit" },
@@ -144,6 +188,9 @@ export class ConfigPanel {
         return;
       case "advisorEnabled":
         this.config.advisor.enabled = !this.config.advisor.enabled;
+        return;
+      case "metaHarnessEnabled":
+        this.config.metaHarness.enabled = !this.config.metaHarness.enabled;
         return;
       case "model":
         return this.done({ type: "editModel", role: role!, nav: this.nav });
