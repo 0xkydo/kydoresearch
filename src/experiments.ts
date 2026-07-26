@@ -140,6 +140,24 @@ export interface SetupTaskInputV1 {
 
 export type SetupTaskV1 = ResearchTaskBaseV1<"init.explore", "setup", SetupTaskInputV1>;
 
+export interface SetupReviewTaskInputV1 {
+  repoRoot: string;
+  manifestPath: string;
+  knowledgeBasePath: string;
+  previousVerifyCommand: string;
+  previousBenchCommand: string;
+  benchmarkLogPath: string;
+  scorePath: string;
+  benchmarkExitCode: number;
+  benchmarkFailureTail: string;
+}
+
+export type SetupReviewTaskV1 = ResearchTaskBaseV1<
+  "init.review",
+  "setup",
+  SetupReviewTaskInputV1
+>;
+
 export interface ProfessorProposalTaskInputV1 {
   loop: number;
   objective: ObjectiveV1;
@@ -256,6 +274,7 @@ export type MetaHarnessEvolutionTaskV1 = ResearchTaskBaseV1<
 
 export type ResearchTaskV1 =
   | SetupTaskV1
+  | SetupReviewTaskV1
   | ProfessorProposalTaskV1
   | PhdImplementationTaskV1
   | PhdPostmortemTaskV1
@@ -291,6 +310,18 @@ export function validateResearchTask(input: unknown): ResearchTaskV1 {
       if (taskInput.setupSucceeded !== true) {
         throw new Error("task.input.setupSucceeded must be true");
       }
+      break;
+    case "init.review":
+      expectedRole(task.role, "setup", task.kind);
+      absolutePath(taskInput.repoRoot, "task.input.repoRoot");
+      absolutePath(taskInput.manifestPath, "task.input.manifestPath");
+      absolutePath(taskInput.knowledgeBasePath, "task.input.knowledgeBasePath");
+      nonEmptyString(taskInput.previousVerifyCommand, "task.input.previousVerifyCommand");
+      nonEmptyString(taskInput.previousBenchCommand, "task.input.previousBenchCommand");
+      absolutePath(taskInput.benchmarkLogPath, "task.input.benchmarkLogPath");
+      absolutePath(taskInput.scorePath, "task.input.scorePath");
+      nonNegativeInteger(taskInput.benchmarkExitCode, "task.input.benchmarkExitCode");
+      nonEmptyString(taskInput.benchmarkFailureTail, "task.input.benchmarkFailureTail");
       break;
     case "propose":
       expectedRole(task.role, "professor", task.kind);
@@ -402,6 +433,10 @@ interface ResearchResultBaseV1<Kind extends string> {
 export interface SetupResultV1 extends ResearchResultBaseV1<"init.explore.result"> {
   subjectArea?: string;
   knowledgeBasePath: string;
+  verifyCommand: string;
+  benchCommand: string;
+  checkpointFingerprint: string;
+  reviewCount: number;
 }
 
 export interface ProfessorProposalResultV1 extends ResearchResultBaseV1<"propose.result"> {

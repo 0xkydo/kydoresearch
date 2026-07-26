@@ -1,6 +1,51 @@
 import { describe, expect, it } from "vitest";
 import type { StatusReport } from "../src/orchestrator.ts";
-import { renderStatusLines } from "../extensions/autoresearch/widget.ts";
+import {
+  renderInitializationLines,
+  renderStatusLines,
+} from "../extensions/autoresearch/widget.ts";
+
+describe("autoresearch initialization rendering", () => {
+  it("keeps setup-agent and benchmark progress visible with logs and attempts", () => {
+    const lines = renderInitializationLines("mlxfast-challenge", {
+      stage: "baseline-review",
+      status: "running",
+      message: "Setup is reviewing the failed baseline command",
+      command: "MLXFAST_SCORE_PATH=score.json ./benchmark.sh --local-iterate",
+      attempt: 1,
+      maxAttempts: 2,
+      logPath: ".autoresearch/logs/benchmark.log",
+      recentActivity: [
+        "baseline attempt 1/2 failed: local teacher-forced token mismatch",
+        "Setup identified the documented reduced local mode",
+      ],
+    });
+    const rendered = lines.join("\n");
+
+    expect(rendered).toContain("autoresearch · mlxfast-challenge · initialization");
+    expect(rendered).toContain("stage: Setup is reviewing the failed baseline");
+    expect(rendered).toContain("attempt 1/2");
+    expect(rendered).toContain("command: MLXFAST_SCORE_PATH=score.json");
+    expect(rendered).toContain("log: .autoresearch/logs/benchmark.log");
+    expect(rendered).toContain("local teacher-forced token mismatch");
+  });
+
+  it("keeps an actionable initialization failure on screen", () => {
+    const rendered = renderInitializationLines("mlxfast-challenge", {
+      stage: "baseline",
+      status: "failed",
+      message: "Baseline benchmark failed after Setup review",
+      failure:
+        "The local benchmark cannot provide a reliable correctness result on this hardware.",
+      logPath: ".autoresearch/logs/benchmark.log",
+      recentActivity: [],
+    }).join("\n");
+
+    expect(rendered).toContain("status: failed");
+    expect(rendered).toContain("cannot provide a reliable correctness result");
+    expect(rendered).toContain("retry: /autoresearch");
+  });
+});
 
 describe("autoresearch status rendering", () => {
   it("shows candidate intent, lineage, progress, scores, failures, and recent activity", () => {

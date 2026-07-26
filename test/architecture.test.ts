@@ -27,6 +27,10 @@ const setupTask = fs.readFileSync(
   path.join(repoRoot, "extensions", "autoresearch", "prompts", "tasks", "init-explore.md"),
   "utf8",
 );
+const setupReviewTask = fs.readFileSync(
+  path.join(repoRoot, "extensions", "autoresearch", "prompts", "tasks", "init-review.md"),
+  "utf8",
+);
 const churchTask = fs.readFileSync(
   path.join(repoRoot, "extensions", "autoresearch", "prompts", "tasks", "church.md"),
   "utf8",
@@ -73,6 +77,9 @@ describe("architecture documentation contract", () => {
       "repository-supported flags",
       "effective benchmark command",
       "reduced-fidelity",
+      "setup-result.json",
+      "baseline-review",
+      "persistent initialization widget",
     ]) {
       expect(architecture).toContain(detail);
     }
@@ -114,6 +121,9 @@ describe("architecture documentation contract", () => {
     expect(setupRole).toContain("local hardware");
     expect(setupTask).toContain("latest successful setup invocation");
     expect(setupTask).toContain('"status": "needs-user-action"');
+    expect(setupTask).toContain("timing-only override");
+    expect(setupReviewTask).toContain("failed initialization baseline");
+    expect(setupReviewTask).toContain("Do not turn a correctness failure into success");
     expect(setupTask).toContain("user or another agent");
     expect(setupTask).not.toContain("Optimization levers");
   });

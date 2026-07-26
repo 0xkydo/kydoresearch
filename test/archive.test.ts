@@ -131,6 +131,45 @@ describe("proposal contracts", () => {
     ).toThrow(/setupSucceeded/);
   });
 
+  it("validates immutable baseline-review evidence for Setup", () => {
+    const repoRoot = path.join(os.tmpdir(), "setup-review-validation");
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    const task = {
+      schemaVersion: 1,
+      taskId: "init-setup-review-1",
+      kind: "init.review",
+      role: "setup",
+      taskPath: path.join(stateDir, "loops", "init", "setup-review-task.json"),
+      stateDir,
+      resultPath: path.join(stateDir, "loops", "init", "setup-result.json"),
+      input: {
+        repoRoot,
+        manifestPath: path.join(repoRoot, "benchmark.json"),
+        knowledgeBasePath: path.join(stateDir, "knowledge-base.md"),
+        previousVerifyCommand: "./verify.sh",
+        previousBenchCommand: "./benchmark.sh",
+        benchmarkLogPath: path.join(stateDir, "logs", "benchmark.log"),
+        scorePath: path.join(repoRoot, "score.json"),
+        benchmarkExitCode: 1,
+        benchmarkFailureTail: "local benchmark failed",
+      },
+    };
+
+    expect(validateResearchTask(task)).toEqual(task);
+    expect(() =>
+      validateResearchTask({
+        ...task,
+        input: { ...task.input, benchmarkLogPath: "relative/benchmark.log" },
+      }),
+    ).toThrow(/benchmarkLogPath.*absolute path/);
+    expect(() =>
+      validateResearchTask({
+        ...task,
+        input: { ...task.input, benchmarkFailureTail: "" },
+      }),
+    ).toThrow(/benchmarkFailureTail/);
+  });
+
   it("validates versioned task envelopes and kind-specific immutable input", () => {
     const stateDir = path.join(os.tmpdir(), "task-validation", ".autoresearch");
     const task = makeTask(stateDir, "L001-I1", "baseline");

@@ -51,6 +51,12 @@ tests, correctness gates, benchmarks, git history, or user configuration. Do
 not devise a creative workaround for a missing verifier or dependency. Only a
 trivial, non-mutating readiness check is within scope.
 
+A timing-only override that keeps a score usable while recording failed
+correctness is not a correctness command. Do not apply such an override to
+`verifyCommand` or describe it as verified correctness. If this host cannot
+provide a reliable correctness command, return `needs-user-action` and explain
+the supported reduced-fidelity timing option separately.
+
 Do not rerun the setup command. Do not run the performance benchmark. Do not
 load a large model merely to classify readiness or run expensive verification.
 The harness runs the baseline after Setup returns.

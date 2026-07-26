@@ -4,6 +4,25 @@ export interface StatusRenderOptions {
   recentActivity?: string[];
 }
 
+export type InitializationStage =
+  | "setup"
+  | "setup-agent"
+  | "baseline"
+  | "baseline-review"
+  | "ready";
+
+export interface InitializationRenderState {
+  stage: InitializationStage;
+  status: "running" | "retrying" | "succeeded" | "failed" | "resuming";
+  message: string;
+  command?: string;
+  attempt?: number;
+  maxAttempts?: number;
+  logPath?: string;
+  failure?: string;
+  recentActivity: string[];
+}
+
 const PHASE_LABELS: Record<StatusReport["phase"], string> = {
   uninitialized: "waiting for initialization",
   "init.setup": "installing challenge dependencies",
@@ -19,6 +38,36 @@ const PHASE_LABELS: Record<StatusReport["phase"], string> = {
   paused: "paused",
   done: "complete",
 };
+
+/** Persistent status shown while first-run setup and baseline work is active. */
+export function renderInitializationLines(
+  challengeName: string,
+  state: InitializationRenderState,
+): string[] {
+  const attempt =
+    state.attempt !== undefined
+      ? ` · attempt ${state.attempt}${state.maxAttempts ? `/${state.maxAttempts}` : ""}`
+      : "";
+  const lines = [
+    `autoresearch · ${challengeName} · initialization`,
+    `stage: ${state.message}${attempt}`,
+    `status: ${state.status}`,
+  ];
+  if (state.command) lines.push(`command: ${oneLine(state.command, 120)}`);
+  if (state.logPath) lines.push(`log: ${state.logPath}`);
+  if (state.failure) lines.push(`failure: ${oneLine(state.failure, 180)}`);
+  const activity = state.recentActivity.filter(Boolean).slice(0, 3);
+  if (activity.length > 0) {
+    lines.push("recent:");
+    lines.push(...activity.map((entry) => `  ${oneLine(entry, 140)}`));
+  }
+  if (state.status === "failed") {
+    lines.push("retry: /autoresearch after resolving the reported issue");
+  } else {
+    lines.push("details: /autoresearch telemetry");
+  }
+  return lines;
+}
 
 /** Human-readable status lines for the live Pi widget and /autoresearch status. */
 export function renderStatusLines(

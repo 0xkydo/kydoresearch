@@ -158,6 +158,30 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
       },
       {
         task: makeTask(tmpDir, {
+          role: "setup",
+          kind: "init.review",
+          input: {
+            repoRoot: "/tmp/project",
+            manifestPath: "/tmp/project/benchmark.json",
+            knowledgeBasePath: "/tmp/project/.autoresearch/knowledge-base.md",
+            previousVerifyCommand: "./verify.sh",
+            previousBenchCommand: "./benchmark.sh",
+            benchmarkLogPath: "/tmp/project/.autoresearch/logs/benchmark.log",
+            scorePath: "/tmp/project/score.json",
+            benchmarkExitCode: 1,
+            benchmarkFailureTail: "documented hardware mismatch",
+          },
+        }),
+        expected: [
+          "# Role: Setup",
+          "# Task: Review a failed initialization baseline",
+          "documented hardware mismatch",
+          "Do not turn a correctness failure into success silently",
+          '"status": "needs-user-action"',
+        ],
+      },
+      {
+        task: makeTask(tmpDir, {
           role: "phd",
           kind: "implement",
           input: {

@@ -19,6 +19,8 @@ export class MockAgentRunner implements AgentRunner {
     switch (task.kind) {
       case "init.explore":
         return this.initExplore(task);
+      case "init.review":
+        return this.initReview(task);
       case "propose":
         return this.propose(task);
       case "implement":
@@ -56,6 +58,19 @@ export class MockAgentRunner implements AgentRunner {
         benchCommand: manifest.benchmarkCommand,
       },
       filesWritten: [kbPath],
+    };
+  }
+
+  private initReview(task: AgentTask): AgentResult {
+    return {
+      ok: true,
+      output: "No documented command revision is needed for the fixture.",
+      structured: {
+        status: "ready",
+        verifyCommand: task.input.previousVerifyCommand,
+        benchCommand: task.input.previousBenchCommand,
+      },
+      filesWritten: [],
     };
   }
 

@@ -261,6 +261,139 @@ describe("initChallenge", () => {
     expect(baselineCalls).toBe(2);
   });
 
+  it("asks Setup to review baseline failure evidence before the bounded retry", async () => {
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    const benchmarkLogPath = path.join(stateDir, "logs", "benchmark.log");
+    const shellCommands: string[] = [];
+    let baselineCalls = 0;
+    const exec: ExecPort = (cmd, args, opts) => {
+      const command = cmd === "/bin/bash" ? args[1] : undefined;
+      if (command) shellCommands.push(command);
+      if (command === "./benchmark.sh" && ++baselineCalls === 1) {
+        return Promise.resolve({
+          stdout: "",
+          stderr:
+            "documented local hardware mismatch; rerun with FIXTURE_LOCAL_MODE=1",
+          code: 1,
+        });
+      }
+      return nodeExec(cmd, args, opts);
+    };
+    const baseRunner = new MockAgentRunner();
+    let reviewInput: Record<string, unknown> | undefined;
+    const runner: AgentRunner = {
+      run: (task) => {
+        if (task.kind === "init.review") {
+          reviewInput = { ...task.input };
+          return Promise.resolve({
+            ok: true,
+            output: "Selected the repository-supported local mode.",
+            structured: {
+              status: "ready",
+              subjectArea: "fixture",
+              verifyCommand: "./verify.sh",
+              benchCommand: "FIXTURE_LOCAL_MODE=1 ./benchmark.sh",
+            },
+            filesWritten: [],
+          });
+        }
+        return baseRunner.run(task);
+      },
+    };
+
+    const result = await initChallenge({
+      repoRoot,
+      runner,
+      exec,
+      delay: async () => {},
+    });
+
+    expect(reviewInput).toMatchObject({
+      previousVerifyCommand: "./verify.sh",
+      previousBenchCommand: "./benchmark.sh",
+      benchmarkLogPath,
+      scorePath: path.join(repoRoot, "score.json"),
+      benchmarkExitCode: 1,
+    });
+    expect(String(reviewInput?.benchmarkFailureTail)).toContain(
+      "FIXTURE_LOCAL_MODE=1",
+    );
+    expect(shellCommands).toContain("FIXTURE_LOCAL_MODE=1 ./benchmark.sh");
+    expect(result.state.challenge.benchCommand).toBe(
+      "FIXTURE_LOCAL_MODE=1 ./benchmark.sh",
+    );
+    expect(
+      JSON.parse(
+        fs.readFileSync(
+          path.join(stateDir, "loops", "init", "setup-result.json"),
+          "utf8",
+        ),
+      ),
+    ).toMatchObject({
+      kind: "init.explore.result",
+      ok: true,
+      verifyCommand: "./verify.sh",
+      benchCommand: "FIXTURE_LOCAL_MODE=1 ./benchmark.sh",
+      reviewCount: 1,
+    });
+  });
+
+  it("reuses a durable Setup result after an interrupted baseline", async () => {
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    let setupCalls = 0;
+    let exploreCalls = 0;
+    let reviewCalls = 0;
+    let allowBenchmark = false;
+    const exec: ExecPort = (cmd, args, opts) => {
+      const command = cmd === "/bin/bash" ? args[1] : undefined;
+      if (command === "./setup.sh") setupCalls++;
+      if (command === "./benchmark.sh" && !allowBenchmark) {
+        return Promise.resolve({ stdout: "", stderr: "persistent failure", code: 1 });
+      }
+      return nodeExec(cmd, args, opts);
+    };
+    const baseRunner = new MockAgentRunner();
+    const runner: AgentRunner = {
+      run: (task) => {
+        if (task.kind === "init.explore") exploreCalls++;
+        if (task.kind === "init.review") {
+          reviewCalls++;
+          return Promise.resolve({
+            ok: true,
+            output: "No safe command revision is documented.",
+            structured: {
+              status: "ready",
+              verifyCommand: "./verify.sh",
+              benchCommand: "./benchmark.sh",
+            },
+            filesWritten: [],
+          });
+        }
+        return baseRunner.run(task);
+      },
+    };
+
+    await expect(
+      initChallenge({ repoRoot, runner, exec, delay: async () => {} }),
+    ).rejects.toThrow(/Baseline benchmark failed/);
+    expect(fs.existsSync(path.join(stateDir, "loops", "init", "setup-result.json"))).toBe(
+      true,
+    );
+
+    allowBenchmark = true;
+    const resumed = await initChallenge({
+      repoRoot,
+      runner,
+      exec,
+      delay: async () => {},
+    });
+
+    expect(resumed.state.phase).toBe("ready");
+    expect(setupCalls).toBe(1);
+    expect(exploreCalls).toBe(1);
+    expect(reviewCalls).toBe(1);
+  });
+
   it("pauses initialization when Setup requires work elsewhere", async () => {
     const runner: AgentRunner = {
       run: () =>

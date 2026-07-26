@@ -348,12 +348,19 @@ describe("/autoresearch startup errors", () => {
     registerAutoresearchCommand(pi);
 
     const notify = vi.fn();
+    const setWidget = vi.fn();
+    const setStatus = vi.fn();
     const ctx = {
       cwd: repoRoot,
       hasUI: true,
-      ui: { notify, confirm: vi.fn().mockResolvedValue(true) },
+      ui: {
+        notify,
+        confirm: vi.fn().mockResolvedValue(true),
+        setWidget,
+        setStatus,
+      },
     } as unknown as ExtensionCommandContext;
-    return { run: () => handler!("run", ctx), notify };
+    return { run: () => handler!("run", ctx), notify, setWidget, setStatus };
   }
 
   it("surfaces actionable repo and manifest guidance without a stack trace", async () => {
@@ -441,6 +448,18 @@ describe("/autoresearch startup errors", () => {
       expect.stringMatching(/Dependency setup failed.*Run "\.\/setup\.sh" manually.*retry \/autoresearch/s),
       "error",
     );
+    expect(setupFailure.setWidget).toHaveBeenCalledWith(
+      "autoresearch",
+      expect.arrayContaining([
+        expect.stringContaining("autoresearch · mock-challenge · initialization"),
+        expect.stringContaining("status: failed"),
+        expect.stringContaining(".autoresearch/logs/setup.log"),
+      ]),
+    );
+    expect(setupFailure.setStatus).toHaveBeenLastCalledWith(
+      "autoresearch",
+      "autoresearch: initialization failed",
+    );
 
     const benchmarkChallenge = makeTmpChallenge();
     cleanups.push(benchmarkChallenge.cleanup);
@@ -458,5 +477,33 @@ describe("/autoresearch startup errors", () => {
     expect(
       [...setupFailure.notify.mock.calls, ...benchmarkFailure.notify.mock.calls].flat().join("\n"),
     ).not.toMatch(/\n\s+at\s/);
+  });
+
+  it("shows setup, Setup-agent, and baseline stages in the persistent widget", async () => {
+    const challenge = makeTmpChallenge();
+    cleanups.push(challenge.cleanup);
+    const stateDir = path.join(challenge.repoRoot, STATE_DIR_NAME);
+    fs.mkdirSync(stateDir, { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({ version: 1, runner: "mock", maxLoops: 0 }),
+    );
+    const visible = commandHarness(challenge.repoRoot);
+
+    await visible.run();
+
+    const widgets = visible.setWidget.mock.calls
+      .map((call) => (call[1] as string[]).join("\n"))
+      .join("\n---\n");
+    expect(widgets).toContain("running challenge dependency setup");
+    expect(widgets).toContain(
+      "Setup agent is reviewing repository and hardware evidence",
+    );
+    expect(widgets).toContain("measuring the local baseline");
+    expect(widgets).toContain("initialization complete");
+    expect(visible.setStatus).toHaveBeenCalledWith(
+      "autoresearch",
+      "autoresearch: initializing (setup-agent)",
+    );
   });
 });

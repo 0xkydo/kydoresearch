@@ -5,6 +5,7 @@ export type Role = "setup" | "professor" | "phd" | "god" | "advisor" | "metaharn
 
 export type TaskKind =
   | "init.explore" // setup: classify existing commands and confirm readiness
+  | "init.review" // setup: review failed baseline evidence and revise effective commands
   | "propose" // professor: emit ideas for this loop
   | "implement" // phd: implement idea (or fix after verify failure)
   | "write-note" // phd: hypothesis note after no-improvement

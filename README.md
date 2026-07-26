@@ -158,19 +158,29 @@ editable paths for confirmation. Initialization then:
    benchmark commands;
 4. records any local profile flags and reduced-fidelity or official-hardware
    validation gaps in the knowledge base;
-5. runs one baseline with the effective benchmark command, archives an
-   editable-source snapshot; and
-6. starts the research loop.
+5. atomically checkpoints the effective commands in
+   `.autoresearch/loops/init/setup-result.json`;
+6. runs one baseline with the effective benchmark command; if its first
+   attempt fails, gives the completed log and score artifact back to Setup for
+   one bounded baseline-review before the remaining command attempt;
+7. archives an editable-source snapshot; and
+8. starts the research loop.
 
 Initialization itself does not submit. The research loop that follows may sync
 challenge data and submit an improvement automatically.
 
 ### 5. Operate and resume
 
-The live Pi widget shows the current stage, score baseline, candidate titles,
-parents, verification attempts, benchmark deltas, failures, and the three most
-recent research events. It remains visible when a run pauses or completes and
-is restored from durable state after Pi restarts.
+The persistent initialization widget appears as soon as confirmation closes.
+It shows dependency setup, the Setup agent, baseline attempts, baseline-review,
+the active command, attempt counts, and the applicable log path. An
+initialization failure remains on screen with its actionable reason instead of
+disappearing as a transient notification.
+
+After initialization, the live Pi widget shows the current stage, score
+baseline, candidate titles, parents, verification attempts, benchmark deltas,
+failures, and the three most recent research events. It remains visible when a
+run pauses or completes and is restored from durable state after Pi restarts.
 
 Use `/autoresearch status` for the same immediate snapshot in a notification.
 Use `/autoresearch inspect` to list current and recent candidates, then
@@ -220,7 +230,8 @@ blocked while MLX Fast model attribution is empty.
 
 ```text
 init (once per repository)
-  validate manifest + Git → setup command → setup agent → baseline archive
+  validate manifest + Git → setup command → setup agent → durable setup result
+  → baseline → bounded Setup review on failure → baseline archive
 
 research loop
   sync leaderboard and competitor notes
@@ -505,7 +516,7 @@ bounded exponential backoff and honor `/autoresearch stop` immediately.
 
 | Failure | Automatic fallback |
 |---|---|
-| Setup or baseline command | Retry once; leave initialization incomplete with actionable logs if both attempts fail. |
+| Setup or baseline command | Setup retries once. After a first baseline failure, Setup reviews the completed benchmark log and score artifact before the remaining command attempt. The durable Setup result resumes without repeating successful setup/discovery work. |
 | Professor/setup/PhD model call | Retry twice. A PhD provider failure consumes a verify attempt only after its model retries are exhausted. |
 | Leaderboard sync/fetch | Retry once, then continue from `.autoresearch/leaderboard.json`; research is not blocked. |
 | Correctness or benchmark command | Retry once. An idea that still fails is isolated; other ideas continue. |

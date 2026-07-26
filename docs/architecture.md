@@ -55,7 +55,8 @@ extensions/autoresearch/
   config-ui.ts          role and harness configuration
   notes-tool.ts         knowledge-base and note access
   taskboard-tool.ts     shared persisted task board
-  widget.ts             live stage, candidate, score, failure, and activity view
+  widget.ts             persistent initialization plus live candidate, score,
+                        failure, and activity views
   inspect.ts            in-Pi candidate hypothesis and evidence inspection
   agents/
     setup/SOUL.md
@@ -80,8 +81,8 @@ src/
   challenge/
     detect.ts           Yukon manifest and CLI detection
     adapter.ts          setup/verify/bench/submit/sync command boundary
-  init.ts               setup, typed exploration task, baseline measurement,
-                        and baseline editable-source snapshot
+  init.ts               setup, typed exploration/review tasks, durable command
+                        checkpoint, baseline, and editable-source snapshot
   worktree.ts           parent-aware candidate checkouts and winner application
   advisor.ts            WATCHDOG.md parsing and severity filtering
   state.ts              atomic operational snapshot schema
@@ -198,18 +199,38 @@ defined in [`agent-profiles.md`](agent-profiles.md).
    and `setupSucceeded`. The setup role reads the latest successful block as
    setup-log evidence, relates repository requirements to local hardware, and
    selects effective commands using only repository-supported flags.
-5. Persist the returned verification and benchmark commands, then run the
-   baseline with the effective benchmark command, bounded retries, and a fresh
-   finite value parsed from `scorePath`.
-6. Snapshot the complete baseline `editablePaths` surface under
+5. Atomically persist the returned verification and benchmark commands in
+   `loops/init/setup-result.json`, keyed by the manifest, Git revision, and
+   effective Setup role. An interrupted initialization with a matching
+   fingerprint resumes from this result instead of repeating successful setup
+   and repository discovery.
+6. Run the baseline with the effective benchmark command and a fresh finite
+   value parsed from `scorePath`. If its first attempt fails, materialize an
+   `init.review` task containing the benchmark log, score path, exit code,
+   failure tail, and previous commands. Setup performs one bounded
+   baseline-review and either returns repository-supported revised commands,
+   retains the command for a transient retry, or returns
+   `needs-user-action`. The second command attempt uses that decision.
+7. Snapshot the complete baseline `editablePaths` surface under
    `runs/baseline/source/`, record its Git revision and score, set
    `bestCandidateId` to `baseline`, and persist phase `ready`.
+
+The extension installs a persistent initialization widget before step 3. Every
+structured progress event updates its current stage, command, attempt count,
+and authoritative log path. Setup-agent and baseline-review activity is
+therefore visible while Pi subprocesses run. A failure leaves the widget on
+screen with the actionable error and retry instruction.
 
 The Setup role may use lightweight, non-mutating host probes when the setup log
 and repository instructions are insufficient. It never reruns setup, executes
 the benchmark, loads a large model merely for readiness classification, or
 invents hardware policy. Any reduced-fidelity local mode and unexercised
 official-hardware path remains explicit in `knowledge-base.md`.
+
+A timing-only escape hatch that publishes a usable score while recording
+failed correctness is not a correctness verifier. Setup must not place it in
+`verifyCommand` or claim full validation. When no reliable local correctness
+command exists, initialization pauses visibly for user action.
 
 The baseline source snapshot is important: a candidate parent is an explicit
 artifact, not an assumption that Git `HEAD` represents the current best.

@@ -76,9 +76,11 @@ pause, and resume.
 
 ### Setup
 
-Setup runs once. It identifies existing dependencies, correctness checks,
-benchmarks, editable paths, scoring direction, and uncertainties. It does not
-optimize candidate code or invent a new evaluator.
+Setup performs one initial classification. If the baseline supplies new
+failure evidence, the harness may invoke one bounded review before the
+remaining command attempt. Setup identifies existing dependencies,
+correctness checks, benchmarks, editable paths, scoring direction, and
+uncertainties; it does not optimize candidate code or invent a new evaluator.
 
 ### Professor
 
@@ -120,6 +122,7 @@ frozen.
 | Task kind | Role | Task prompt | Deliverable |
 |---|---|---|---|
 | `init.explore` | Setup | `tasks/init-explore.md` | Readiness classification or structured user action |
+| `init.review` | Setup | `tasks/init-review.md` | Evidence-backed command revision or structured user action after a failed baseline |
 | `propose` | Professor | `tasks/propose.md` | Normalized experiment portfolio |
 | `implement` | PhD | `tasks/implement.md` | Scoped change and observed-check report |
 | `write-note` | PhD | `tasks/write-note.md` | Returned postmortem markdown; harness writes it |

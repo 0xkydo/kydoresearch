@@ -9,7 +9,7 @@ import { YukonCliAdapter } from "../../src/challenge/adapter.ts";
 import { detectCli, readManifest } from "../../src/challenge/detect.ts";
 import { loadConfig, saveConfig } from "../../src/config.ts";
 import { nodeExec } from "../../src/exec.ts";
-import { initChallenge } from "../../src/init.ts";
+import { initChallenge, type InitProgress } from "../../src/init.ts";
 import {
   loadMetaHarnessStatus,
   MetaHarnessController,
@@ -27,7 +27,11 @@ import type {
 } from "./config-ui.ts";
 import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
 import { renderCandidateInspection, renderCandidateList } from "./inspect.ts";
-import { renderStatusLines } from "./widget.ts";
+import {
+  renderInitializationLines,
+  renderStatusLines,
+  type InitializationRenderState,
+} from "./widget.ts";
 
 const WIDGET_KEY = "autoresearch";
 export const MIN_PI_VERSION = "0.75.0";
@@ -137,15 +141,72 @@ export function registerAutoresearchCommand(
         if (!ok) return;
       }
       const config = loadConfig(stateDir);
+      let initialization: InitializationRenderState = {
+        stage: "setup",
+        status: "running",
+        message: "preparing challenge initialization",
+        command: manifest.setupCommand,
+        logPath: path.join(STATE_DIR_NAME, "logs", "setup.log"),
+        recentActivity: [],
+      };
+      const showInitialization = (progress: InitProgress): void => {
+        const activity = initialization.recentActivity;
+        const event = initializationActivity(progress);
+        initialization = {
+          ...progress,
+          logPath: progress.logPath
+            ? displayPath(repoRoot, progress.logPath)
+            : initialization.logPath,
+          recentActivity: event
+            ? [event, ...activity.filter((entry) => entry !== event)].slice(0, 3)
+            : activity,
+        };
+        if (ctx.hasUI) {
+          ctx.ui.setWidget(
+            WIDGET_KEY,
+            renderInitializationLines(manifest.name, initialization),
+          );
+          ctx.ui.setStatus(
+            WIDGET_KEY,
+            `autoresearch: initializing (${progress.stage})`,
+          );
+        }
+      };
+      if (ctx.hasUI) {
+        ctx.ui.setWidget(
+          WIDGET_KEY,
+          renderInitializationLines(manifest.name, initialization),
+        );
+        ctx.ui.setStatus(WIDGET_KEY, "autoresearch: initializing");
+      }
       try {
         await initChallenge({
           repoRoot,
           runner: makeRunner(config.runner, stateDir),
           exec: nodeExec,
           emit: (msg) => notify(ctx, msg),
+          onProgress: showInitialization,
         });
       } catch (err) {
-        notify(ctx, `init failed: ${err instanceof Error ? err.message : String(err)}`, "error");
+        const failure = err instanceof Error ? err.message : String(err);
+        initialization = {
+          ...initialization,
+          status: "failed",
+          message: initializationFailureStage(initialization.stage),
+          failure,
+          recentActivity: [
+            `initialization stopped: ${firstDisplayLine(failure)}`,
+            ...initialization.recentActivity,
+          ].slice(0, 3),
+        };
+        if (ctx.hasUI) {
+          ctx.ui.setWidget(
+            WIDGET_KEY,
+            renderInitializationLines(manifest.name, initialization),
+          );
+          ctx.ui.setStatus(WIDGET_KEY, "autoresearch: initialization failed");
+        }
+        notify(ctx, `init failed: ${failure}`, "error");
         return;
       }
     }
@@ -735,6 +796,42 @@ function readRecentActivity(stateDir: string): string[] {
     }
   }
   return activity;
+}
+
+function initializationActivity(progress: InitProgress): string {
+  const attempt =
+    progress.attempt !== undefined
+      ? ` · attempt ${progress.attempt}${progress.maxAttempts ? `/${progress.maxAttempts}` : ""}`
+      : "";
+  return `${progress.stage} · ${progress.status}${attempt} · ${progress.message}`;
+}
+
+function initializationFailureStage(
+  stage: InitializationRenderState["stage"],
+): string {
+  switch (stage) {
+    case "setup":
+      return "challenge dependency setup failed";
+    case "setup-agent":
+      return "Setup agent could not confirm readiness";
+    case "baseline":
+      return "local baseline benchmark failed";
+    case "baseline-review":
+      return "Setup could not safely recover the failed baseline";
+    case "ready":
+      return "initialization failed while saving ready state";
+  }
+}
+
+function displayPath(repoRoot: string, value: string): string {
+  const relative = path.relative(repoRoot, value);
+  return relative && !relative.startsWith(`..${path.sep}`) && relative !== ".."
+    ? relative
+    : value;
+}
+
+function firstDisplayLine(value: string): string {
+  return value.trim().split("\n")[0] ?? value;
 }
 
 function isVersionAtLeast(actual: string, minimum: string): boolean {
