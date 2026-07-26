@@ -51,6 +51,77 @@ describe("initChallenge", () => {
     expect(telemetry).toContain('"flow":"challenge.benchmark"');
   });
 
+  it("persists the successful setup invocation as evidence for Setup", async () => {
+    const baseRunner = new MockAgentRunner();
+    let setupInput: Record<string, unknown> | undefined;
+    const runner: AgentRunner = {
+      run: (task) => {
+        if (task.kind === "init.explore") setupInput = { ...task.input };
+        return baseRunner.run(task);
+      },
+    };
+
+    const { stateDir } = await initChallenge({ repoRoot, runner, exec: nodeExec });
+    const setupLogPath = path.join(stateDir, "logs", "setup.log");
+
+    expect(setupInput).toMatchObject({
+      setupCommand: "./setup.sh",
+      setupLogPath,
+      setupSucceeded: true,
+    });
+    const setupTask = JSON.parse(
+      fs.readFileSync(path.join(stateDir, "loops", "init", "setup-task.json"), "utf8"),
+    ) as { input: Record<string, unknown> };
+    expect(setupTask.input).toMatchObject({
+      setupCommand: "./setup.sh",
+      setupLogPath,
+      setupSucceeded: true,
+    });
+    expect(fs.readFileSync(setupLogPath, "utf8")).toMatch(
+      /\$ \.\/setup\.sh[\s\S]*end · exit=0/,
+    );
+  });
+
+  it("uses Setup's hardware-aware commands for baseline and persisted state", async () => {
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    const setupLogPath = path.join(stateDir, "logs", "setup.log");
+    const shellCommands: string[] = [];
+    const exec: ExecPort = (cmd, args, opts) => {
+      if (cmd === "/bin/bash") shellCommands.push(args[1] ?? "");
+      return nodeExec(cmd, args, opts);
+    };
+    const runner: AgentRunner = {
+      run: (task) => {
+        const hasSetupEvidence =
+          task.input.setupCommand === "./setup.sh" &&
+          task.input.setupLogPath === setupLogPath &&
+          task.input.setupSucceeded === true;
+        return Promise.resolve({
+          ok: true,
+          output: hasSetupEvidence ? "Selected documented local mode." : "Setup evidence missing.",
+          structured: hasSetupEvidence
+            ? {
+                status: "ready",
+                subjectArea: "hardware-aware fixture",
+                verifyCommand: "FIXTURE_MODE=local ./verify.sh",
+                benchCommand: "FIXTURE_MODE=local ./benchmark.sh",
+              }
+            : {
+                status: "needs-user-action",
+                userAction: { reason: "Setup evidence missing." },
+              },
+          filesWritten: [],
+        });
+      },
+    };
+
+    const { state } = await initChallenge({ repoRoot, runner, exec });
+
+    expect(state.challenge.verifyCommand).toBe("FIXTURE_MODE=local ./verify.sh");
+    expect(state.challenge.benchCommand).toBe("FIXTURE_MODE=local ./benchmark.sh");
+    expect(shellCommands).toContain("FIXTURE_MODE=local ./benchmark.sh");
+  });
+
   it("initializes an ecdsafail-shaped argv manifest and records its baseline", async () => {
     fs.writeFileSync(
       path.join(repoRoot, "benchmark.json"),

@@ -133,6 +133,9 @@ export interface SetupTaskInputV1 {
   repoRoot: string;
   manifestPath: string;
   knowledgeBasePath: string;
+  setupCommand: string;
+  setupLogPath: string;
+  setupSucceeded: true;
 }
 
 export type SetupTaskV1 = ResearchTaskBaseV1<"init.explore", "setup", SetupTaskInputV1>;
