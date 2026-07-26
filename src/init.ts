@@ -5,7 +5,7 @@ import type { AgentRunner } from "./agents/types.ts";
 import { candidateRunPaths, snapshotEditableSource } from "./archive.ts";
 import { YukonCliAdapter } from "./challenge/adapter.ts";
 import { detectCli, isInsideEditablePaths, readManifest } from "./challenge/detect.ts";
-import type { ScoreResult } from "./challenge/types.ts";
+import type { BenchmarkManifest, ScoreResult } from "./challenge/types.ts";
 import type { HarnessConfig } from "./config.ts";
 import { loadConfig, saveConfig } from "./config.ts";
 import type { ExecPort } from "./exec.ts";
@@ -18,6 +18,10 @@ import type {
   SetupTaskV1,
 } from "./experiments.ts";
 import { EXPERIMENT_SCHEMA_VERSION, validateResearchTask } from "./experiments.ts";
+import {
+  InitializationError,
+  type InitializationDiagnosticV1,
+} from "./initialization.ts";
 import type { ChallengeInfo, LoopState } from "./state.ts";
 import { newLoopState, saveState, STATE_DIR_NAME, statePaths } from "./state.ts";
 import { LocalTelemetry } from "./telemetry.ts";
@@ -30,7 +34,14 @@ export interface InitResult {
 }
 
 export interface InitProgress {
-  stage: "setup" | "setup-agent" | "baseline" | "baseline-review" | "ready";
+  stage:
+    | "validate"
+    | "setup"
+    | "setup-agent"
+    | "baseline"
+    | "baseline-review"
+    | "archive"
+    | "ready";
   status: "running" | "retrying" | "succeeded" | "resuming";
   message: string;
   command?: string;
@@ -38,6 +49,12 @@ export interface InitProgress {
   maxAttempts?: number;
   logPath?: string;
   localEvaluation?: LocalEvaluationV1;
+  baselineScore?: number;
+  direction?: "+" | "-";
+  verifyCommand?: string;
+  benchCommand?: string;
+  submissionReady?: boolean;
+  evidencePath?: string;
 }
 
 /**
@@ -68,21 +85,57 @@ export async function initChallenge(opts: {
 }): Promise<InitResult> {
   const { repoRoot, runner, exec } = opts;
   const emit = opts.emit ?? (() => {});
-  const manifest = readManifest(repoRoot);
+  let manifest: BenchmarkManifest;
+  try {
+    manifest = readManifest(repoRoot);
+  } catch (error) {
+    throw new InitializationError({
+      code: "invalid-manifest",
+      step: "validate",
+      title: "Challenge manifest is invalid",
+      reason: error instanceof Error ? error.message : String(error),
+      action: "Fix benchmark.json, then retry /autoresearch.",
+      evidencePath: path.join(repoRoot, "benchmark.json"),
+      retryable: true,
+      resumesFromCheckpoint: false,
+    });
+  }
+  opts.onProgress?.({
+    stage: "validate",
+    status: "running",
+    message: "validating benchmark.json and Git checkout",
+  });
   const gitCheck = await exec("git", ["rev-parse", "--is-inside-work-tree"], { cwd: repoRoot });
   if (gitCheck.code !== 0 || gitCheck.stdout.trim() !== "true") {
-    throw new Error(
-      `Not a git repository: ${repoRoot}. ` +
-        "Clone the challenge, cd into it, then retry /autoresearch.",
-    );
+    throw new InitializationError({
+      code: "not-git-repository",
+      step: "validate",
+      title: "Git checkout is required",
+      reason: `Not a git repository: ${repoRoot}.`,
+      action: "Clone the challenge, cd into it, then retry /autoresearch.",
+      retryable: true,
+      resumesFromCheckpoint: false,
+    });
   }
 
   if (isInsideEditablePaths(STATE_DIR_NAME, manifest.editablePaths)) {
-    throw new Error(
-      `.autoresearch/ would fall inside editablePaths (${manifest.editablePaths.join(", ")}); ` +
-        "the harness state dir must not ship in submission tarballs. Aborting init.",
-    );
+    throw new InitializationError({
+      code: "state-path-conflict",
+      step: "validate",
+      title: "Harness state overlaps the submission surface",
+      reason: `.autoresearch/ falls inside editablePaths (${manifest.editablePaths.join(", ")}).`,
+      action:
+        "Narrow editablePaths in benchmark.json so .autoresearch is excluded, then retry.",
+      evidencePath: path.join(repoRoot, "benchmark.json"),
+      retryable: true,
+      resumesFromCheckpoint: false,
+    });
   }
+  opts.onProgress?.({
+    stage: "validate",
+    status: "succeeded",
+    message: "challenge manifest and Git checkout are valid",
+  });
 
   const stateDir = path.join(repoRoot, STATE_DIR_NAME);
   const paths = statePaths(stateDir);
@@ -94,7 +147,7 @@ export async function initChallenge(opts: {
   fs.mkdirSync(paths.logsDir, { recursive: true });
   fs.mkdirSync(paths.notesDir, { recursive: true });
   fs.mkdirSync(paths.worktreesDir, { recursive: true });
-  excludeFromGit(repoRoot, `${STATE_DIR_NAME}/`);
+  excludeAutoresearchStateFromGit(repoRoot);
 
   const config = loadConfig(stateDir);
   const cli = detectCli(repoRoot, manifest);
@@ -104,7 +157,15 @@ export async function initChallenge(opts: {
   const setupResultPath = path.join(setupTaskDir, "setup-result.json");
   const revision = await exec("git", ["rev-parse", "HEAD"], { cwd: repoRoot });
   if (revision.code !== 0 || revision.stdout.trim() === "") {
-    throw new Error(`Unable to record baseline Git revision: ${revision.stderr.trim()}`);
+    throw new InitializationError({
+      code: "persistence-failed",
+      step: "archive",
+      title: "Baseline revision could not be recorded",
+      reason: revision.stderr.trim() || "git rev-parse HEAD returned no revision.",
+      action: "Repair the Git checkout, then retry /autoresearch.",
+      retryable: true,
+      resumesFromCheckpoint: false,
+    });
   }
   const checkpointFingerprint = createHash("sha256")
     .update(
@@ -196,9 +257,13 @@ export async function initChallenge(opts: {
       (result) => (opts.signal?.aborted ? "aborted" : result.ok ? "ok" : "error"),
     );
     if (!setup.ok) {
-      throw new Error(
-        `Dependency setup failed (exit ${setup.exitCode}):\n${setup.raw}\n\n` +
-          `Run "${manifest.setupCommand}" manually, fix the reported error, then retry /autoresearch.`,
+      throw new InitializationError(
+        commandDiagnostic(
+          "setup",
+          setup,
+          manifest.setupCommand,
+          path.join(paths.logsDir, "setup.log"),
+        ),
       );
     }
     opts.onProgress?.({
@@ -279,7 +344,19 @@ export async function initChallenge(opts: {
         }),
       (result) => (opts.signal?.aborted ? "aborted" : result.ok ? "ok" : "error"),
     );
-    if (!explore.ok) throw new Error(`Setup agent failed: ${explore.error ?? explore.output}`);
+    if (!explore.ok) {
+      throw new InitializationError({
+        code: "setup-agent-failed",
+        step: "setup-agent",
+        title: "Setup profile could not complete",
+        reason: firstLine(explore.error ?? explore.output) || "The Setup worker failed.",
+        action:
+          "Check the configured Setup model and provider, inspect its trace, then retry /autoresearch.",
+        evidencePath: path.join(paths.resolvedAgentsDir, "setup", "events.ndjson"),
+        retryable: true,
+        resumesFromCheckpoint: false,
+      });
+    }
 
     let structured = explore.structured ?? {};
     const initialDecision = await resolveAutonomousSetupDecision(structured, {
@@ -298,10 +375,18 @@ export async function initChallenge(opts: {
       (typeof structured.verifyCommand !== "string" ||
         typeof structured.benchCommand !== "string")
     ) {
-      throw new Error(
-        "Setup returned no autonomous readiness decision. " +
-          "Inspect .autoresearch/resolved-agents/setup/events.ndjson, then retry /autoresearch.",
-      );
+      throw new InitializationError({
+        code: "setup-result-invalid",
+        step: "setup-agent",
+        title: "Setup returned an incomplete readiness result",
+        reason:
+          "The Setup result contained neither a ready decision nor usable verification and benchmark commands.",
+        action:
+          "Inspect the Setup trace or restore the bundled Setup prompt, then retry /autoresearch.",
+        evidencePath: path.join(paths.resolvedAgentsDir, "setup", "events.ndjson"),
+        retryable: true,
+        resumesFromCheckpoint: false,
+      });
     }
     verifyCommand = commandFromResult(
       structured.verifyCommand,
@@ -389,16 +474,14 @@ export async function initChallenge(opts: {
           : "error",
   );
   if (!baseline.ok || baseline.score === undefined) {
-    if (
-      baseline.exitCode === 127 ||
-      /(?:command not found|No such file or directory)/i.test(baseline.raw)
-    ) {
-      throw new Error(
-        `Benchmark command "${benchCommand}" was not found or could not start.\n${baseline.raw}\n\n` +
-          "Install the required executable or fix benchmarkCommand in benchmark.json, then retry /autoresearch.",
-      );
-    }
-    throw new Error(`Baseline benchmark failed (exit ${baseline.exitCode}):\n${baseline.raw}`);
+    throw new InitializationError(
+      baselineDiagnostic(
+        baseline,
+        benchCommand,
+        manifest.scorePath,
+        path.join(paths.logsDir, "benchmark.log"),
+      ),
+    );
   }
   opts.onProgress?.({
     stage: "baseline",
@@ -409,22 +492,43 @@ export async function initChallenge(opts: {
     localEvaluation,
   });
 
-  const state = newLoopState(challenge);
-  state.bestScore = baseline.score;
-  state.bestCandidateId = "baseline";
-  const baselinePaths = candidateRunPaths(stateDir, "baseline");
-  snapshotEditableSource(repoRoot, baselinePaths.source, challenge.editablePaths);
-  atomicWriteJson(path.join(baselinePaths.root, "baseline.json"), {
-    schemaVersion: EXPERIMENT_SCHEMA_VERSION,
-    candidateId: "baseline",
-    baseRevision: revision.stdout.trim(),
-    score: baseline.score,
-    capturedAt: new Date().toISOString(),
-    editablePaths: challenge.editablePaths,
+  opts.onProgress?.({
+    stage: "archive",
+    status: "running",
+    message: "archiving the baseline and saving ready state",
   });
-  state.phase = "ready";
-  saveState(stateDir, state);
-  saveConfig(stateDir, config);
+  let state: LoopState;
+  let baselinePaths;
+  try {
+    state = newLoopState(challenge);
+    state.bestScore = baseline.score;
+    state.bestCandidateId = "baseline";
+    baselinePaths = candidateRunPaths(stateDir, "baseline");
+    snapshotEditableSource(repoRoot, baselinePaths.source, challenge.editablePaths);
+    atomicWriteJson(path.join(baselinePaths.root, "baseline.json"), {
+      schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+      candidateId: "baseline",
+      baseRevision: revision.stdout.trim(),
+      score: baseline.score,
+      capturedAt: new Date().toISOString(),
+      editablePaths: challenge.editablePaths,
+    });
+    state.phase = "ready";
+    saveState(stateDir, state);
+    saveConfig(stateDir, config);
+  } catch (error) {
+    throw new InitializationError({
+      code: "persistence-failed",
+      step: "archive",
+      title: "Ready state could not be saved",
+      reason: error instanceof Error ? error.message : String(error),
+      action:
+        "Check filesystem permissions and available disk space, then retry /autoresearch.",
+      evidencePath: path.join(stateDir, "loops", "init"),
+      retryable: true,
+      resumesFromCheckpoint: true,
+    });
+  }
   appendJournal(paths.journal, {
     phase: "ready",
     challenge: challenge.name,
@@ -434,11 +538,19 @@ export async function initChallenge(opts: {
   });
   emit(`init: ready (verify: ${verifyCommand} · bench: ${benchCommand})`);
   opts.onProgress?.({
-    stage: "ready",
+    stage: "archive",
     status: "succeeded",
     message: "initialization complete",
     command: benchCommand,
     localEvaluation,
+    baselineScore: baseline.score,
+    direction: manifest.direction,
+    verifyCommand,
+    benchCommand,
+    submissionReady:
+      Boolean(cli) &&
+      (cli !== "mlxfast" || Boolean(config.submitModelName?.trim())),
+    evidencePath: baselinePaths.root,
   });
 
   return { state, config, stateDir };
@@ -543,7 +655,17 @@ export async function initChallenge(opts: {
       (result) => (opts.signal?.aborted ? "aborted" : result.ok ? "ok" : "error"),
     );
     if (!review.ok) {
-      throw new Error(`Setup baseline review failed: ${review.error ?? review.output}`);
+      throw new InitializationError({
+        code: "setup-agent-failed",
+        step: "baseline",
+        title: "Setup could not review the failed baseline",
+        reason: firstLine(review.error ?? review.output) || "The Setup review worker failed.",
+        action:
+          "Inspect the Setup review trace and benchmark log, then retry /autoresearch.",
+        evidencePath: path.join(paths.resolvedAgentsDir, "setup-review", "events.ndjson"),
+        retryable: true,
+        resumesFromCheckpoint: true,
+      });
     }
     let structured = review.structured ?? {};
     const reviewedDecision = await resolveAutonomousSetupDecision(structured, {
@@ -563,10 +685,18 @@ export async function initChallenge(opts: {
       (typeof structured.verifyCommand !== "string" ||
         typeof structured.benchCommand !== "string")
     ) {
-      throw new Error(
-        "Setup baseline review returned no autonomous readiness decision. " +
-          "Inspect .autoresearch/resolved-agents/setup-review/events.ndjson, then retry /autoresearch.",
-      );
+      throw new InitializationError({
+        code: "setup-result-invalid",
+        step: "baseline",
+        title: "Setup review returned an incomplete recovery decision",
+        reason:
+          "The review contained neither a ready decision nor usable revised commands.",
+        action:
+          "Inspect the Setup review trace or restore the bundled prompt, then retry /autoresearch.",
+        evidencePath: path.join(paths.resolvedAgentsDir, "setup-review", "events.ndjson"),
+        retryable: true,
+        resumesFromCheckpoint: true,
+      });
     }
 
     verifyCommand = commandFromResult(structured.verifyCommand, verifyCommand);
@@ -617,7 +747,7 @@ export async function initChallenge(opts: {
     },
   ): Promise<{ structured: Record<string, unknown>; summary?: string }> {
     if (structured.status === "blocked-external") {
-      throw new Error(formatSetupExternalBlocker(structured.externalBlocker));
+      throw externalBlockerError(structured.externalBlocker, context.stage);
     }
     if (structured.status !== "needs-user-action") return { structured };
 
@@ -728,14 +858,26 @@ export async function initChallenge(opts: {
 
     const resolved = decision.structured ?? {};
     if (resolved.status === "blocked-external") {
-      throw new Error(formatSetupExternalBlocker(resolved.externalBlocker));
+      throw externalBlockerError(resolved.externalBlocker, context.stage);
     }
     if (!decision.ok || resolved.status !== "ready") {
-      throw new Error(
-        `Setup could not resolve its local-evaluation decision autonomously: ${
-          decision.error ?? decision.output
-        }`,
-      );
+      throw new InitializationError({
+        code: "setup-agent-failed",
+        step: context.stage === "setup-agent" ? "setup-agent" : "baseline",
+        title: "Setup could not resolve the local evaluation mode",
+        reason:
+          firstLine(decision.error ?? decision.output) ||
+          "The autonomous Setup decision failed.",
+        action:
+          "Inspect the Setup decision trace and repository guidance, then retry /autoresearch.",
+        evidencePath: path.join(
+          paths.resolvedAgentsDir,
+          `setup-decision-${decisionId}`,
+          "events.ndjson",
+        ),
+        retryable: true,
+        resumesFromCheckpoint: context.stage === "baseline-review",
+      });
     }
     return { structured: resolved, summary: decision.output };
   }
@@ -882,16 +1024,21 @@ function describeSetupDecisionRequest(value: unknown): string {
     .join("\n");
 }
 
-function formatSetupExternalBlocker(value: unknown): string {
+function externalBlockerError(
+  value: unknown,
+  stage: "setup-agent" | "baseline-review",
+): InitializationError {
   const blocker =
-    typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+    typeof value === "object" && value !== null
+      ? (value as Record<string, unknown>)
+      : {};
   const reason =
     typeof blocker.reason === "string" && blocker.reason.trim()
       ? blocker.reason.trim()
       : "Setup found a required external capability that is unavailable.";
-  const location =
+  const evidencePath =
     typeof blocker.location === "string" && blocker.location.trim()
-      ? `Evidence: ${blocker.location.trim()}`
+      ? blocker.location.trim()
       : undefined;
   const instructions = Array.isArray(blocker.instructions)
     ? blocker.instructions.filter(
@@ -899,20 +1046,155 @@ function formatSetupExternalBlocker(value: unknown): string {
           typeof instruction === "string" && instruction.trim().length > 0,
       )
     : [];
+  return new InitializationError({
+    code: "external-capability-blocker",
+    step: stage === "setup-agent" ? "setup-agent" : "baseline",
+    title: "Initialization is blocked by an external requirement",
+    reason,
+    action:
+      `${
+        instructions.map((instruction) => instruction.trim()).join(" ") ||
+        "Provide the external capability."
+      } Then retry /autoresearch.`,
+    ...(evidencePath ? { evidencePath } : {}),
+    retryable: true,
+    resumesFromCheckpoint: stage === "baseline-review",
+  });
+}
 
-  return [
-    "Initialization is blocked by an external requirement, not a Setup decision.",
-    `Reason: ${reason}`,
-    location,
-    ...instructions.map((instruction) => `- ${instruction.trim()}`),
-    "Provide the external capability, then retry /autoresearch.",
-  ]
-    .filter((line): line is string => line !== undefined)
-    .join("\n");
+function commandDiagnostic(
+  step: "setup",
+  result: ScoreResult,
+  command: string,
+  evidencePath: string,
+): InitializationDiagnosticV1 {
+  if (
+    result.failureKind === "command-not-found" ||
+    result.exitCode === 127 ||
+    /(?:command not found|No such file or directory)/i.test(result.raw)
+  ) {
+    return {
+      code: "command-not-found",
+      step,
+      title: "Dependency command could not start",
+      reason: `The configured setup command "${command}" was not found or could not start.`,
+      action:
+        "Install the required executable or fix setupCommand in benchmark.json, then retry /autoresearch.",
+      command,
+      exitCode: result.exitCode,
+      evidencePath,
+      retryable: true,
+      resumesFromCheckpoint: false,
+    };
+  }
+  if (result.failureKind === "timeout" || result.timedOut) {
+    return {
+      code: "command-timeout",
+      step,
+      title: "Dependency setup timed out",
+      reason: `The setup command exceeded its configured timeout.`,
+      action:
+        "Inspect the setup log; if it was making useful progress, increase setupTimeoutMs and retry.",
+      command,
+      exitCode: result.exitCode,
+      evidencePath,
+      retryable: true,
+      resumesFromCheckpoint: false,
+    };
+  }
+  return {
+    code: "setup-command-failed",
+    step,
+    title: "Dependency setup failed",
+    reason:
+      firstLine(result.raw) ||
+      `The setup command exited with status ${result.exitCode}.`,
+    action: `Run "${command}" manually, fix the reported error, then retry /autoresearch.`,
+    command,
+    exitCode: result.exitCode,
+    evidencePath,
+    retryable: true,
+    resumesFromCheckpoint: false,
+  };
+}
+
+function baselineDiagnostic(
+  result: ScoreResult,
+  command: string,
+  scorePath: string,
+  evidencePath: string,
+): InitializationDiagnosticV1 {
+  const common = {
+    step: "baseline" as const,
+    command,
+    exitCode: result.exitCode,
+    evidencePath,
+    retryable: true,
+    resumesFromCheckpoint: true,
+  };
+  switch (result.failureKind) {
+    case "command-not-found":
+      return {
+        ...common,
+        code: "command-not-found",
+        title: "Baseline command could not start",
+        reason: `Benchmark command "${command}" was not found or could not start.`,
+        action:
+          "Install the required executable or fix benchmarkCommand in benchmark.json, then retry /autoresearch.",
+      };
+    case "timeout":
+      return {
+        ...common,
+        code: "command-timeout",
+        title: "Baseline measurement timed out",
+        reason: "The benchmark exceeded benchmarkTimeoutMs.",
+        action:
+          "Inspect the benchmark log; if it was making useful progress, increase benchmarkTimeoutMs and retry.",
+      };
+    case "score-file-missing":
+      return {
+        ...common,
+        code: "score-file-missing",
+        title: "Benchmark produced no score artifact",
+        reason: `The command exited successfully but did not write ${scorePath}.`,
+        action:
+          "Fix the benchmark output or scorePath in benchmark.json, then retry /autoresearch.",
+      };
+    case "score-json-invalid":
+      return {
+        ...common,
+        code: "score-json-invalid",
+        title: "Score artifact is not valid JSON",
+        reason: `${scorePath} could not be parsed after the benchmark completed.`,
+        action:
+          "Fix the benchmark so it writes valid JSON containing a numeric score, then retry.",
+      };
+    case "score-value-invalid":
+      return {
+        ...common,
+        code: "score-value-invalid",
+        title: "Score artifact has no finite numeric score",
+        reason: `${scorePath} must contain a finite numeric "score" field.`,
+        action:
+          "Fix the benchmark score output, then retry /autoresearch.",
+      };
+    default:
+      return {
+        ...common,
+        code: "baseline-failed",
+        title: "Baseline benchmark failed",
+        reason:
+          firstLine(result.raw) ||
+          `The benchmark exited with status ${result.exitCode}.`,
+        action:
+          "Inspect the benchmark log and Setup trace, correct the reported problem, then retry.",
+      };
+  }
 }
 
 /** Add a pattern to .git/info/exclude (idempotent). No-op outside a git repo. */
-function excludeFromGit(repoRoot: string, pattern: string): void {
+export function excludeAutoresearchStateFromGit(repoRoot: string): void {
+  const pattern = `${STATE_DIR_NAME}/`;
   const gitDir = path.join(repoRoot, ".git");
   if (!fs.existsSync(gitDir)) return;
   // .git can be a file in worktrees; only handle the plain-dir case.

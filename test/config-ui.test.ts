@@ -44,4 +44,30 @@ describe("ConfigPanel", () => {
     expect(rendered).toContain("soul              SOUL.md");
     expect(rendered).toContain("prompt            professor.md");
   });
+
+  it("explains Setup during onboarding and exposes its tool policy", () => {
+    const theme = {
+      fg: (_color: string, text: string) => text,
+      bold: (text: string) => text,
+    } as unknown as Theme;
+    const tui = { requestRender: () => {} } as unknown as TUI;
+    const panel = new ConfigPanel(
+      structuredClone(DEFAULT_CONFIG),
+      { pane: "right", left: 0, right: 0 },
+      tui,
+      theme,
+      () => {},
+      {
+        roles: ["setup"],
+        title: "first-run agent profiles",
+        describeRoles: true,
+      },
+    );
+
+    const rendered = panel.render(180).join("\n");
+    expect(rendered).toContain("Setup — Maps the challenge");
+    expect(rendered).toContain("first-time initialization");
+    expect(rendered).toContain("never optimizes candidates");
+    expect(rendered).toContain("tools             read, write, edit, bash");
+  });
 });

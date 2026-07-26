@@ -188,6 +188,14 @@ defined in [`agent-profiles.md`](agent-profiles.md).
 
 ## First-run initialization
 
+The interactive extension wraps core initialization in a guided, repo-local
+onboarding flow. Before side effects, it explains and configures every active
+role profile, validates subprocess models and profile files, and previews the
+setup command, initial benchmark command, editable paths, score direction,
+retry budgets, and evidence locations. MLX Fast additionally requires exact
+public model attribution. This control-plane validation adds no
+challenge-specific hardware policy to the core.
+
 `initChallenge` performs these operations in order:
 
 1. Read `benchmark.json` (including shell-string or argv commands), validate
@@ -222,14 +230,28 @@ defined in [`agent-profiles.md`](agent-profiles.md).
    `bestCandidateId` to `baseline`, and persist phase `ready`.
 
 The extension installs a persistent initialization widget—a control deck below
-the Pi editor—before step 3. In TUI mode it uses `setWidget`'s
+the Pi editor—before step 1. Validation, dependency setup, repository/hardware
+analysis, baseline measurement, and archival share one checklist contract.
+Step updates and the final readiness result are atomically mirrored to
+`.autoresearch/loops/init/status.json`, allowing failures and a not-yet-started
+`ready` result to survive Pi restarts. In TUI mode it uses `setWidget`'s
 custom-component path, which is not subject to Pi's ten-line cap for
 string-array widgets. Every
 structured progress event updates its width-aware stage, local-evaluation
 fidelity, command, attempt count, authoritative log path, and recent activity.
 Setup-agent, autonomous decision, and baseline-review work is therefore
 visible while Pi subprocesses run. A failure leaves the deck on screen with
-the actionable error and retry instruction.
+the actionable error and retry instruction. Ordinary progress does not create
+notification spam; raw process output remains in the authoritative log.
+
+Initialization errors use a structured diagnostic with a stable code, failed
+step, plain-language reason, corrective action, command/exit context, evidence
+path, and checkpoint-resume behavior. Command results distinguish missing
+executables, timeouts, nonzero exits, missing score files, malformed JSON, and
+non-finite scores. Successful initialization is reported as either `ready`
+with full local evaluation or `ready-with-limitations` with explicit fidelity
+gaps. Interactive users then choose whether to start research immediately or
+remain durably at phase `ready`.
 
 The research deck keeps operator-critical context in one stable hierarchy:
 run/idle state, phase and loop, objective and direction, evaluation fidelity,

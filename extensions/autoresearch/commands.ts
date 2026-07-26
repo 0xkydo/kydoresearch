@@ -14,7 +14,23 @@ import { YukonCliAdapter } from "../../src/challenge/adapter.ts";
 import { detectCli, readManifest } from "../../src/challenge/detect.ts";
 import { loadConfig, saveConfig } from "../../src/config.ts";
 import { nodeExec } from "../../src/exec.ts";
-import { initChallenge, type InitProgress } from "../../src/init.ts";
+import {
+  excludeAutoresearchStateFromGit,
+  initChallenge,
+  type InitProgress,
+} from "../../src/init.ts";
+import {
+  completeInitializationReport,
+  createInitializationReport,
+  failInitializationReport,
+  InitializationError,
+  loadInitializationReport,
+  saveInitializationReport,
+  updateInitializationStep,
+  type InitializationDiagnosticV1,
+  type InitializationReportV1,
+  type InitializationStepId,
+} from "../../src/initialization.ts";
 import {
   loadMetaHarnessStatus,
   MetaHarnessController,
@@ -35,8 +51,18 @@ import type {
   EditableSettingField,
   NavState,
 } from "./config-ui.ts";
-import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
+import {
+  ALL_CONFIGURABLE_ROLES,
+  ConfigPanel,
+} from "./config-ui.ts";
 import { renderCandidateInspection, renderCandidateList } from "./inspect.ts";
+import {
+  activeProfileRoles,
+  onboardingCheckpointMatches,
+  renderSetupPlan,
+  saveOnboardingCheckpoint,
+  validateActiveProfiles,
+} from "./onboarding.ts";
 import {
   renderInitializationDashboardLines,
   renderInitializationLines,
@@ -198,39 +224,169 @@ export function registerAutoresearchCommand(
       return;
     }
     const detectedCli = detectCli(repoRoot, manifest);
-    const preflightConfig = loadConfig(stateDir);
-    if (detectedCli === "mlxfast" && !preflightConfig.submitModelName?.trim()) {
-      notify(
-        ctx,
-        'MLX Fast requires exact model attribution before the loop can submit. ' +
-          'Open /autoresearch config → settings → submit model and enter the underlying model name ' +
-          '(for this Codex agent: "GPT 5.6 Sol"), then retry /autoresearch.',
-        "error",
-      );
-      return;
+    const existingState = loadState(stateDir);
+    let preflightConfig = loadConfig(stateDir);
+    const guided =
+      !existingState && ctx.hasUI && ctx.mode !== "rpc";
+    if (
+      guided &&
+      preflightConfig.runner === "mock" &&
+      (detectedCli === "mlxfast" || detectedCli === "ecdsafail")
+    ) {
+      preflightConfig.runner = "subprocess";
     }
 
-    // First run in this repo: init (setup agent) with a confirm when interactive.
-    if (!loadState(stateDir)) {
+    // First run in this repo: configure active profiles, validate them, then
+    // preview every side-effectful initialization step before running it.
+    if (!existingState) {
+      const checkpointMatches = onboardingCheckpointMatches(
+        stateDir,
+        manifest,
+        preflightConfig,
+      );
+      if (guided && !checkpointMatches) {
+        const initialRoles = activeProfileRoles(preflightConfig) as ConfigurableRole[];
+        await runConfigPanel(
+          ctx,
+          preflightConfig,
+          initialRoles,
+          "first-run agent profiles",
+          true,
+        );
+        if (
+          preflightConfig.metaHarness.enabled &&
+          !initialRoles.includes("metaharness")
+        ) {
+          await runConfigPanel(
+            ctx,
+            preflightConfig,
+            ["metaharness"],
+            "optional meta-harness profile",
+            true,
+          );
+        }
+        excludeAutoresearchStateFromGit(repoRoot);
+        fs.mkdirSync(stateDir, { recursive: true });
+        saveConfig(stateDir, preflightConfig);
+      }
+
+      const availableModels =
+        ctx.hasUI && ctx.modelRegistry
+          ? new Set(
+              ctx.modelRegistry
+                .getAvailable()
+                .map((model) => `${model.provider}/${model.id}`),
+            )
+          : undefined;
+      const profileErrors = validateActiveProfiles(
+        repoRoot,
+        preflightConfig,
+        availableModels,
+      );
+      if (detectedCli === "mlxfast" && !preflightConfig.submitModelName?.trim()) {
+        profileErrors.push(
+          'MLX Fast requires exact model attribution: enter the public name under settings → submit model (for this Codex agent: "GPT 5.6 Sol").',
+        );
+      }
+      if (profileErrors.length > 0) {
+        const diagnostic: InitializationDiagnosticV1 = {
+          code: "profile-unavailable",
+          step: "validate",
+          title: "One or more active profiles are not ready",
+          reason: profileErrors.join(" "),
+          action:
+            "Use /login or /autoresearch config to resolve every listed profile, then retry /autoresearch.",
+          evidencePath: path.join(STATE_DIR_NAME, "config.json"),
+          retryable: true,
+          resumesFromCheckpoint: false,
+        };
+        excludeAutoresearchStateFromGit(repoRoot);
+        const failedReport = persistPreflightFailure(
+          stateDir,
+          manifest.name,
+          diagnostic,
+        );
+        if (ctx.hasUI) {
+          setInitializationDashboard(
+            ctx,
+            manifest.name,
+            initializationRenderState(failedReport),
+          );
+          ctx.ui.setStatus(WIDGET_KEY, "autoresearch: profile setup required");
+        }
+        notify(ctx, renderDiagnosticMessage(diagnostic), "error");
+        return;
+      }
+
       if (ctx.hasUI) {
+        const title = checkpointMatches
+          ? `Resume initialization for "${manifest.name}"?`
+          : `Initialize autoresearch for "${manifest.name}"?`;
         const ok = await ctx.ui.confirm(
-          `Initialize autoresearch for "${manifest.name}"?`,
-          `setup: ${manifest.setupCommand}\nbench: ${manifest.benchmarkCommand}\neditable: ${manifest.editablePaths.join(", ")}\n\nThis runs dependency setup and a baseline benchmark.`,
+          title,
+          renderSetupPlan(manifest, preflightConfig),
         );
         if (!ok) return;
       }
-      const config = loadConfig(stateDir);
+      saveOnboardingCheckpoint(stateDir, manifest, preflightConfig);
+      const config = preflightConfig;
+      let report =
+        (checkpointMatches ? loadInitializationReport(stateDir) : null) ??
+        createInitializationReport(manifest.name);
+      saveInitializationReport(stateDir, report);
       let initialization: InitializationRenderState = {
-        stage: "setup",
+        stage: "validate",
         status: "running",
-        message: "preparing challenge initialization",
-        command: manifest.setupCommand,
-        logPath: path.join(STATE_DIR_NAME, "logs", "setup.log"),
+        message: "preparing challenge validation",
         recentActivity: [],
+        report,
       };
       const showInitialization = (progress: InitProgress): void => {
         const activity = initialization.recentActivity;
         const event = initializationActivity(progress);
+        const stepId = initializationStepId(progress.stage);
+        report = updateInitializationStep(
+          report,
+          {
+            id: stepId,
+            status: initializationStepStatus(progress.status),
+            detail: progress.message,
+            ...(progress.command ? { command: progress.command } : {}),
+            ...(progress.logPath
+              ? { logPath: displayPath(repoRoot, progress.logPath) }
+              : {}),
+            ...(progress.attempt !== undefined
+              ? { attempt: progress.attempt }
+              : {}),
+            ...(progress.maxAttempts !== undefined
+              ? { maxAttempts: progress.maxAttempts }
+              : {}),
+          },
+          event,
+        );
+        if (
+          progress.baselineScore !== undefined &&
+          progress.direction &&
+          progress.verifyCommand &&
+          progress.benchCommand &&
+          progress.localEvaluation &&
+          progress.evidencePath
+        ) {
+          report = completeInitializationReport(report, {
+            readiness:
+              progress.localEvaluation.fidelity === "full"
+                ? "ready"
+                : "ready-with-limitations",
+            baselineScore: progress.baselineScore,
+            direction: progress.direction,
+            verifyCommand: progress.verifyCommand,
+            benchCommand: progress.benchCommand,
+            localEvaluation: progress.localEvaluation,
+            submissionReady: progress.submissionReady ?? false,
+            evidencePath: displayPath(repoRoot, progress.evidencePath),
+          });
+        }
+        saveInitializationReport(stateDir, report);
         initialization = {
           ...progress,
           logPath: progress.logPath
@@ -239,6 +395,7 @@ export function registerAutoresearchCommand(
           recentActivity: event
             ? [event, ...activity.filter((entry) => entry !== event)].slice(0, 3)
             : activity,
+          report,
         };
         if (ctx.hasUI) {
           setInitializationDashboard(ctx, manifest.name, initialization);
@@ -257,18 +414,28 @@ export function registerAutoresearchCommand(
           repoRoot,
           runner: makeRunner(config.runner, stateDir),
           exec: nodeExec,
-          emit: (msg) => notify(ctx, msg),
+          emit: (msg) => {
+            if (!ctx.hasUI) console.log(`[autoresearch] ${msg}`);
+          },
           onProgress: showInitialization,
         });
       } catch (err) {
-        const failure = err instanceof Error ? err.message : String(err);
+        const diagnostic = initializationDiagnostic(
+          err,
+          initializationStepId(initialization.stage),
+          initialization.logPath,
+        );
+        report = failInitializationReport(report, diagnostic);
+        saveInitializationReport(stateDir, report);
         initialization = {
           ...initialization,
           status: "failed",
           message: initializationFailureStage(initialization.stage),
-          failure,
+          failure: diagnostic.reason,
+          diagnostic,
+          report,
           recentActivity: [
-            `initialization stopped: ${firstDisplayLine(failure)}`,
+            `initialization stopped: ${diagnostic.title}`,
             ...initialization.recentActivity,
           ].slice(0, 3),
         };
@@ -276,12 +443,38 @@ export function registerAutoresearchCommand(
           setInitializationDashboard(ctx, manifest.name, initialization);
           ctx.ui.setStatus(WIDGET_KEY, "autoresearch: initialization failed");
         }
-        notify(ctx, `init failed: ${failure}`, "error");
+        notify(ctx, renderDiagnosticMessage(diagnostic), "error");
         return;
+      }
+
+      if (guided && report.summary) {
+        const startNow = await ctx.ui.confirm(
+          report.summary.readiness === "ready"
+            ? "Setup complete — start research?"
+            : "Setup complete with limitations — start research?",
+          renderReadinessSummary(report),
+        );
+        if (!startNow) {
+          notify(
+            ctx,
+            "autoresearch setup is ready; run /autoresearch when you want to start the research loop",
+          );
+          return;
+        }
       }
     }
 
     const config = loadConfig(stateDir);
+    if (detectedCli === "mlxfast" && !config.submitModelName?.trim()) {
+      notify(
+        ctx,
+        'MLX Fast requires exact model attribution before the loop can submit. ' +
+          'Open /autoresearch config → settings → submit model and enter the underlying model name ' +
+          '(for this Codex agent: "GPT 5.6 Sol"), then retry /autoresearch.',
+        "error",
+      );
+      return;
+    }
     // The scripted mock playlist covers ~6 loops (submit, god trigger,
     // post-god improvement) then idles forever; cap the demo so it terminates.
     if (config.runner === "mock" && config.maxLoops === null) config.maxLoops = 8;
@@ -718,7 +911,7 @@ export function registerAutoresearchCommand(
             config.metaHarness.maxGenerations ?? "unlimited"
           }, wall ${config.metaHarness.maxWallTimeMs ?? "unlimited"}ms)`,
         `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
-        ...CONFIGURABLE_ROLES.map(
+        ...ALL_CONFIGURABLE_ROLES.map(
           (role) =>
             `role ${role}: ${config.roles[role].model}${config.roles[role].thinking ? ` (${config.roles[role].thinking})` : ""} · soul ${config.roles[role].soul ?? "SOUL.md"} · prompt ${config.roles[role].prompt ?? `${role}.md`}`,
         ),
@@ -727,11 +920,38 @@ export function registerAutoresearchCommand(
       return;
     }
 
+    await runConfigPanel(
+      ctx,
+      config,
+      [...ALL_CONFIGURABLE_ROLES],
+      "autoresearch config",
+      true,
+    );
+    excludeAutoresearchStateFromGit(ctx.cwd);
+    fs.mkdirSync(stateDir, { recursive: true });
+    saveConfig(stateDir, config);
+    notify(ctx, "config saved to .autoresearch/config.json");
+  }
+
+  async function runConfigPanel(
+    ctx: ExtensionCommandContext,
+    config: ReturnType<typeof loadConfig>,
+    roles: ConfigurableRole[],
+    title: string,
+    describeRoles: boolean,
+  ): Promise<void> {
     // Loop: the panel closes for input/select dialogs (they can't stack on
     // ui.custom) and reopens at the same nav position afterwards.
     let nav: NavState = { pane: "left", left: 0, right: 0 };
     for (;;) {
-      const result = await ctx.ui.custom<ConfigPanelResult>((tui, theme, _kb, done) => new ConfigPanel(config, nav, tui, theme, done));
+      const result = await ctx.ui.custom<ConfigPanelResult>(
+        (tui, theme, _kb, done) =>
+          new ConfigPanel(config, nav, tui, theme, done, {
+            roles,
+            title,
+            describeRoles,
+          }),
+      );
       if (result.type === "close") break;
       nav = result.nav;
       switch (result.type) {
@@ -789,14 +1009,25 @@ export function registerAutoresearchCommand(
           if (picked) config.roles[result.role].prompt = picked.value;
           break;
         }
+        case "editTools": {
+          const current = config.roles[result.role].tools?.join(", ") ?? "";
+          const value = await ctx.ui.input(
+            `Tools for ${result.role} (comma-separated; empty = no tools):`,
+            current,
+          );
+          if (value !== undefined) {
+            config.roles[result.role].tools = value
+              .split(",")
+              .map((tool) => tool.trim())
+              .filter(Boolean);
+          }
+          break;
+        }
         case "editSetting":
           await editSettingDialog(ctx, config, result.field);
           break;
       }
     }
-    fs.mkdirSync(stateDir, { recursive: true });
-    saveConfig(stateDir, config);
-    notify(ctx, "config saved to .autoresearch/config.json");
   }
 
   async function stopRun(ctx: ExtensionCommandContext): Promise<void> {
@@ -859,7 +1090,24 @@ export function registerAutoresearchCommand(
       // worker process is active.
       const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
       const state = loadState(stateDir);
-      if (state && ctx.hasUI) {
+      const initializationReport = loadInitializationReport(stateDir);
+      if (
+        ctx.hasUI &&
+        initializationReport &&
+        (!state || state.phase === "ready")
+      ) {
+        setInitializationDashboard(
+          ctx,
+          initializationReport.challengeName,
+          initializationRenderState(initializationReport),
+        );
+        ctx.ui.setStatus(
+          WIDGET_KEY,
+          initializationReport.status === "failed"
+            ? "autoresearch: initialization failed"
+            : "autoresearch: setup ready — /autoresearch to start",
+        );
+      } else if (state && ctx.hasUI) {
         setResearchDashboard(
           ctx,
           state.challenge.name,
@@ -970,6 +1218,8 @@ function initializationFailureStage(
   stage: InitializationRenderState["stage"],
 ): string {
   switch (stage) {
+    case "validate":
+      return "challenge validation failed";
     case "setup":
       return "challenge dependency setup failed";
     case "setup-agent":
@@ -978,9 +1228,138 @@ function initializationFailureStage(
       return "local baseline benchmark failed";
     case "baseline-review":
       return "Setup could not choose a supported baseline recovery";
+    case "archive":
+      return "baseline archive could not be saved";
     case "ready":
       return "initialization failed while saving ready state";
   }
+}
+
+function initializationStepId(
+  stage: InitializationRenderState["stage"],
+): InitializationStepId {
+  if (stage === "baseline-review") return "baseline";
+  if (stage === "ready") return "archive";
+  return stage;
+}
+
+function initializationStepStatus(
+  status: InitProgress["status"],
+): "running" | "retrying" | "resuming" | "passed" {
+  return status === "succeeded" ? "passed" : status;
+}
+
+function initializationDiagnostic(
+  error: unknown,
+  step: InitializationStepId,
+  evidencePath?: string,
+): InitializationDiagnosticV1 {
+  if (error instanceof InitializationError) return error.diagnostic;
+  return {
+    code: "unexpected",
+    step,
+    title: "Initialization stopped unexpectedly",
+    reason: error instanceof Error ? firstDisplayLine(error.message) : String(error),
+    action:
+      "Inspect the referenced initialization evidence, correct the problem, then retry /autoresearch.",
+    ...(evidencePath ? { evidencePath } : {}),
+    retryable: true,
+    resumesFromCheckpoint: step === "baseline" || step === "archive",
+  };
+}
+
+function persistPreflightFailure(
+  stateDir: string,
+  challengeName: string,
+  diagnostic: InitializationDiagnosticV1,
+): InitializationReportV1 {
+  const report = failInitializationReport(
+    createInitializationReport(challengeName),
+    diagnostic,
+  );
+  saveInitializationReport(stateDir, report);
+  return report;
+}
+
+function renderDiagnosticMessage(
+  diagnostic: InitializationDiagnosticV1,
+): string {
+  return [
+    diagnostic.title,
+    `What happened: ${diagnostic.reason}`,
+    `What to do: ${diagnostic.action}`,
+    diagnostic.command ? `Command: ${diagnostic.command}` : undefined,
+    diagnostic.exitCode !== undefined
+      ? `Exit code: ${diagnostic.exitCode}`
+      : undefined,
+    diagnostic.evidencePath
+      ? `Evidence: ${diagnostic.evidencePath}`
+      : undefined,
+    diagnostic.resumesFromCheckpoint
+      ? "Retry behavior: /autoresearch resumes from the saved Setup checkpoint."
+      : "Retry behavior: /autoresearch rechecks this step before continuing.",
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
+}
+
+function renderReadinessSummary(report: InitializationReportV1): string {
+  const summary = report.summary;
+  if (!summary) return "Initialization completed.";
+  return [
+    summary.readiness === "ready"
+      ? "Ready: full local evaluation is available."
+      : "Ready with limitations: local evaluation is reduced.",
+    `Baseline: ${summary.baselineScore} (${summary.direction === "+" ? "higher" : "lower"} wins)`,
+    `Verify: ${summary.verifyCommand}`,
+    `Benchmark: ${summary.benchCommand}`,
+    `Submission: ${summary.submissionReady ? "configured" : "not configured"}`,
+    `Evidence: ${summary.evidencePath}`,
+    ...summary.localEvaluation.limitations.map(
+      (limitation) => `Limitation: ${limitation}`,
+    ),
+  ].join("\n");
+}
+
+function initializationRenderState(
+  report: InitializationReportV1,
+): InitializationRenderState {
+  const current =
+    report.steps.find((step) => step.id === report.currentStep) ??
+    report.steps[0];
+  const status: InitializationRenderState["status"] =
+    report.status === "failed"
+      ? "failed"
+      : report.status === "ready" ||
+          report.status === "ready-with-limitations"
+        ? "succeeded"
+        : current?.status === "retrying"
+          ? "retrying"
+          : current?.status === "resuming"
+            ? "resuming"
+            : "running";
+  return {
+    stage: report.currentStep,
+    status,
+    message:
+      report.diagnostic?.title ??
+      current?.detail ??
+      (report.summary ? "initialization complete" : "initialization in progress"),
+    ...(current?.command ? { command: current.command } : {}),
+    ...(current?.logPath ? { logPath: current.logPath } : {}),
+    ...(current?.attempt !== undefined ? { attempt: current.attempt } : {}),
+    ...(current?.maxAttempts !== undefined
+      ? { maxAttempts: current.maxAttempts }
+      : {}),
+    ...(report.diagnostic
+      ? { diagnostic: report.diagnostic, failure: report.diagnostic.reason }
+      : {}),
+    ...(report.summary
+      ? { localEvaluation: report.summary.localEvaluation }
+      : {}),
+    recentActivity: report.recentActivity,
+    report,
+  };
 }
 
 function displayPath(repoRoot: string, value: string): string {

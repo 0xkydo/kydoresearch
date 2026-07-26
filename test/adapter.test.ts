@@ -144,6 +144,43 @@ describe("YukonCliAdapter against mockchal", () => {
     const result = await adapter.verify();
     expect(result.ok).toBe(false);
     expect(result.raw).toContain("setup has not been run");
+    expect(result.failureKind).toBe("command-exit");
+  });
+
+  it("classifies missing and malformed benchmark score artifacts", async () => {
+    const manifest = readManifest(repoRoot);
+    const missing = new YukonCliAdapter({
+      repoRoot,
+      manifest,
+      cli: null,
+      exec: async () => ({ stdout: "", stderr: "", code: 0 }),
+    });
+    expect((await missing.bench()).failureKind).toBe("score-file-missing");
+
+    const invalidJson = new YukonCliAdapter({
+      repoRoot,
+      manifest,
+      cli: null,
+      exec: async (_cmd, _args, opts) => {
+        fs.writeFileSync(path.join(opts?.cwd ?? repoRoot, manifest.scorePath), "{");
+        return { stdout: "", stderr: "", code: 0 };
+      },
+    });
+    expect((await invalidJson.bench()).failureKind).toBe("score-json-invalid");
+
+    const invalidScore = new YukonCliAdapter({
+      repoRoot,
+      manifest,
+      cli: null,
+      exec: async (_cmd, _args, opts) => {
+        fs.writeFileSync(
+          path.join(opts?.cwd ?? repoRoot, manifest.scorePath),
+          JSON.stringify({ score: "fast" }),
+        );
+        return { stdout: "", stderr: "", code: 0 };
+      },
+    });
+    expect((await invalidScore.bench()).failureKind).toBe("score-value-invalid");
   });
 
   it("submit requires note file and records submission; leaderboard parses", async () => {

@@ -91,6 +91,11 @@ It makes repository-supported mode and hardware decisions autonomously,
 records full or reduced local-evaluation fidelity, and stops only for a
 genuine external capability blocker.
 
+The first-run profile review exposes Setup alongside the research roles and
+explains that it runs during initialization and bounded baseline recovery. Its
+model, thinking level, tools, soul, and prompt can therefore be reviewed before
+the dependency command or Setup worker starts.
+
 ### Professor
 
 The Professor is a read-mostly research director. It inspects the compact

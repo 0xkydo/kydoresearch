@@ -119,17 +119,25 @@ checkout. kydoresearch never commits challenge changes automatically.
 
 ### 3. Configure real agents
 
-Before the first run, open:
+Run `/autoresearch`. On the first interactive run, a guided profile review
+opens before any challenge command executes. It explains Setup, Professor,
+PhD, Advisor, and God in terms of purpose, timing, authority, model, thinking
+level, and tools. Meta-harness appears only when enabled. Real ECDSA.fail and
+MLX Fast checkouts default this review to the subprocess runner.
+
+The final settings page covers the runner, loop budget, optional roles, and
+submission attribution. Soul, prompt, and tool-policy fields remain editable
+from the same review. The complete advanced panel is also available later:
 
 ```text
 /autoresearch config
 ```
 
-Select **settings** and cycle `runner` from `mock` to `subprocess`. Review the
-professor, PhD, God, advisor, and meta-harness models, thinking levels, prompts,
-tool access, loop limits, meta-harness budgets, timeouts, and submission model.
 Closing the panel saves `.autoresearch/config.json`, including in a fresh
-repository.
+repository. Active subprocess profiles are checked against Pi's available
+models and configured files before setup starts; unavailable profiles identify
+the exact role and direct the operator to `/login` or the field that needs
+correction.
 
 The minimum equivalent JSON change is:
 
@@ -148,8 +156,10 @@ a dry-run mode against a real challenge.
 /autoresearch
 ```
 
-On first use, Pi displays the detected setup command, benchmark command, and
-editable paths for confirmation. Initialization then:
+After profile review, Pi previews the complete setup plan, including commands,
+editable paths, score direction, retry budgets, log directory, and the fact
+that dependency setup may modify the checkout. Nothing runs until that plan is
+confirmed. Initialization then:
 
 1. validates the manifest and Git worktree;
 2. runs the manifest's `setupCommand`;
@@ -165,7 +175,12 @@ editable paths for confirmation. Initialization then:
    attempt fails, gives the completed log and score artifact back to Setup for
    one bounded baseline-review before the remaining command attempt;
 7. archives an editable-source snapshot; and
-8. starts the research loop.
+8. shows a readiness report and waits for an explicit **Start Research**
+   confirmation.
+
+Choosing **Stay Ready** leaves the durable phase at `ready`. A later
+`/autoresearch` starts research without repeating successful setup or baseline
+work.
 
 Initialization itself does not submit. The research loop that follows may sync
 challenge data and submit an improvement automatically.
@@ -173,12 +188,17 @@ challenge data and submit an improvement automatically.
 ### 5. Operate and resume
 
 The persistent initialization control deck appears below Pi's editor as soon as
-confirmation closes. It uses Pi's width-aware custom-component path rather
+confirmation closes. Validation, dependency setup, Setup analysis, baseline
+measurement, and archival appear as a checklist whose entries move through
+pending, running, retrying, passed, or failed. It uses Pi's width-aware custom-component path rather
 than the ten-line-capped plain widget path, so runtime evidence is not replaced
 by a `widget truncated` marker. Its hierarchy keeps the current stage,
 local-evaluation fidelity, runtime command, evidence path, actionable failure,
-recent activity, and controls visible. An initialization failure remains on
-screen with its reason instead of disappearing as a transient notification.
+recent activity, and controls visible. Normal progress updates the deck without
+emitting a stream of notifications. An initialization failure remains on
+screen with a stable category, explanation, corrective action, evidence path,
+and retry behavior. This presentation is restored from
+`.autoresearch/loops/init/status.json`.
 
 After initialization, the same always-present control deck keeps the run/idle
 state, loop and phase, local and submitted objectives, evaluation fidelity,
@@ -245,10 +265,11 @@ root. Inside Pi, `!mlxfast trace status` should report the registered project
 session. The CLI is pinned to the launch benchmark, so do not pass a benchmark
 name or ID.
 
-Before `/autoresearch`, set `runner` to `subprocess`, review every role model
-and thinking level, and set `submit model` to the exact underlying model name
-shown publicly by MLX Fast—for this Codex agent, `GPT 5.6 Sol`. Startup is
-blocked while MLX Fast model attribution is empty.
+The first `/autoresearch` opens the guided profile review with `runner` set to
+`subprocess`. Review every active role model and thinking level, then set
+`submit model` to the exact underlying model name shown publicly by MLX
+Fast—for this Codex agent, `GPT 5.6 Sol`. Setup remains blocked while an active
+profile is unavailable or MLX Fast attribution is empty.
 
 ## The experiment loop
 
@@ -486,8 +507,9 @@ Setup model selections and the PhD model are left unchanged.
   `.autoresearch/prompts/custom.md` resolves from the challenge repository.
 - Challenge-specific task suffixes may override the matching file under
   `.autoresearch/prompts/tasks/`, such as `tasks/propose.md`.
-- The setup role runs only during initialization. Edit its JSON directly when
-  its defaults need to change.
+- The setup role runs during initialization and bounded baseline recovery. It
+  is included in first-run profile review and remains editable later through
+  `/autoresearch config`.
 - The meta-harness role runs only when `metaHarness.enabled` is true. Its own
   soul, prompt, model, and thinking level stay fixed during a campaign; it
   proposes candidate-local overrides for professor, PhD, and advisor.

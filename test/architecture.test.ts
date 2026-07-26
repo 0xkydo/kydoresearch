@@ -135,4 +135,12 @@ describe("architecture documentation contract", () => {
     expect(setupTask).not.toContain('"status": "needs-user-action"');
     expect(setupTask).not.toContain("Optimization levers");
   });
+
+  it("defines guided onboarding and durable structured initialization feedback", () => {
+    expect(architecture).toContain("guided, repo-local");
+    expect(architecture).toContain(".autoresearch/loops/init/status.json");
+    expect(architecture).toContain("structured diagnostic");
+    expect(architecture).toContain("ready-with-limitations");
+    expect(profiles).toContain("first-run profile review");
+  });
 });
