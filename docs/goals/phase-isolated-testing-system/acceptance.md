@@ -1,29 +1,33 @@
 # Acceptance audit
 
-Verified on 2026-07-26 against
-`1c51a0c9e6adf9dc111ad6522b6cc6ebc400a137` with a deliberately dirty
-implementation worktree. Phase commands used `--changed docs/testing.md` so
-the acceptance fixture represented explicit phase intent without allowing the
-in-progress shared test-infrastructure files to force an unrelated full run.
+Verified on 2026-07-26 after integrating the phase-isolated testing system with
+the guided onboarding work on top of
+`d634fd42426ca820c1af8ea507b5cfd4f0cc2682`. Phase commands used
+`--changed docs/testing.md` so the acceptance fixture represented explicit
+phase intent without allowing the in-progress shared test-infrastructure files
+to force an unrelated full run.
 
 ## Independent phase runs
 
 | Intent | Selected tests | Result | Wall time |
 |---|---:|---:|---:|
-| `setup` | 44 | pass | 10.146s |
+| `setup` | 52 | pass | 10.233s |
 | `professor` | 36 | pass | 3.421s |
 | `phd` | 74 | pass | 8.978s |
 | `advisor` | 20 | pass | 2.964s |
 | `finalization` | 47 | pass | 5.911s |
 | `church` | 20 | pass | 2.769s |
 | `metaharness` | 27 | pass | 12.945s |
-| `ui` | 53 | pass | 9.148s |
+| `ui` | 64 | pass | 12.978s |
 
 The Setup capsule stopped before Professor. Every phase capsule asserted that
 its forbidden later agents, commands, benchmark, finalization, or submission
-effects were absent. The seven capsule files also passed together in 4.50s.
+effects were absent. The merged Setup selection now includes the first-run
+onboarding contract, and the UI selection exercises the profile wizard,
+configuration controls, real Pi loading, package installation, and PTY
+failure flow.
 
-The always-on kernel passed 21 tests in 0.509s, below its five-second budget.
+The always-on kernel passed 23 tests in 0.500s, below its five-second budget.
 The complete UI phase includes real package loading and PTY work; the semantic
 kernel remains the intended sub-five-second UI edit loop.
 
@@ -34,9 +38,12 @@ kernel remains the intended sub-five-second UI edit loop.
   submission, and full-loop suites.
 - `professor:proposal` selected the same independent proposal boundary using
   the `explicit-segment` reason.
-- A frozen `src/state.ts` change selected all 37 suites with shared-lifecycle
+- A frozen onboarding change selected 16 Setup/UI suites, including the
+  onboarding contract, Setup capsule, command flow, real Pi loading, and PTY
+  smoke, without an unrelated full-suite escalation.
+- A frozen `src/state.ts` change selected all 38 suites with shared-lifecycle
   and multi-boundary escalation reasons.
-- A frozen unknown `src/unknown-impact-boundary.ts` change selected all 37
+- A frozen unknown `src/unknown-impact-boundary.ts` change selected all 38
   suites with an `unknown production impact` reason.
 - A docs-only selection after reconciliation selected only the four kernel
   suites and reported the latest full run as `current`.
@@ -47,15 +54,16 @@ per-suite durations. Concurrent runs use process-unique Vitest JSON files.
 
 ## Full reconciliation and artifacts
 
-`npm run test:full -- --receipt /tmp/kydoresearch-full-receipt.json` passed
-37 files and 203 tests in 70.705s. The G0 baseline was 172 tests in 64.6s, so
-31 tests were added for a 6.105s (9.5%) wall-time increase. Typecheck and
-`git diff --check` passed.
+`npm run test:full -- --receipt /tmp/kydoresearch-merged-full-receipt.json`
+passed 38 files and 216 tests in 61.075s. The G0 baseline was 172 tests in
+64.6s, so 44 tests were added while wall time decreased by 3.525s (5.5%).
+`npm test` independently passed the same 38 files and 216 tests in 60.81s.
 
 The real Pi integration loaded the actual extension offline with only the
 extension's `taskboard` and `research_notes` tools enabled, restored the RPC
 dashboard, and installed an `npm pack` tarball in a fresh consumer. The PTY
-suite passed three visible-screen flows and emitted:
+suite passed three visible-screen flows—including the merged profile-review →
+setup-preview → actionable-failure sequence—and emitted:
 
 - `mixed-candidates.svg`
 - `configuration.svg`

@@ -133,11 +133,12 @@ from the same review. The complete advanced panel is also available later:
 /autoresearch config
 ```
 
-Closing the panel saves `.autoresearch/config.json`, including in a fresh
-repository. Active subprocess profiles are checked against Pi's available
-models and configured files before setup starts; unavailable profiles identify
-the exact role and direct the operator to `/login` or the field that needs
-correction.
+Completing first-run profile review persists the effective configuration.
+Later `/autoresearch config` edits save only when a setting actually changes,
+so closing an untouched panel does not create `.autoresearch/config.json`.
+Active subprocess profiles are checked against Pi's available models and
+configured files before setup starts; unavailable profiles identify the exact
+role and direct the operator to `/login` or the field that needs correction.
 
 The minimum equivalent JSON change is:
 

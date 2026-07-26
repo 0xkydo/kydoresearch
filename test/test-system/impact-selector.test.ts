@@ -91,6 +91,38 @@ describe("test impact selector", () => {
     expect(receipt.fullSuiteRequired).toBe(false);
   });
 
+  it("maps guided onboarding and initialization to Setup and UI contracts", () => {
+    for (const file of [
+      "extensions/autoresearch/onboarding.ts",
+      "src/initialization.ts",
+    ]) {
+      const receipt = select({
+        mode: "related",
+        changedFiles: [file],
+      });
+      const files = selectedFiles(receipt);
+
+      expect(files, file).toContain("test/onboarding.test.ts");
+      expect(files, file).toContain("test/phases/setup/capsule.test.ts");
+      expect(files, file).toContain("test/ui/contracts.test.ts");
+      expect(files, file).toContain("test/commands.test.ts");
+      expect(receipt.fullSuiteRequired, file).toBe(false);
+    }
+  });
+
+  it("maps challenge scoring changes to Setup and finalization", () => {
+    const receipt = select({
+      mode: "related",
+      changedFiles: ["src/challenge/types.ts"],
+    });
+    const files = selectedFiles(receipt);
+
+    expect(files).toContain("test/phases/setup/capsule.test.ts");
+    expect(files).toContain("test/phases/finalization/capsule.test.ts");
+    expect(files).toContain("test/adapter.test.ts");
+    expect(receipt.fullSuiteRequired).toBe(false);
+  });
+
   it("escalates shared lifecycle and unknown production changes", () => {
     const shared = select({
       mode: "related",

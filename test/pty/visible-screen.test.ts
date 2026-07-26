@@ -121,7 +121,9 @@ describe("real Pi PTY visible-screen smoke", () => {
 
     const screen = await runPiPty(challenge.repoRoot, [
       { afterMs: 600, data: "/autoresearch\r" },
-      { afterMs: 700, data: "\r" },
+      { afterMs: 1_000, data: "\u001b" },
+      { afterMs: 400, data: "\r" },
+      { afterMs: 3_200, data: "" },
     ]);
     expect(screen).toMatch(/Start autoresearch|AUTORESEARCH/);
     expect(screen).toMatch(/INITIALIZATION|dependency setup/i);

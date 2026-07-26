@@ -53,6 +53,8 @@ extensions/autoresearch/
   index.ts              extension entry point and session-start restoration
   commands.ts           /autoresearch run|status|steer|inspect|telemetry|config|stop
   config-ui.ts          role and harness configuration
+  onboarding.ts         active-role descriptions, validation, setup preview,
+                        and versioned first-run checkpoint
   notes-tool.ts         knowledge-base and note access
   taskboard-tool.ts     shared persisted task board
   widget.ts             persistent below-editor control deck with responsive,
@@ -84,6 +86,8 @@ src/
     adapter.ts          setup/verify/bench/submit/sync command boundary
   init.ts               setup, typed exploration/review tasks, durable command
                         checkpoint, baseline, and editable-source snapshot
+  initialization.ts     versioned checklist, readiness summary, and typed
+                        actionable initialization diagnostics
   worktree.ts           parent-aware candidate checkouts and winner application
   advisor.ts            WATCHDOG.md parsing and severity filtering
   state.ts              atomic operational snapshot schema
@@ -222,12 +226,12 @@ defined in [`agent-profiles.md`](agent-profiles.md).
 ## First-run initialization
 
 The interactive extension wraps core initialization in a guided, repo-local
-onboarding flow. Before side effects, it explains and configures every active
-role profile, validates subprocess models and profile files, and previews the
-setup command, initial benchmark command, editable paths, score direction,
-retry budgets, and evidence locations. MLX Fast additionally requires exact
-public model attribution. This control-plane validation adds no
-challenge-specific hardware policy to the core.
+onboarding flow. Before any challenge command executes, it explains and
+configures every active role profile, validates subprocess models and profile
+files, and previews the setup command, initial benchmark command, editable
+paths, score direction, retry budgets, and evidence locations. MLX Fast
+additionally requires exact public model attribution. This control-plane
+validation adds no challenge-specific hardware policy to the core.
 
 `initChallenge` performs these operations in order:
 

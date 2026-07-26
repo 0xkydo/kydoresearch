@@ -98,6 +98,14 @@
       "category": "phase-local"
     },
     {
+      "id": "setup.onboarding",
+      "file": "test/onboarding.test.ts",
+      "phases": ["setup", "ui"],
+      "segments": ["ui:config"],
+      "tiers": ["phase-contract"],
+      "category": "adjacent-boundary"
+    },
+    {
       "id": "professor.contract",
       "file": "test/phases/professor/capsule.test.ts",
       "phases": ["professor"],
@@ -346,6 +354,12 @@
       "reason": "Setup readiness, baseline, and persistence contract"
     },
     {
+      "patterns": ["src/initialization.ts", "extensions/autoresearch/onboarding.ts"],
+      "phases": ["setup", "ui"],
+      "tiers": ["phase-contract", "phase-flow", "integration", "pty"],
+      "reason": "Guided onboarding and durable initialization reporting boundary"
+    },
+    {
       "patterns": ["src/steering.ts", "extensions/autoresearch/prompts/professor.md", "extensions/autoresearch/prompts/tasks/propose.md", "extensions/autoresearch/agents/professor/**"],
       "phases": ["professor"],
       "tiers": ["phase-contract", "phase-flow"],
@@ -364,10 +378,16 @@
       "reason": "Advisor evidence review contract"
     },
     {
-      "patterns": ["src/worktree.ts", "src/challenge/**"],
+      "patterns": ["src/worktree.ts"],
       "phases": ["finalization"],
       "tiers": ["phase-contract", "phase-flow"],
-      "reason": "Finalist application and deterministic challenge boundary"
+      "reason": "Finalist application boundary"
+    },
+    {
+      "patterns": ["src/challenge/**"],
+      "phases": ["setup", "finalization"],
+      "tiers": ["phase-contract", "phase-flow"],
+      "reason": "Setup scoring and deterministic challenge boundary"
     },
     {
       "patterns": ["extensions/autoresearch/prompts/god.md", "extensions/autoresearch/prompts/tasks/church.md", "extensions/autoresearch/agents/god/**"],
