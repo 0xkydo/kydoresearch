@@ -81,11 +81,22 @@ export interface OrchestratorPorts {
 export interface StatusReport {
   phase: Phase;
   loop: number;
+  scoreDirection?: "+" | "-";
   bestScore: number | null;
   bestSubmittedScore: number | null;
   dryLoopStreak: number;
   churchTriggerThreshold: number;
-  ideas: { id: string; title: string; status: string; verifyAttempts: number; localScore?: number }[];
+  ideas: {
+    id: string;
+    title: string;
+    parentCandidateId?: string;
+    status: string;
+    verifyAttempts: number;
+    maxVerifyAttempts?: number;
+    comparisonScore?: number | null;
+    localScore?: number;
+    lastVerifyError?: string;
+  }[];
   taskboardOpen: number;
   lastAdvisorNotes: string[];
   recovery?: {
@@ -130,6 +141,7 @@ export class Orchestrator {
     return {
       phase: this.state.phase,
       loop: this.state.loop,
+      scoreDirection: this.state.challenge.direction,
       bestScore: this.state.bestScore,
       bestSubmittedScore: this.state.bestSubmittedScore,
       dryLoopStreak: this.state.dryLoopStreak,
@@ -137,9 +149,13 @@ export class Orchestrator {
       ideas: this.state.ideas.map((i) => ({
         id: i.id,
         title: i.title,
+        parentCandidateId: i.parentCandidateId,
         status: i.status,
         verifyAttempts: i.verifyAttempts,
+        maxVerifyAttempts: this.config.maxVerifyAttempts,
+        comparisonScore: i.comparisonScore,
         localScore: i.localScore,
+        lastVerifyError: i.lastVerifyError,
       })),
       taskboardOpen: this.taskboard.openCount(),
       lastAdvisorNotes: lastSummary?.advisorNotes ?? [],

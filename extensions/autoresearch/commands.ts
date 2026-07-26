@@ -17,6 +17,7 @@ import {
 import type { OrchestratorEvent, StatusReport } from "../../src/orchestrator.ts";
 import { Orchestrator } from "../../src/orchestrator.ts";
 import { loadState, STATE_DIR_NAME, statePaths } from "../../src/state.ts";
+import { Taskboard } from "../../src/taskboard.ts";
 import { readTelemetry, renderTelemetryReport } from "../../src/telemetry.ts";
 import type {
   ConfigPanelResult,
@@ -25,6 +26,7 @@ import type {
   NavState,
 } from "./config-ui.ts";
 import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
+import { renderCandidateInspection, renderCandidateList } from "./inspect.ts";
 import { renderStatusLines } from "./widget.ts";
 
 const WIDGET_KEY = "autoresearch";
@@ -40,6 +42,7 @@ interface RunHandle {
   orchestrator: { status(): StatusReport; runUntilDone(): Promise<void> };
   challengeName: string;
   running: Promise<void>;
+  recentActivity: string[];
 }
 
 /** Registers /autoresearch with subcommands run|status|config|stop. */
@@ -57,7 +60,12 @@ export function registerAutoresearchCommand(
 
   function updateWidget(ctx: ExtensionContext) {
     if (!ctx.hasUI || !active) return;
-    ctx.ui.setWidget(WIDGET_KEY, renderStatusLines(active.challengeName, active.orchestrator.status()));
+    ctx.ui.setWidget(
+      WIDGET_KEY,
+      renderStatusLines(active.challengeName, active.orchestrator.status(), {
+        recentActivity: active.recentActivity,
+      }),
+    );
   }
 
   function makeRunner(runnerKind: "mock" | "subprocess", stateDir: string): AgentRunner {
@@ -65,6 +73,10 @@ export function registerAutoresearchCommand(
   }
 
   function surfaceEvent(ctx: ExtensionContext, ev: OrchestratorEvent) {
+    if (active) {
+      active.recentActivity.unshift(activityFromEvent(ev));
+      active.recentActivity = active.recentActivity.filter(Boolean).slice(0, 3);
+    }
     switch (ev.type) {
       case "advice":
         pi.sendMessage(
@@ -177,6 +189,17 @@ export function registerAutoresearchCommand(
       return;
     }
 
+    // Install the handle before starting so synchronous phase events are not
+    // lost from the live activity feed.
+    const runHandle: RunHandle = {
+      controller,
+      orchestrator,
+      challengeName: state.challenge.name,
+      running: Promise.resolve(),
+      recentActivity: readRecentActivity(stateDir),
+    };
+    active = runHandle;
+
     // Fire-and-forget: the loop must not block pi's turn. Mock agents make no
     // LLM calls so they never contend with the interactive session.
     const running = orchestrator
@@ -189,14 +212,25 @@ export function registerAutoresearchCommand(
         notify(ctx, `autoresearch crashed: ${err instanceof Error ? err.message : String(err)}`, "error");
       })
       .finally(() => {
-        active = null;
-        if (ctx.hasUI) {
-          ctx.ui.setWidget(WIDGET_KEY, undefined);
-          ctx.ui.setStatus(WIDGET_KEY, undefined);
+        if (active === runHandle) {
+          const finalReport = orchestrator.status();
+          if (ctx.hasUI) {
+            ctx.ui.setWidget(
+              WIDGET_KEY,
+              renderStatusLines(state.challenge.name, finalReport, {
+                recentActivity: runHandle.recentActivity,
+              }),
+            );
+            ctx.ui.setStatus(
+              WIDGET_KEY,
+              `autoresearch: ${finalReport.phase} (loop ${finalReport.loop})`,
+            );
+          }
+          active = null;
         }
       });
 
-    active = { controller, orchestrator, challengeName: state.challenge.name, running };
+    runHandle.running = running;
     if (ctx.hasUI) ctx.ui.setStatus(WIDGET_KEY, "autoresearch: running");
     notify(
       ctx,
@@ -217,29 +251,28 @@ export function registerAutoresearchCommand(
       return;
     }
     const lines = active
-      ? renderStatusLines(active.challengeName, active.orchestrator.status())
-      : renderStatusLines(state.challenge.name, {
-          phase: state.phase,
-          loop: state.loop,
-          bestScore: state.bestScore,
-          bestSubmittedScore: state.bestSubmittedScore,
-          dryLoopStreak: state.dryLoopStreak,
-          churchTriggerThreshold: loadConfig(stateDir).churchTriggerThreshold,
-          ideas: state.ideas.map((i) => ({
-            id: i.id,
-            title: i.title,
-            status: i.status,
-            verifyAttempts: i.verifyAttempts,
-            localScore: i.localScore,
-          })),
-          taskboardOpen: 0,
-          lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
-          recovery: state.recovery,
-          ...(loadMetaHarnessStatus(stateDir)
-            ? { metaHarness: loadMetaHarnessStatus(stateDir) }
-            : {}),
+      ? renderStatusLines(active.challengeName, active.orchestrator.status(), {
+          recentActivity: active.recentActivity,
+        })
+      : renderStatusLines(state.challenge.name, statusFromState(stateDir, state), {
+          recentActivity: readRecentActivity(stateDir),
         });
     notify(ctx, lines.join("\n"));
+  }
+
+  function showCandidate(ctx: ExtensionCommandContext, candidateId?: string): void {
+    const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
+    const state = loadState(stateDir);
+    if (!state) {
+      notify(ctx, "no autoresearch state in this repo; run /autoresearch first", "warning");
+      return;
+    }
+    notify(
+      ctx,
+      candidateId
+        ? renderCandidateInspection(ctx.cwd, stateDir, state, candidateId)
+        : renderCandidateList(stateDir, state),
+    );
   }
 
   function showTelemetry(ctx: ExtensionCommandContext): void {
@@ -565,9 +598,9 @@ export function registerAutoresearchCommand(
   }
 
   pi.registerCommand("autoresearch", {
-    description: "AutoResearch harness: run|status|telemetry|config|stop (default: run)",
+    description: "AutoResearch harness: run|status|inspect|telemetry|config|stop (default: run)",
     getArgumentCompletions: (prefix: string) => {
-      const items = ["run", "status", "telemetry", "config", "stop"]
+      const items = ["run", "status", "inspect", "telemetry", "config", "stop"]
         .filter((c) => c.startsWith(prefix))
         .map((c) => ({ value: c, label: c }));
       return items.length > 0 ? items : null;
@@ -582,12 +615,14 @@ export function registerAutoresearchCommand(
         );
         return;
       }
-      const sub = (args ?? "").trim().split(/\s+/)[0] || "run";
+      const [sub = "run", candidateId] = (args ?? "").trim().split(/\s+/).filter(Boolean);
       switch (sub) {
         case "run":
           return startRun(ctx);
         case "status":
           return showStatus(ctx);
+        case "inspect":
+          return showCandidate(ctx, candidateId);
         case "telemetry":
           return showTelemetry(ctx);
         case "config":
@@ -597,7 +632,7 @@ export function registerAutoresearchCommand(
         default:
           notify(
             ctx,
-            `unknown subcommand "${sub}" — use run|status|telemetry|config|stop`,
+            `unknown subcommand "${sub}" — use run|status|inspect|telemetry|config|stop`,
             "warning",
           );
       }
@@ -606,13 +641,100 @@ export function registerAutoresearchCommand(
 
   return {
     restoreWidget: (ctx: ExtensionContext) => {
-      // After pi restart, show paused/resumable state in the footer.
-      const state = loadState(path.join(ctx.cwd, STATE_DIR_NAME));
-      if (state && ctx.hasUI && state.phase !== "done") {
-        ctx.ui.setStatus(WIDGET_KEY, `autoresearch: ${state.phase} (loop ${state.loop}) — /autoresearch to resume`);
+      // After a Pi restart, restore the last durable dashboard even though no
+      // worker process is active.
+      const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
+      const state = loadState(stateDir);
+      if (state && ctx.hasUI) {
+        ctx.ui.setWidget(
+          WIDGET_KEY,
+          renderStatusLines(state.challenge.name, statusFromState(stateDir, state), {
+            recentActivity: readRecentActivity(stateDir),
+          }),
+        );
+        ctx.ui.setStatus(
+          WIDGET_KEY,
+          state.phase === "done"
+            ? `autoresearch: done (loop ${state.loop})`
+            : `autoresearch: ${state.phase} (loop ${state.loop}) — /autoresearch to resume`,
+        );
       }
     },
   };
+}
+
+function statusFromState(
+  stateDir: string,
+  state: NonNullable<ReturnType<typeof loadState>>,
+): StatusReport {
+  const config = loadConfig(stateDir);
+  const metaHarness = loadMetaHarnessStatus(stateDir);
+  return {
+    phase: state.phase,
+    loop: state.loop,
+    scoreDirection: state.challenge.direction,
+    bestScore: state.bestScore,
+    bestSubmittedScore: state.bestSubmittedScore,
+    dryLoopStreak: state.dryLoopStreak,
+    churchTriggerThreshold: config.churchTriggerThreshold,
+    ideas: state.ideas.map((idea) => ({
+      id: idea.id,
+      title: idea.title,
+      parentCandidateId: idea.parentCandidateId,
+      status: idea.status,
+      verifyAttempts: idea.verifyAttempts,
+      maxVerifyAttempts: config.maxVerifyAttempts,
+      comparisonScore: idea.comparisonScore,
+      localScore: idea.localScore,
+      lastVerifyError: idea.lastVerifyError,
+    })),
+    taskboardOpen: new Taskboard(stateDir).openCount(),
+    lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
+    recovery: state.recovery,
+    ...(metaHarness ? { metaHarness } : {}),
+  };
+}
+
+function activityFromEvent(event: OrchestratorEvent): string {
+  switch (event.type) {
+    case "phase":
+      return `loop ${event.loop} · phase → ${event.phase}`;
+    case "idea":
+      return `${event.idea.id} · ${event.message}`;
+    case "advice":
+      return `advisor · ${event.notes.length} note(s) after loop ${event.loop}`;
+    case "church":
+      return `church reflection saved · ${event.noteFile}`;
+    case "submitted":
+      return `${event.ideaId} · submitted score ${event.score}`;
+    case "log":
+      return event.message;
+  }
+}
+
+function readRecentActivity(stateDir: string): string[] {
+  const journalPath = statePaths(stateDir).journal;
+  if (!fs.existsSync(journalPath)) return [];
+  const lines = fs.readFileSync(journalPath, "utf8").trim().split("\n").filter(Boolean);
+  const activity: string[] = [];
+  for (let index = lines.length - 1; index >= 0 && activity.length < 3; index -= 1) {
+    try {
+      const entry = JSON.parse(lines[index]!) as Record<string, unknown>;
+      const rendered =
+        typeof entry.message === "string"
+          ? typeof entry.idea === "string"
+            ? `${entry.idea} · ${entry.message}`
+            : entry.message
+          : typeof entry.phase === "string"
+            ? `loop ${String(entry.loop ?? "?")} · phase → ${entry.phase}`
+            : "";
+      if (rendered && !activity.includes(rendered)) activity.push(rendered);
+    } catch {
+      // The journal is append-only operational history. A partial final line
+      // after an interrupted process should not hide the rest of the dashboard.
+    }
+  }
+  return activity;
 }
 
 function isVersionAtLeast(actual: string, minimum: string): boolean {

@@ -4,7 +4,9 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAutoresearchCommand } from "../extensions/autoresearch/commands.ts";
+import { createCandidateRun, writeCandidateProposal } from "../src/archive.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
+import { EXPERIMENT_SCHEMA_VERSION } from "../src/experiments.ts";
 import { newLoopState, saveState, STATE_DIR_NAME } from "../src/state.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
@@ -97,6 +99,96 @@ describe("/autoresearch telemetry", () => {
         expect.stringContaining("no completed flows recorded yet"),
         "info",
       );
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("/autoresearch inspect", () => {
+  it("surfaces a candidate's scientific intent and evidence paths inside Pi", async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-inspect-"));
+    const stateDir = path.join(repoRoot, STATE_DIR_NAME);
+    const state = newLoopState({
+      name: "inspect-challenge",
+      cli: "",
+      direction: "-",
+      setupCommand: "./setup.sh",
+      verifyCommand: "./verify.sh",
+      benchCommand: "./benchmark.sh",
+      submitNeedsModel: false,
+      editablePaths: ["src"],
+      scorePath: "score.json",
+    });
+    state.loop = 1;
+    state.phase = "loop.ideas";
+    state.bestScore = 10;
+    state.ideas = [
+      {
+        id: "L001-I1",
+        loop: 1,
+        title: "Fuse the lookup passes",
+        parentCandidateId: "baseline",
+        specFile: "ideas/loop-001/idea-1.md",
+        proposalFile: "runs/L001-I1/proposal.json",
+        status: "verifying",
+        verifyAttempts: 1,
+        comparisonScore: 10,
+        lastVerifyError: "first verification found an off-by-one error",
+      },
+    ];
+    saveState(stateDir, state);
+    createCandidateRun(stateDir, {
+      candidateId: "L001-I1",
+      parentCandidateId: "baseline",
+      baseRevision: "abc123",
+    });
+    writeCandidateProposal(stateDir, "L001-I1", {
+      schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+      title: "Fuse the lookup passes",
+      parentCandidateId: "baseline",
+      searchMode: "refinement",
+      editFamily: "lookup-loop",
+      evidenceRefs: ["runs/baseline/metrics.json"],
+      observation: "Two passes traverse the same input.",
+      hypothesis: "One fused pass will remove redundant work.",
+      intervention: "Combine lookup and normalization.",
+      expectedResult: "At least a five percent runtime reduction.",
+      falsifiedWhen: "The benchmark does not improve.",
+      risks: ["May change iteration order."],
+      nonGoals: ["Do not change the verifier."],
+      spec: "Implement a single fused loop.",
+    });
+
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: { handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void },
+      ) => {
+        handler = options.handler;
+      },
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const notify = vi.fn();
+    const ctx = {
+      cwd: repoRoot,
+      hasUI: true,
+      ui: { notify },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!("inspect L001-I1", ctx);
+      const rendered = notify.mock.calls.flat().join("\n");
+      expect(rendered).toContain("L001-I1 · Fuse the lookup passes");
+      expect(rendered).toContain("Hypothesis: One fused pass will remove redundant work.");
+      expect(rendered).toContain("Intervention: Combine lookup and normalization.");
+      expect(rendered).toContain("Last failure: first verification found an off-by-one error");
+      expect(rendered).toContain(".autoresearch/runs/L001-I1/proposal.json");
+      expect(rendered).toContain(".autoresearch/runs/L001-I1/logs/verify.log");
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });
     }

@@ -1,7 +1,31 @@
 import type { StatusReport } from "../../src/orchestrator.ts";
 
-/** Compact status lines for the pi widget and /autoresearch status. */
-export function renderStatusLines(challengeName: string, report: StatusReport): string[] {
+export interface StatusRenderOptions {
+  recentActivity?: string[];
+}
+
+const PHASE_LABELS: Record<StatusReport["phase"], string> = {
+  uninitialized: "waiting for initialization",
+  "init.setup": "installing challenge dependencies",
+  "init.knowledge": "mapping the challenge",
+  ready: "ready to start",
+  "loop.syncing": "syncing leaderboard evidence",
+  "loop.proposing": "Professor is proposing experiments",
+  "loop.ideas": "researching candidates",
+  "loop.finalizing": "selecting and validating a winner",
+  "loop.end": "archiving loop evidence",
+  church: "Professor is reflecting in church",
+  god: "Professor is reflecting in church",
+  paused: "paused",
+  done: "complete",
+};
+
+/** Human-readable status lines for the live Pi widget and /autoresearch status. */
+export function renderStatusLines(
+  challengeName: string,
+  report: StatusReport,
+  options: StatusRenderOptions = {},
+): string[] {
   const churchLine =
     report.churchTriggerThreshold > 0
       ? `dry streak ${report.dryLoopStreak}/${report.churchTriggerThreshold} (church in ${Math.max(
@@ -11,15 +35,28 @@ export function renderStatusLines(challengeName: string, report: StatusReport): 
       : "church trigger off";
   const lines = [
     `autoresearch · ${challengeName} · loop ${report.loop} · phase ${report.phase}`,
+    `stage: ${PHASE_LABELS[report.phase]}${renderCandidateCounts(report)}`,
     `best local ${report.bestScore ?? "—"} · submitted ${report.bestSubmittedScore ?? "—"} · ${churchLine}`,
   ];
   if (report.ideas.length > 0) {
-    lines.push(
-      "ideas: " +
-        report.ideas
-          .map((i) => `${i.id} ${i.status}${i.status === "verifying" || i.status === "implementing" ? ` (attempt ${i.verifyAttempts + 1})` : ""}${i.localScore !== undefined ? ` [${i.localScore}]` : ""}`)
-          .join(" · "),
-    );
+    lines.push("candidates:");
+    for (const idea of report.ideas) {
+      const maxAttempts = idea.maxVerifyAttempts;
+      const attempt =
+        idea.status === "implementing" || idea.status === "verifying"
+          ? ` ${idea.verifyAttempts + 1}${maxAttempts ? `/${maxAttempts}` : ""}`
+          : "";
+      const parent = idea.parentCandidateId ? ` · parent ${idea.parentCandidateId}` : "";
+      const score =
+        idea.localScore !== undefined
+          ? ` · score ${idea.localScore}${scoreDelta(idea.localScore, idea.comparisonScore, report.scoreDirection)}`
+          : "";
+      lines.push(`  ${idea.id} · ${idea.status}${attempt}${parent}${score}`);
+      lines.push(`    ${oneLine(idea.title, 100)}`);
+      if (idea.lastVerifyError) {
+        lines.push(`    last failure: ${oneLine(idea.lastVerifyError, 110)}`);
+      }
+    }
   }
   if (report.recovery) {
     lines.push(
@@ -40,5 +77,50 @@ export function renderStatusLines(challengeName: string, report: StatusReport): 
     );
   }
   lines.push(`advisor: ${report.lastAdvisorNotes.length} note(s) last loop · taskboard: ${report.taskboardOpen} open`);
+  const activity = (options.recentActivity ?? []).filter(Boolean).slice(0, 3);
+  if (activity.length > 0) {
+    lines.push("recent:");
+    lines.push(...activity.map((entry) => `  ${oneLine(entry, 120)}`));
+  }
+  lines.push("details: /autoresearch inspect <candidate> · timing: /autoresearch telemetry");
   return lines;
+}
+
+function renderCandidateCounts(report: StatusReport): string {
+  if (report.ideas.length === 0) return "";
+  const active = report.ideas.filter(
+    (idea) => idea.status === "implementing" || idea.status === "verifying",
+  ).length;
+  const queued = report.ideas.filter(
+    (idea) => idea.status === "proposed" || idea.status === "benching",
+  ).length;
+  const failed = report.ideas.filter((idea) => idea.status === "failed").length;
+  const completed = report.ideas.length - active - queued - failed;
+  const parts = [
+    active > 0 ? `${active} active` : "",
+    queued > 0 ? `${queued} queued/benching` : "",
+    completed > 0 ? `${completed} complete` : "",
+    failed > 0 ? `${failed} failed` : "",
+  ].filter(Boolean);
+  return parts.length > 0 ? ` · ${parts.join(" · ")}` : "";
+}
+
+function scoreDelta(
+  score: number,
+  comparisonScore: number | null | undefined,
+  direction: "+" | "-" = "-",
+): string {
+  if (comparisonScore === null || comparisonScore === undefined) return "";
+  const improvement = direction === "+" ? score - comparisonScore : comparisonScore - score;
+  if (improvement === 0) return " (same as parent)";
+  return ` (${formatNumber(Math.abs(improvement))} ${improvement > 0 ? "better" : "worse"})`;
+}
+
+function formatNumber(value: number): string {
+  return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
+}
+
+function oneLine(value: string, maxLength: number): string {
+  const compact = value.replace(/\s+/g, " ").trim();
+  return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 1)}…`;
 }
