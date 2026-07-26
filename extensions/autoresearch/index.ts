@@ -9,7 +9,7 @@ import { registerTaskboardTool } from "./taskboard-tool.ts";
  * implement them in isolated worktrees, local verify/bench gate submissions,
  * and after three dry loops the Professor goes to church.
  *
- * Commands: /autoresearch [run|status|config|stop]
+ * Commands: /autoresearch [run|status|inspect|telemetry|config|stop]
  * Tools: taskboard, research_notes
  */
 export default function (pi: ExtensionAPI) {

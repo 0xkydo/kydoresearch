@@ -163,8 +163,17 @@ challenge data and submit an improvement automatically.
 
 ### 5. Operate and resume
 
-Use `/autoresearch status` for an immediate snapshot and `/autoresearch stop`
-for a durable, abort-safe pause. Run `/autoresearch` again to resume the saved
+The live Pi widget shows the current stage, score baseline, candidate titles,
+parents, verification attempts, benchmark deltas, failures, and the three most
+recent research events. It remains visible when a run pauses or completes and
+is restored from durable state after Pi restarts.
+
+Use `/autoresearch status` for the same immediate snapshot in a notification.
+Use `/autoresearch inspect` to list current and recent candidates, then
+`/autoresearch inspect L003-I2` to see one candidate's observation, hypothesis,
+intervention, expected result, failure, and evidence paths without leaving Pi.
+`/autoresearch telemetry` shows aggregate timing. Use `/autoresearch stop` for
+a durable, abort-safe pause, and run `/autoresearch` again to resume the saved
 checkpoint.
 
 Setup and main-checkout evaluation output streams to `.autoresearch/logs/`.
@@ -176,6 +185,9 @@ tail -f .autoresearch/logs/setup.log
 tail -f .autoresearch/runs/L001-I1/logs/verify.log
 tail -f .autoresearch/runs/L001-I1/logs/benchmark.log
 ```
+
+The raw logs and archived artifacts remain authoritative; the Pi dashboard is
+an operator-friendly view over that durable evidence.
 
 ## Quickstart: MLX Fast
 

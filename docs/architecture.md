@@ -55,7 +55,8 @@ extensions/autoresearch/
   config-ui.ts          role and harness configuration
   notes-tool.ts         knowledge-base and note access
   taskboard-tool.ts     shared persisted task board
-  widget.ts             compact loop status
+  widget.ts             live stage, candidate, score, failure, and activity view
+  inspect.ts            in-Pi candidate hypothesis and evidence inspection
   agents/
     setup/SOUL.md
     professor/SOUL.md
