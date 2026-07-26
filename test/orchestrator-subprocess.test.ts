@@ -21,7 +21,7 @@ type Scenario =
   | "bench-failure"
   | "parallel-blocker"
   | "resume-improve"
-  | "resume-god";
+  | "resume-church";
 
 interface SubprocessHarness {
   stateDir: string;
@@ -86,7 +86,7 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
 
     const records = readRecords(recordPath);
     expect(records.filter((record) => record.event === "crash" && record.idea === "L001-I1"))
-      .toHaveLength(2);
+      .toHaveLength(6); // 2 research attempts × 3 transient agent attempts
     expect(records).toContainEqual(
       expect.objectContaining({ event: "end", idea: "L001-I2" }),
     );
@@ -96,7 +96,7 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
     const harness = await makeSubprocessHarness(repoRoot, "zero-ideas");
 
     await expect(harness.orchestrator.runLoop()).rejects.toThrow(
-      "Professor proposed zero ideas; cannot continue the loop.",
+      "Professor proposed zero ideas after 3 attempt(s)",
     );
 
     expect(loadState(harness.stateDir)).toMatchObject({
@@ -264,15 +264,15 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
     expect(fs.readdirSync(path.join(harness.stateDir, "worktrees"))).toEqual([]);
   });
 
-  it("resumes an interrupted God turn without replaying loop bookkeeping", async () => {
-    const harness = await makeSubprocessHarness(repoRoot, "resume-god", {
+  it("resumes an interrupted church visit without replaying loop bookkeeping", async () => {
+    const harness = await makeSubprocessHarness(repoRoot, "resume-church", {
       maxVerifyAttempts: 1,
-      godTriggerThreshold: 1,
+      churchTriggerThreshold: 1,
       advisor: { enabled: false, watchdogFile: "WATCHDOG.md" },
     });
     const controller = new AbortController();
     const interrupted = harness.makeOrchestrator(controller.signal, (event) => {
-      if (event.type === "phase" && event.phase === "god") controller.abort();
+      if (event.type === "phase" && event.phase === "church") controller.abort();
     });
 
     await expect(interrupted.runLoop()).resolves.toBeNull();
@@ -282,7 +282,7 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
     expect(summary).toMatchObject({
       loop: 1,
       improved: false,
-      godConversation: "notes/god-001.md",
+      churchNote: "notes/church-001.md",
     });
     expect(loadState(harness.stateDir)).toMatchObject({
       loop: 1,
@@ -307,13 +307,13 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
     });
     Object.assign(config, {
       runner: "subprocess",
-      godTriggerThreshold: 0,
+      churchTriggerThreshold: 0,
     }, patch);
     writeTestPrompts(stateDir);
-    config.roles.professor.prompt = ".autoresearch/prompts/test-professor.md";
-    config.roles.phd.prompt = ".autoresearch/prompts/test-phd.md";
-    config.roles.advisor.prompt = ".autoresearch/prompts/test-advisor.md";
-    config.roles.god.prompt = ".autoresearch/prompts/test-god.md";
+    config.roles.professor.prompt = ".autoresearch/prompts/roles/test-professor.md";
+    config.roles.phd.prompt = ".autoresearch/prompts/roles/test-phd.md";
+    config.roles.advisor.prompt = ".autoresearch/prompts/roles/test-advisor.md";
+    config.roles.god.prompt = ".autoresearch/prompts/roles/test-god.md";
 
     const events: OrchestratorEvent[] = [];
     const makeOrchestrator = (
@@ -342,6 +342,7 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
           observe?.(event);
         },
         signal,
+        delay: async () => {},
       });
     };
     return {
@@ -354,7 +355,7 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
 });
 
 function writeTestPrompts(stateDir: string): void {
-  const promptDir = path.join(stateDir, "prompts");
+  const promptDir = path.join(stateDir, "prompts", "roles");
   fs.mkdirSync(promptDir, { recursive: true });
   fs.writeFileSync(
     path.join(promptDir, "test-professor.md"),
@@ -416,7 +417,7 @@ function respond(text, structured) {
 if (kind === "propose") {
   const ideas = scenario === "zero-ideas"
     ? []
-    : scenario === "resume-improve" || scenario === "resume-god"
+    : scenario === "resume-improve" || scenario === "resume-church"
       ? [{ title: "Resume candidate", spec: "Exercise phase-safe resume." }]
       : [
         { title: "Candidate A", spec: "Try a valid but worse point." },
@@ -447,7 +448,7 @@ if (kind === "propose") {
   }
   const params = scenario === "resume-improve"
     ? { algorithm: "resume-optimum", x: 3, y: -1 }
-    : scenario === "resume-god"
+    : scenario === "resume-church"
       ? { algorithm: "resume-baseline", x: 0, y: 0 }
       : idea === "L001-I1"
         ? { algorithm: "candidate-a", x: -2, y: 2 }
@@ -466,11 +467,11 @@ if (kind === "propose") {
     ? [{ severity: "blocker", text: "Human review required after parallel work." }]
     : [];
   respond("Advisor reviewed the loop.", { notes });
-} else if (kind === "god-conversation") {
+} else if (kind === "church") {
   const notePath = field("NOTE");
   fs.mkdirSync(path.dirname(notePath), { recursive: true });
-  fs.writeFileSync(notePath, "# Resumed God conversation\n");
-  respond("God restored the research direction.");
+  fs.writeFileSync(notePath, "# Resumed church reflection\n");
+  respond("The Professor completed the church reflection.");
 } else {
   process.stderr.write("unexpected fake pi prompt:\n" + prompt + "\n");
   process.exit(64);

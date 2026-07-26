@@ -47,7 +47,7 @@ async function makeHarness(repoRoot: string, configPatch: Partial<HarnessConfig>
       exec: nodeExec,
       emit: (ev) => events.push(ev),
       signal,
-      delay,
+      delay: delay ?? (async () => {}),
     });
   return { repoRoot, stateDir, config, events, makeOrchestrator };
 }
@@ -172,20 +172,20 @@ EOF
     expect(state.bestSubmittedScore).toBe(106);
   });
 
-  it("three dry loops trigger God; streak resets; post-God loop improves", async () => {
+  it("three dry loops send the Professor to church; streak resets; the next loop improves", async () => {
     const h = await makeHarness(repoRoot);
     const orchestrator = h.makeOrchestrator();
     for (let i = 0; i < 5; i++) await orchestrator.runLoop(); // loops 1-5
 
     let state = loadState(h.stateDir)!;
-    // Loops 3,4,5 are baseline replays (score 10 vs best 2): dry x3 -> God fired after loop 5.
-    const godNote = path.join(h.stateDir, "notes", "god-005.md");
-    expect(fs.existsSync(godNote)).toBe(true);
-    expect(fs.readFileSync(godNote, "utf8")).toContain("**God:**");
+    // Loops 3,4,5 are baseline replays (score 10 vs best 2): dry x3 -> church after loop 5.
+    const churchNote = path.join(h.stateDir, "notes", "church-005.md");
+    expect(fs.existsSync(churchNote)).toBe(true);
+    expect(fs.readFileSync(churchNote, "utf8")).toContain("**God:**");
     expect(state.dryLoopStreak).toBe(0); // reset by the conversation
-    expect(h.events.some((e) => e.type === "god")).toBe(true);
+    expect(h.events.some((e) => e.type === "church")).toBe(true);
 
-    // Loop 6 converges to the optimum: improvement after God.
+    // Loop 6 converges to the optimum after church.
     const summary = await orchestrator.runLoop();
     expect(summary!.improved).toBe(true);
     state = loadState(h.stateDir)!;
@@ -193,11 +193,11 @@ EOF
     expect(mySubmissions(repoRoot).some((s) => s.score === 0)).toBe(true);
   });
 
-  it("god trigger disabled when threshold is 0", async () => {
-    const h = await makeHarness(repoRoot, { godTriggerThreshold: 0 });
+  it("church trigger disabled when threshold is 0", async () => {
+    const h = await makeHarness(repoRoot, { churchTriggerThreshold: 0 });
     const orchestrator = h.makeOrchestrator();
     for (let i = 0; i < 5; i++) await orchestrator.runLoop();
-    expect(fs.existsSync(path.join(h.stateDir, "notes", "god-005.md"))).toBe(false);
+    expect(fs.existsSync(path.join(h.stateDir, "notes", "church-005.md"))).toBe(false);
     expect(loadState(h.stateDir)!.dryLoopStreak).toBe(3);
   });
 
@@ -248,6 +248,8 @@ EOF
       repoRoot,
       { maxLoops: 1, mockLoopDelayMs: 1_234 } as Partial<HarnessConfig>,
     );
+    h.config.resilience.retryBaseDelayMs = 0;
+    h.config.resilience.retryMaxDelayMs = 0;
     const delays: number[] = [];
     const orchestrator = h.makeOrchestrator(undefined, async (ms) => {
       delays.push(ms);
@@ -255,7 +257,7 @@ EOF
 
     await orchestrator.runUntilDone();
 
-    expect(delays).toEqual([1_234]);
+    expect(delays.filter((ms) => ms > 0)).toEqual([1_234]);
     expect(loadState(h.stateDir)!.phase).toBe("done");
   });
 
@@ -322,7 +324,7 @@ EOF
     const report = orchestrator.status();
     expect(report.loop).toBe(1);
     expect(report.bestScore).toBe(10); // baseline; loop 1 is dry
-    expect(report.godTriggerThreshold).toBe(3);
+    expect(report.churchTriggerThreshold).toBe(3);
     expect(report.lastAdvisorNotes.length).toBeGreaterThan(0);
   });
 

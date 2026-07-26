@@ -22,5 +22,7 @@ describe("ConfigPanel", () => {
     const rendered = panel.render(180).join("\n");
     expect(rendered).toContain("benchmark timeout 3600000 ms");
     expect(rendered).toContain("mock loop delay   0 ms");
+    expect(rendered).toContain("agent attempts    3");
+    expect(rendered).toContain("submit attempts   5");
   });
 });

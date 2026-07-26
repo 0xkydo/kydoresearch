@@ -88,10 +88,112 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     });
     const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
     const prompt = invocation.args.at(-1);
-    expect(prompt).toContain("## Your job (loop 2)");
-    expect(prompt).toContain("Current best score: 100 (direction -)");
+    expect(prompt).toContain("# Role: Professor");
+    expect(prompt).toContain("# Task: Propose the next research portfolio");
+    expect(prompt).toContain("Current best local score: 100");
+    expect(prompt).toContain("Score direction: `-`");
     expect(prompt).toContain(`${task.stateDir}/knowledge-base.md`);
     expect(prompt).not.toContain("{{");
+  });
+
+  it("composes every bundled role profile with its task prompt", async () => {
+    const recordPath = path.join(tmpDir, "profile-invocation.json");
+    process.env.FAKE_PI_RECORD = recordPath;
+    writeRecordingFakePi();
+    const runner = new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles));
+    const manifest = {
+      name: "profile-fixture",
+      setupCommand: "./setup.sh",
+      benchmarkCommand: "./benchmark.sh",
+      scorePath: "score.json",
+      direction: "-",
+      editablePaths: ["src/solution"],
+    };
+    const cases: Array<{
+      task: AgentTask;
+      expected: string[];
+      absent?: string[];
+    }> = [
+      {
+        task: makeTask(tmpDir, {
+          role: "setup",
+          kind: "init.explore",
+          input: { manifest, setupCommand: "./setup.sh" },
+        }),
+        expected: [
+          "# Role: Setup",
+          "# Task: Classify setup and confirm readiness",
+          '"verifyCommand": "existing correctness command"',
+          '"status": "needs-user-action"',
+        ],
+      },
+      {
+        task: makeTask(tmpDir, {
+          role: "phd",
+          kind: "implement",
+          input: {
+            loop: 3,
+            ideaId: "L003-I2",
+            specFile: "/tmp/idea.md",
+            attempt: 2,
+            maxVerifyAttempts: 3,
+            editablePaths: ["src/solution"],
+            verifyCommand: "npm test",
+            lastVerifyError: "assertion failed",
+          },
+        }),
+        expected: [
+          "# Role: PhD",
+          "# Task: Implement one research idea",
+          "Attempt: 2 of 3",
+          "assertion failed",
+          "full performance benchmark",
+        ],
+        absent: ["# Task: Record a completed experiment"],
+      },
+      {
+        task: makeTask(tmpDir, {
+          role: "god",
+          kind: "church",
+          input: { loop: 6, streak: 4, notePath: "/tmp/church.md" },
+        }),
+        expected: [
+          "# Role: God",
+          "# Task: Go to church",
+          "Dry-loop streak: 4",
+          "Write the complete dialogue to `/tmp/church.md`",
+        ],
+      },
+      {
+        task: makeTask(tmpDir, {
+          role: "advisor",
+          kind: "advise",
+          input: {
+            watchdogFile: "WATCHDOG.md",
+            summary: { loop: 4, improved: false },
+            stateDiff: { dryLoopStreak: 2, ideaFailed: true },
+            rules: [{ if: "dryLoopStreak >= 2", severity: "concern", text: "Change course." }],
+          },
+        }),
+        expected: [
+          "# Role: Advisor",
+          "# Task: Review the completed loop",
+          '"dryLoopStreak": 2',
+          "Return at most three concise notes",
+          '"severity": "nit|concern|blocker"',
+        ],
+      },
+    ];
+
+    for (const testCase of cases) {
+      const result = await runner.run(testCase.task);
+      expect(result.ok).toBe(true);
+      const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
+      const prompt = invocation.args.at(-1) ?? "";
+      for (const expected of testCase.expected) expect(prompt).toContain(expected);
+      for (const absent of testCase.absent ?? []) expect(prompt).not.toContain(absent);
+      expect(prompt).not.toContain("{{");
+    }
   });
 
   it("passes the role thinking level and tool allowlist to pi", async () => {
@@ -143,7 +245,7 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     ]);
   });
 
-  it("resolves a configured bare prompt filename from the bundled prompt directory", async () => {
+  it("resolves a configured bare role filename and still appends the current task", async () => {
     const recordPath = path.join(tmpDir, "bundled-invocation.json");
     process.env.FAKE_PI_RECORD = recordPath;
     writeRecordingFakePi();
@@ -151,14 +253,14 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     roles.professor.prompt = "god.md";
 
     await new PiSubprocessRunner(roles).run(
-      makeTask(tmpDir, {
-        input: { streak: 4, notePath: "/tmp/hope.md" },
-      }),
+      makeTask(tmpDir),
     );
 
     const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
-    expect(invocation.args.at(-1)).toContain("after 4 consecutive loops");
-    expect(invocation.args.at(-1)).toContain("to `/tmp/hope.md`");
+    const prompt = invocation.args.at(-1) ?? "";
+    expect(prompt).toContain("# Role: God");
+    expect(prompt).toContain("# Task: Propose the next research portfolio");
+    expect(prompt).not.toContain("# Task: Go to church");
   });
 
   it("renders the task-specific note section of the bundled PhD prompt", async () => {
@@ -182,10 +284,11 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
 
     const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
     const prompt = invocation.args.at(-1);
-    expect(prompt).toContain("recording what was learned");
+    expect(prompt).toContain("# Role: PhD");
+    expect(prompt).toContain("# Task: Record a completed experiment");
     expect(prompt).toContain("Idea: Ancilla reuse");
-    expect(prompt).toContain("Write the note to the requested path");
-    expect(prompt).not.toContain("implementing one research idea");
+    expect(prompt).toContain("Write only the requested note file");
+    expect(prompt).not.toContain("# Task: Implement one research idea");
     expect(prompt).not.toContain("{{");
   });
 
@@ -193,10 +296,10 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     const repoRoot = path.join(tmpDir, "challenge");
     const worktree = path.join(tmpDir, "worktree");
     const stateDir = path.join(repoRoot, ".autoresearch");
-    fs.mkdirSync(path.join(stateDir, "prompts"), { recursive: true });
+    fs.mkdirSync(path.join(stateDir, "prompts", "roles"), { recursive: true });
     fs.mkdirSync(worktree);
     fs.writeFileSync(
-      path.join(stateDir, "prompts", "custom.md"),
+      path.join(stateDir, "prompts", "roles", "custom.md"),
       [
         "Loop {{loop}} in {{cwd}}.",
         "Payload: {{payload}}",
@@ -208,7 +311,7 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     process.env.FAKE_PI_RECORD = recordPath;
     writeRecordingFakePi();
     const roles = structuredClone(DEFAULT_CONFIG.roles);
-    roles.professor.prompt = ".autoresearch/prompts/custom.md";
+    roles.professor.prompt = ".autoresearch/prompts/roles/custom.md";
 
     const result = await new PiSubprocessRunner(roles).run(
       makeTask(worktree, {
@@ -220,14 +323,36 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
     expect(result.ok).toBe(true);
     const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[]; cwd: string };
     expect(invocation.cwd).toBe(fs.realpathSync(worktree));
-    expect(invocation.args.at(-1)).toBe(
-      [
-        `Loop 7 in ${worktree}.`,
-        'Payload: {\n  "score": 42\n}',
-        "Previous failure: bad proof",
-        "",
-      ].join("\n"),
+    const prompt = invocation.args.at(-1) ?? "";
+    expect(prompt).toContain(`Loop 7 in ${worktree}.`);
+    expect(prompt).toContain('Payload: {\n  "score": 42\n}');
+    expect(prompt).toContain("Previous failure: bad proof");
+    expect(prompt).toContain("# Task: Propose the next research portfolio");
+  });
+
+  it("uses a challenge-local task override while keeping the role profile", async () => {
+    const repoRoot = path.join(tmpDir, "challenge");
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    fs.mkdirSync(path.join(stateDir, "prompts", "tasks"), { recursive: true });
+    fs.writeFileSync(
+      path.join(stateDir, "prompts", "tasks", "propose.md"),
+      "# Task: Custom proposal\n\nCustom loop {{loop}}.\n",
     );
+    const recordPath = path.join(tmpDir, "custom-task-invocation.json");
+    process.env.FAKE_PI_RECORD = recordPath;
+    writeRecordingFakePi();
+
+    const result = await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(
+      makeTask(repoRoot, { stateDir }),
+    );
+
+    expect(result.ok).toBe(true);
+    const invocation = JSON.parse(fs.readFileSync(recordPath, "utf8")) as { args: string[] };
+    const prompt = invocation.args.at(-1) ?? "";
+    expect(prompt).toContain("# Role: Professor");
+    expect(prompt).toContain("# Task: Custom proposal");
+    expect(prompt).toContain("Custom loop 2.");
+    expect(prompt).not.toContain("# Task: Propose the next research portfolio");
   });
 
   it("returns a failed result when the configured prompt cannot be read", async () => {
@@ -239,7 +364,7 @@ fs.writeFileSync(process.env.FAKE_PI_RECORD, "invoked");
 process.exitCode = 99;
 `);
     const roles = structuredClone(DEFAULT_CONFIG.roles);
-    roles.professor.prompt = ".autoresearch/prompts/missing.md";
+    roles.professor.prompt = ".autoresearch/prompts/roles/missing.md";
 
     await expect(new PiSubprocessRunner(roles).run(makeTask(tmpDir))).resolves.toMatchObject({
       ok: false,

@@ -3,12 +3,22 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { RolesConfig, RoleSpec } from "../config.ts";
-import type { AgentResult, AgentRunner, AgentTask } from "./types.ts";
+import type { AgentResult, AgentRunner, AgentTask, TaskKind } from "./types.ts";
 
 const BUNDLED_PROMPTS_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../extensions/autoresearch/prompts",
 );
+const BUNDLED_ROLE_PROMPTS_DIR = path.join(BUNDLED_PROMPTS_DIR, "roles");
+const BUNDLED_TASK_PROMPTS_DIR = path.join(BUNDLED_PROMPTS_DIR, "tasks");
+const TASK_PROMPT_FILES: Record<TaskKind, string> = {
+  "init.explore": "init-explore.md",
+  propose: "propose.md",
+  implement: "implement.md",
+  "write-note": "write-note.md",
+  church: "church.md",
+  advise: "advise.md",
+};
 const DEFAULT_TIMEOUT_MS = 30 * 60_000;
 const DEFAULT_KILL_GRACE_MS = 5_000;
 
@@ -42,7 +52,7 @@ export class PiSubprocessRunner implements AgentRunner {
     } catch (error) {
       return Promise.resolve(
         emptyFailedResult(
-          `Failed to load prompt "${role.prompt?.trim() || `${task.role}.md`}": ${errorMessage(error)}`,
+          `Failed to load prompts for ${task.role}/${task.kind}: ${errorMessage(error)}`,
         ),
       );
     }
@@ -245,8 +255,11 @@ function emptyFailedResult(error: string): AgentResult {
 
 function loadAndRenderPrompt(role: RoleSpec, task: AgentTask): string {
   const configuredPath = role.prompt?.trim() || `${task.role}.md`;
-  const promptPath = resolvePromptPath(configuredPath, task.stateDir);
-  const template = fs.readFileSync(promptPath, "utf8");
+  const rolePromptPath = resolveRolePromptPath(configuredPath, task.stateDir);
+  const taskPromptPath = resolveTaskPromptPath(task.kind, task.stateDir);
+  const roleTemplate = fs.readFileSync(rolePromptPath, "utf8").trimEnd();
+  const taskTemplate = fs.readFileSync(taskPromptPath, "utf8").trimStart();
+  const template = `${roleTemplate}\n\n---\n\n${taskTemplate}`;
   return renderPrompt(template, {
     ...task.input,
     role: task.role,
@@ -256,9 +269,9 @@ function loadAndRenderPrompt(role: RoleSpec, task: AgentTask): string {
   });
 }
 
-function resolvePromptPath(configuredPath: string, stateDir: string): string {
+function resolveRolePromptPath(configuredPath: string, stateDir: string): string {
   if (path.basename(configuredPath) === configuredPath) {
-    return path.join(BUNDLED_PROMPTS_DIR, configuredPath);
+    return path.join(BUNDLED_ROLE_PROMPTS_DIR, configuredPath);
   }
   if (path.isAbsolute(configuredPath)) {
     throw new Error("repo-relative prompt paths cannot be absolute");
@@ -271,6 +284,12 @@ function resolvePromptPath(configuredPath: string, stateDir: string): string {
     throw new Error("repo-relative prompt path escapes the challenge repo");
   }
   return resolved;
+}
+
+function resolveTaskPromptPath(kind: TaskKind, stateDir: string): string {
+  const filename = TASK_PROMPT_FILES[kind];
+  const customPath = path.join(stateDir, "prompts", "tasks", filename);
+  return fs.existsSync(customPath) ? customPath : path.join(BUNDLED_TASK_PROMPTS_DIR, filename);
 }
 
 function renderPrompt(template: string, context: Record<string, unknown>): string {

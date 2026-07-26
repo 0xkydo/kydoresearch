@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MockAgentRunner } from "../src/agents/mock.ts";
+import type { AgentRunner } from "../src/agents/types.ts";
 import type { ExecPort } from "../src/exec.ts";
 import { nodeExec } from "../src/exec.ts";
 import { initChallenge } from "../src/init.ts";
@@ -118,6 +119,83 @@ describe("initChallenge", () => {
     expect(fs.readFileSync(path.join(stateDir, "logs", "benchmark.log"), "utf8")).toContain("$ ./benchmark.sh");
   });
 
+  it("recovers from transient setup, setup-agent, and baseline failures", async () => {
+    let setupCalls = 0;
+    let baselineCalls = 0;
+    const exec: ExecPort = (cmd, args, opts) => {
+      const command = cmd === "/bin/bash" ? args[1] : undefined;
+      if (command === "./setup.sh" && ++setupCalls === 1) {
+        return Promise.resolve({ stdout: "", stderr: "temporary setup failure", code: 1 });
+      }
+      if (command === "./benchmark.sh" && ++baselineCalls === 1) {
+        return Promise.resolve({ stdout: "", stderr: "temporary benchmark failure", code: 1 });
+      }
+      return nodeExec(cmd, args, opts);
+    };
+    const baseRunner = new MockAgentRunner();
+    let exploreCalls = 0;
+    const runner: AgentRunner = {
+      run: (task) => {
+        if (task.kind === "init.explore" && ++exploreCalls === 1) {
+          return Promise.resolve({
+            ok: false,
+            output: "",
+            error: "temporary provider failure",
+            filesWritten: [],
+          });
+        }
+        return baseRunner.run(task);
+      },
+    };
+
+    const result = await initChallenge({
+      repoRoot,
+      runner,
+      exec,
+      delay: async () => {},
+    });
+
+    expect(result.state.phase).toBe("ready");
+    expect(setupCalls).toBe(2);
+    expect(exploreCalls).toBe(2);
+    expect(baselineCalls).toBe(2);
+  });
+
+  it("pauses initialization when Setup requires work elsewhere", async () => {
+    const runner: AgentRunner = {
+      run: () =>
+        Promise.resolve({
+          ok: true,
+          output: "The required dependency is not available.",
+          structured: {
+            status: "needs-user-action",
+            userAction: {
+              reason: "Rust toolchain 1.90 is missing.",
+              location: repoRoot,
+              instructions: [
+                "Install Rust 1.90 with rustup.",
+                "Run ./setup.sh and confirm it succeeds.",
+              ],
+              suggestedOwner: "user",
+            },
+          },
+          filesWritten: [],
+        }),
+    };
+
+    await expect(
+      initChallenge({
+        repoRoot,
+        runner,
+        exec: nodeExec,
+        delay: async () => {},
+      }),
+    ).rejects.toThrow(
+      /Initialization paused.*Rust toolchain 1\.90 is missing.*Install Rust 1\.90 with rustup.*retry \/autoresearch/s,
+    );
+    expect(fs.existsSync(path.join(repoRoot, ".autoresearch", "state.json"))).toBe(false);
+  });
+
   it("aborts when .autoresearch would fall inside editablePaths", async () => {
     const manifestPath = path.join(repoRoot, "benchmark.json");
     const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
@@ -125,14 +203,24 @@ describe("initChallenge", () => {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
     await expect(
-      initChallenge({ repoRoot, runner: new MockAgentRunner(), exec: nodeExec }),
+      initChallenge({
+        repoRoot,
+        runner: new MockAgentRunner(),
+        exec: nodeExec,
+        delay: async () => {},
+      }),
     ).rejects.toThrow(/editablePaths/);
   });
 
   it("fails loudly when setup fails", async () => {
     fs.writeFileSync(path.join(repoRoot, "setup.sh"), "#!/usr/bin/env bash\nexit 7\n");
     await expect(
-      initChallenge({ repoRoot, runner: new MockAgentRunner(), exec: nodeExec }),
+      initChallenge({
+        repoRoot,
+        runner: new MockAgentRunner(),
+        exec: nodeExec,
+        delay: async () => {},
+      }),
     ).rejects.toThrow(
       /Dependency setup failed.*Run "\.\/setup\.sh" manually, fix the reported error, then retry \/autoresearch/s,
     );
@@ -141,7 +229,12 @@ describe("initChallenge", () => {
   it("requires a benchmark.json", async () => {
     fs.rmSync(path.join(repoRoot, "benchmark.json"));
     await expect(
-      initChallenge({ repoRoot, runner: new MockAgentRunner(), exec: nodeExec }),
+      initChallenge({
+        repoRoot,
+        runner: new MockAgentRunner(),
+        exec: nodeExec,
+        delay: async () => {},
+      }),
     ).rejects.toThrow(/No benchmark\.json.*cd into a cloned Yukon challenge repo, then retry \/autoresearch/s);
   });
 
@@ -159,7 +252,12 @@ describe("initChallenge", () => {
     fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
 
     await expect(
-      initChallenge({ repoRoot, runner: new MockAgentRunner(), exec: nodeExec }),
+      initChallenge({
+        repoRoot,
+        runner: new MockAgentRunner(),
+        exec: nodeExec,
+        delay: async () => {},
+      }),
     ).rejects.toThrow(
       /Benchmark command "\.\/missing-benchmark\.sh" was not found.*fix benchmarkCommand in benchmark\.json, then retry \/autoresearch/s,
     );

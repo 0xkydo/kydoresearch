@@ -9,8 +9,8 @@ import type { ProposedIdea } from "./types.ts";
  *   L1-I2  valid but worse (34)              -> done-no-improvement (streak 1)
  *   L2-I1  invalid attempt 1, fixed on 2 (2) -> retry-then-pass, loop winner -> submit
  *   L2-I2  valid improvement (4)             -> done-superseded (I1 wins; streak 0)
- *   L3-L5  baseline replays (10)             -> dry loops, streak 1..3 -> god after L5
- *   L6     analytic optimum (0)              -> improvement -> submit (streak reset proven)
+ *   L3-L5  baseline replays (10)             -> dry loops, streak 1..3 -> church after L5
+ *   L6     analytic optimum (0)              -> improvement -> submit (church reset proven)
  *   L7+    idle probes (no improvement)
  */
 
@@ -73,9 +73,9 @@ export function scriptedNote(ideaTitle: string, score: number | undefined, best:
   ].join("\n");
 }
 
-export function scriptedGodConversation(loop: number, streak: number): string {
+export function scriptedChurchConversation(loop: number, streak: number): string {
   return [
-    `# A conversation with God (after loop ${loop}, ${streak} dry loops)`,
+    `# The Professor goes to church (after loop ${loop}, ${streak} dry loops)`,
     "",
     "**Professor:** I have proposed and proposed, and the score does not move.",
     "I am starting to doubt the whole research direction.",

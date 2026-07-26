@@ -10,7 +10,7 @@ const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "hi
 
 export type EditableSettingField =
   | "maxIdeasPerLoop"
-  | "godTriggerThreshold"
+  | "churchTriggerThreshold"
   | "maxVerifyAttempts"
   | "maxLoops"
   | "minImprovement"
@@ -18,6 +18,14 @@ export type EditableSettingField =
   | "setupTimeoutMs"
   | "verifyTimeoutMs"
   | "benchmarkTimeoutMs"
+  | "agentMaxAttempts"
+  | "commandMaxAttempts"
+  | "submitMaxAttempts"
+  | "maxConsecutiveLoopFailures"
+  | "retryBaseDelayMs"
+  | "retryMaxDelayMs"
+  | "loopFailureBaseDelayMs"
+  | "loopFailureMaxDelayMs"
   | "watchdogFile"
   | "submitModelName";
 
@@ -70,7 +78,7 @@ export class ConfigPanel {
       return [
         { id: "model", label: "model", value: spec.model, kind: "edit" },
         { id: "thinking", label: "thinking", value: spec.thinking ?? "off", kind: "cycle" },
-        { id: "prompt", label: "prompt", value: spec.prompt ?? `${role}.md`, kind: "edit" },
+        { id: "prompt", label: "role prompt", value: spec.prompt ?? `roles/${role}.md`, kind: "edit" },
       ];
     }
     const c = this.config;
@@ -78,7 +86,7 @@ export class ConfigPanel {
       { id: "runner", label: "runner", value: c.runner, kind: "cycle" },
       { id: "advisorEnabled", label: "advisor", value: c.advisor.enabled ? "enabled" : "disabled", kind: "cycle" },
       { id: "maxIdeasPerLoop", label: "max ideas/loop", value: String(c.maxIdeasPerLoop), kind: "edit" },
-      { id: "godTriggerThreshold", label: "god threshold", value: c.godTriggerThreshold === 0 ? "off" : String(c.godTriggerThreshold), kind: "edit" },
+      { id: "churchTriggerThreshold", label: "church threshold", value: c.churchTriggerThreshold === 0 ? "off" : String(c.churchTriggerThreshold), kind: "edit" },
       { id: "maxVerifyAttempts", label: "verify attempts", value: String(c.maxVerifyAttempts), kind: "edit" },
       { id: "maxLoops", label: "max loops", value: c.maxLoops === null ? "unlimited" : String(c.maxLoops), kind: "edit" },
       { id: "minImprovement", label: "min improvement", value: String(c.minImprovement), kind: "edit" },
@@ -91,6 +99,19 @@ export class ConfigPanel {
         value: `${c.execution.benchmarkTimeoutMs} ms`,
         kind: "edit",
       },
+      { id: "agentMaxAttempts", label: "agent attempts", value: String(c.resilience.agentMaxAttempts), kind: "edit" },
+      { id: "commandMaxAttempts", label: "command attempts", value: String(c.resilience.commandMaxAttempts), kind: "edit" },
+      { id: "submitMaxAttempts", label: "submit attempts", value: String(c.resilience.submitMaxAttempts), kind: "edit" },
+      {
+        id: "maxConsecutiveLoopFailures",
+        label: "failure circuit",
+        value: String(c.resilience.maxConsecutiveLoopFailures),
+        kind: "edit",
+      },
+      { id: "retryBaseDelayMs", label: "retry base delay", value: `${c.resilience.retryBaseDelayMs} ms`, kind: "edit" },
+      { id: "retryMaxDelayMs", label: "retry max delay", value: `${c.resilience.retryMaxDelayMs} ms`, kind: "edit" },
+      { id: "loopFailureBaseDelayMs", label: "recovery base", value: `${c.resilience.loopFailureBaseDelayMs} ms`, kind: "edit" },
+      { id: "loopFailureMaxDelayMs", label: "recovery max", value: `${c.resilience.loopFailureMaxDelayMs} ms`, kind: "edit" },
       { id: "watchdogFile", label: "watchdog file", value: c.advisor.watchdogFile, kind: "edit" },
       { id: "submitModelName", label: "submit model", value: c.submitModelName ?? "—", kind: "edit" },
     ];

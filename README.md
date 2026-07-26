@@ -37,9 +37,11 @@ fresh repo. The equivalent JSON setting is:
 ```
 
 Run `/autoresearch`. Confirm the displayed setup and benchmark commands. Init
-runs the manifest's `setupCommand`, asks a setup agent to identify the
-correctness/performance commands, and records one baseline benchmark before the
-research loop starts. ecdsafail is detected as lower-is-better.
+runs the manifest's `setupCommand`, asks Setup to sort the repository's existing
+dependency, correctness, and performance pieces into the harness buckets, and
+records one baseline benchmark before the research loop starts. If required
+work belongs elsewhere, initialization pauses with instructions for the user or
+another agent. ecdsafail is detected as lower-is-better.
 
 Use `/autoresearch status` while it runs and `/autoresearch stop` to pause.
 Setup, verification, and benchmark output streams to
@@ -64,7 +66,7 @@ research loop
     verify passes → benchmark under a global lock
   best meaningful improvement → apply to main → re-verify → re-bench → submit
   advisor reviews the loop; a blocker pauses it
-  repeated dry loops → reflective God turn → next loop
+  repeated dry loops → Professor goes to church and reflects with God → next loop
 ```
 
 State lives in `.autoresearch/` inside the challenge repo. It is hidden through
@@ -95,29 +97,33 @@ loading merges them with these defaults.
   "roles": {
     "setup": {
       "model": "anthropic/claude-sonnet-5",
-      "thinking": "medium"
+      "thinking": "medium",
+      "tools": ["read", "bash", "write", "grep", "find", "ls"]
     },
     "professor": {
       "model": "anthropic/claude-fable-5",
-      "thinking": "high"
+      "thinking": "high",
+      "tools": ["read", "grep", "find", "ls"]
       // Optional overrides:
-      // "prompt": "professor.md",
-      // "tools": ["read", "grep", "find"]
+      // "prompt": "professor.md", // stable role profile only
     },
     "phd": {
       "model": "anthropic/claude-sonnet-5",
-      "thinking": "medium"
+      "thinking": "medium",
+      "tools": ["read", "bash", "edit", "write", "grep", "find", "ls"]
     },
     "god": {
       "model": "anthropic/claude-fable-5",
-      "thinking": "high"
+      "thinking": "high",
+      "tools": ["read", "write", "grep", "find", "ls"]
     },
     "advisor": {
       "model": "anthropic/claude-fable-5",
-      "thinking": "medium"
+      "thinking": "medium",
+      "tools": []
     }
   },
-  "godTriggerThreshold": 3, // consecutive dry loops; 0 disables the God turn
+  "churchTriggerThreshold": 3, // consecutive dry loops before church; 0 disables
   "maxVerifyAttempts": 3,
   "maxIdeasPerLoop": 5,
   "maxLoops": null, // null means unlimited
@@ -127,6 +133,16 @@ loading merges them with these defaults.
     "setupTimeoutMs": 1800000,
     "verifyTimeoutMs": 600000,
     "benchmarkTimeoutMs": 3600000
+  },
+  "resilience": {
+    "agentMaxAttempts": 3, // first call + 2 retries
+    "commandMaxAttempts": 2, // first call + 1 retry
+    "submitMaxAttempts": 5, // first call + 4 retries, with remote reconciliation
+    "maxConsecutiveLoopFailures": 12, // then pause the durable checkpoint
+    "retryBaseDelayMs": 2000,
+    "retryMaxDelayMs": 60000,
+    "loopFailureBaseDelayMs": 60000,
+    "loopFailureMaxDelayMs": 900000
   },
   "advisor": {
     "enabled": true,
@@ -138,14 +154,19 @@ loading merges them with these defaults.
 ```
 
 `thinking` accepts `off`, `minimal`, `low`, `medium`, `high`, or `xhigh`.
-Omitting `tools` leaves the role's Pi tools unrestricted; an empty array passes
-`--no-tools`. A bare `prompt` filename resolves against the bundled
-`extensions/autoresearch/prompts/` directory. A path such as
-`.autoresearch/prompts/custom.md` resolves from the challenge repo.
+The defaults give each role a least-privilege Pi tool allowlist; an empty array
+passes `--no-tools`. Each subprocess receives a stable role profile followed by
+the current task prompt. A bare role `prompt` filename resolves under
+`extensions/autoresearch/prompts/roles/`; a path such as
+`.autoresearch/prompts/roles/custom.md` resolves from the challenge repo.
+Challenge-specific task overrides use the matching filename under
+`.autoresearch/prompts/tasks/`, such as `tasks/propose.md`.
+Older configs using `godTriggerThreshold` are loaded as
+`churchTriggerThreshold`.
 
-The panel exposes professor, PhD, God, and advisor role settings. The setup role
-runs only during init, so edit its JSON directly if needed. `WATCHDOG.md`
-provides optional advisor rules:
+The panel exposes professor, PhD, God, and advisor role settings and role
+profiles. The setup role runs only during init, so edit its JSON directly if
+needed. `WATCHDOG.md` provides optional advisor rules:
 
 ```md
 severity-threshold: nit
@@ -154,6 +175,31 @@ rules:
   severity: concern
   text: "Two dry loops; consider changing idea family."
 ```
+
+See [`docs/agent-profiles.md`](docs/agent-profiles.md) for the five complete
+role contracts, including their authority, evidence policy, and output schemas.
+
+## Overnight failure policy
+
+Attempt counts include the first call. By default, model tasks get **3 total
+attempts**, harness commands get **2**, and submission gets **5**. Retries use
+bounded exponential backoff and honor `/autoresearch stop` immediately.
+
+| Failure | Automatic fallback |
+|---|---|
+| Setup or baseline command | Retry once; leave initialization incomplete with actionable logs if both attempts fail. |
+| Professor/setup/PhD model call | Retry twice. A PhD provider failure consumes a verify attempt only after its model retries are exhausted. |
+| Leaderboard sync/fetch | Retry once, then continue from `.autoresearch/leaderboard.json`; research is not blocked. |
+| Correctness or benchmark command | Retry once. An idea that still fails is isolated; other ideas continue. |
+| Best candidate fails on main | Mark only that candidate failed and try the next qualifying candidate. If all finalists fail, restore the pre-finalization main checkout snapshot. |
+| Submission | Reconcile against the remote user's submissions before each of five attempts. An exhausted submit remains at `loop.finalizing` for durable checkpoint recovery and is never marked submitted. |
+| Notes, Advisor, or church | Retry twice, log the failure, and continue. A failed church visit preserves the dry-loop streak so it is attempted again later. |
+| Worktree cleanup | Retry once, persist a cleanup queue, and try it again at the next checkpoint. |
+| Unexpected loop-level failure | Resume the same saved phase with a 1–15 minute backoff. After 12 consecutive failures, pause with a visible recovery reason instead of spinning or spending indefinitely. |
+
+Successful idea work is checkpointed throughout. An unfinished loop does not
+count toward `maxLoops`, so a transient failure on the final configured loop
+cannot make the harness declare completion early.
 
 ## Mock demo
 

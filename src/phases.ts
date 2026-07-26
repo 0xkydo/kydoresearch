@@ -9,7 +9,8 @@ export type Phase =
   | "loop.ideas" // parallel idea pipelines in flight
   | "loop.finalizing" // winner selection + apply to main repo + submit
   | "loop.end"
-  | "god"
+  | "church"
+  | "god" // legacy v1 snapshots; resume enters church
   | "paused"
   | "done";
 

@@ -1,11 +1,11 @@
 export type Role = "setup" | "professor" | "phd" | "god" | "advisor";
 
 export type TaskKind =
-  | "init.explore" // setup: build knowledge base, detect verify/bench commands
+  | "init.explore" // setup: classify existing commands and confirm readiness
   | "propose" // professor: emit ideas for this loop
   | "implement" // phd: implement idea (or fix after verify failure)
   | "write-note" // phd: hypothesis note after no-improvement
-  | "god-conversation" // professor prays; God inspires
+  | "church" // professor reflects in church and speaks with God
   | "advise"; // advisor: review loop diff against WATCHDOG rules
 
 export interface AgentTask {

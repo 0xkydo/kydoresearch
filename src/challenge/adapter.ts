@@ -100,7 +100,18 @@ export class YukonCliAdapter implements ChallengeAdapter {
         exitCode: result.code,
       };
     }
-    const parsed = JSON.parse(fs.readFileSync(scoreFile, "utf8")) as { score?: unknown };
+    let parsed: { score?: unknown };
+    try {
+      parsed = JSON.parse(fs.readFileSync(scoreFile, "utf8")) as { score?: unknown };
+    } catch (error) {
+      return {
+        ok: false,
+        raw: `${tail(result)}\n[invalid JSON in ${this.manifest.scorePath}: ${
+          error instanceof Error ? error.message : String(error)
+        }]`,
+        exitCode: 1,
+      };
+    }
     if (typeof parsed.score !== "number" || !Number.isFinite(parsed.score)) {
       return { ok: false, raw: `${tail(result)}\n[invalid score in ${this.manifest.scorePath}]`, exitCode: 1 };
     }
@@ -162,7 +173,9 @@ export class YukonCliAdapter implements ChallengeAdapter {
       cwd: this.repoRoot,
       signal,
     });
-    if (result.code !== 0) return [];
+    if (result.code !== 0) {
+      throw new Error(`Challenge submissions command failed (exit ${result.code}): ${tail(result)}`);
+    }
     // Tab-separated table: ID SCORE AUTHOR PROMOTED CREATED (header row skipped).
     return result.stdout
       .trim()

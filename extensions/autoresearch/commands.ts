@@ -69,8 +69,8 @@ export function registerAutoresearchCommand(
       case "submitted":
         notify(ctx, `submitted ${ev.ideaId} (score ${ev.score})${ev.submissionId ? ` as ${ev.submissionId}` : ""}`);
         break;
-      case "god":
-        notify(ctx, `the professor spoke with God after loop ${ev.loop} — see ${ev.noteFile}`, "warning");
+      case "church":
+        notify(ctx, `the Professor went to church after loop ${ev.loop} — see ${ev.noteFile}`, "warning");
         break;
       default:
         break;
@@ -182,7 +182,7 @@ export function registerAutoresearchCommand(
           bestScore: state.bestScore,
           bestSubmittedScore: state.bestSubmittedScore,
           dryLoopStreak: state.dryLoopStreak,
-          godTriggerThreshold: loadConfig(stateDir).godTriggerThreshold,
+          churchTriggerThreshold: loadConfig(stateDir).churchTriggerThreshold,
           ideas: state.ideas.map((i) => ({
             id: i.id,
             title: i.title,
@@ -192,22 +192,29 @@ export function registerAutoresearchCommand(
           })),
           taskboardOpen: 0,
           lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
+          recovery: state.recovery,
         });
     notify(ctx, lines.join("\n"));
   }
 
-  /** Bundled role prompts plus per-challenge overrides in .autoresearch/prompts/. */
+  /** Bundled role profiles plus per-challenge role overrides. */
   function listPromptFiles(repoRoot: string): { label: string; value: string }[] {
-    const bundled = path.join(import.meta.dirname, "prompts");
-    const custom = path.join(repoRoot, STATE_DIR_NAME, "prompts");
+    const bundledRoles = path.join(import.meta.dirname, "prompts", "roles");
+    const customRoot = path.join(repoRoot, STATE_DIR_NAME, "prompts");
+    const customRoles = path.join(customRoot, "roles");
     const entries: { label: string; value: string }[] = [];
-    for (const [dir, prefix] of [
-      [bundled, ""],
-      [custom, `${STATE_DIR_NAME}/prompts/`],
+    for (const [dir, labelPrefix, valuePrefix, bundled] of [
+      [bundledRoles, "roles/", "", true],
+      [customRoles, `${STATE_DIR_NAME}/prompts/roles/`, `${STATE_DIR_NAME}/prompts/roles/`, false],
+      // Keep legacy flat custom role prompts selectable.
+      [customRoot, `${STATE_DIR_NAME}/prompts/`, `${STATE_DIR_NAME}/prompts/`, false],
     ] as const) {
       if (!fs.existsSync(dir)) continue;
       for (const file of fs.readdirSync(dir).filter((f) => f.endsWith(".md")).sort()) {
-        entries.push({ label: `${prefix}${file}${prefix ? "" : " (bundled)"}`, value: `${prefix}${file}` });
+        entries.push({
+          label: `${labelPrefix}${file}${bundled ? " (bundled)" : ""}`,
+          value: `${valuePrefix}${file}`,
+        });
       }
     }
     return entries;
@@ -216,7 +223,7 @@ export function registerAutoresearchCommand(
   async function editSettingDialog(ctx: ExtensionCommandContext, config: ReturnType<typeof loadConfig>, field: EditableSettingField): Promise<void> {
     const prompts: Record<EditableSettingField, [title: string, current: string]> = {
       maxIdeasPerLoop: ["Max ideas the professor may propose per loop:", String(config.maxIdeasPerLoop)],
-      godTriggerThreshold: ["Dry loops before God (0 disables):", String(config.godTriggerThreshold)],
+      churchTriggerThreshold: ["Dry loops before church (0 disables):", String(config.churchTriggerThreshold)],
       maxVerifyAttempts: ["Verify attempts per idea before giving up:", String(config.maxVerifyAttempts)],
       maxLoops: ["Max loops (empty = unlimited):", config.maxLoops === null ? "" : String(config.maxLoops)],
       minImprovement: ["Relative epsilon for meaningful improvement:", String(config.minImprovement)],
@@ -226,6 +233,38 @@ export function registerAutoresearchCommand(
       benchmarkTimeoutMs: [
         "Benchmark command timeout in milliseconds:",
         String(config.execution.benchmarkTimeoutMs),
+      ],
+      agentMaxAttempts: [
+        "Total attempts per model task (including the first call):",
+        String(config.resilience.agentMaxAttempts),
+      ],
+      commandMaxAttempts: [
+        "Total attempts per harness command (including the first call):",
+        String(config.resilience.commandMaxAttempts),
+      ],
+      submitMaxAttempts: [
+        "Total submission attempts (including the first call):",
+        String(config.resilience.submitMaxAttempts),
+      ],
+      maxConsecutiveLoopFailures: [
+        "Consecutive failed loop resumptions before pausing:",
+        String(config.resilience.maxConsecutiveLoopFailures),
+      ],
+      retryBaseDelayMs: [
+        "Initial operation retry delay in milliseconds:",
+        String(config.resilience.retryBaseDelayMs),
+      ],
+      retryMaxDelayMs: [
+        "Maximum operation retry delay in milliseconds:",
+        String(config.resilience.retryMaxDelayMs),
+      ],
+      loopFailureBaseDelayMs: [
+        "Initial failed-loop recovery delay in milliseconds:",
+        String(config.resilience.loopFailureBaseDelayMs),
+      ],
+      loopFailureMaxDelayMs: [
+        "Maximum failed-loop recovery delay in milliseconds:",
+        String(config.resilience.loopFailureMaxDelayMs),
       ],
       watchdogFile: ["Advisor watchdog file (repo-relative):", config.advisor.watchdogFile],
       submitModelName: ["Model name for submit --model (empty = none):", config.submitModelName ?? ""],
@@ -239,8 +278,8 @@ export function registerAutoresearchCommand(
       case "maxIdeasPerLoop":
         if (Number.isInteger(asInt) && asInt > 0) config.maxIdeasPerLoop = asInt;
         break;
-      case "godTriggerThreshold":
-        if (Number.isInteger(asInt) && asInt >= 0) config.godTriggerThreshold = asInt;
+      case "churchTriggerThreshold":
+        if (Number.isInteger(asInt) && asInt >= 0) config.churchTriggerThreshold = asInt;
         break;
       case "maxVerifyAttempts":
         if (Number.isInteger(asInt) && asInt > 0) config.maxVerifyAttempts = asInt;
@@ -264,6 +303,36 @@ export function registerAutoresearchCommand(
       case "benchmarkTimeoutMs":
         if (Number.isInteger(asInt) && asInt > 0) config.execution.benchmarkTimeoutMs = asInt;
         break;
+      case "agentMaxAttempts":
+        if (Number.isInteger(asInt) && asInt > 0) config.resilience.agentMaxAttempts = asInt;
+        break;
+      case "commandMaxAttempts":
+        if (Number.isInteger(asInt) && asInt > 0) config.resilience.commandMaxAttempts = asInt;
+        break;
+      case "submitMaxAttempts":
+        if (Number.isInteger(asInt) && asInt > 0) config.resilience.submitMaxAttempts = asInt;
+        break;
+      case "maxConsecutiveLoopFailures":
+        if (Number.isInteger(asInt) && asInt > 0) {
+          config.resilience.maxConsecutiveLoopFailures = asInt;
+        }
+        break;
+      case "retryBaseDelayMs":
+        if (Number.isInteger(asInt) && asInt >= 0) config.resilience.retryBaseDelayMs = asInt;
+        break;
+      case "retryMaxDelayMs":
+        if (Number.isInteger(asInt) && asInt >= 0) config.resilience.retryMaxDelayMs = asInt;
+        break;
+      case "loopFailureBaseDelayMs":
+        if (Number.isInteger(asInt) && asInt >= 0) {
+          config.resilience.loopFailureBaseDelayMs = asInt;
+        }
+        break;
+      case "loopFailureMaxDelayMs":
+        if (Number.isInteger(asInt) && asInt >= 0) {
+          config.resilience.loopFailureMaxDelayMs = asInt;
+        }
+        break;
       case "watchdogFile":
         if (trimmed) config.advisor.watchdogFile = trimmed;
         break;
@@ -280,16 +349,22 @@ export function registerAutoresearchCommand(
       const summary = [
         `runner: ${config.runner}`,
         `maxIdeasPerLoop: ${config.maxIdeasPerLoop}`,
-        `godTriggerThreshold: ${config.godTriggerThreshold}`,
+        `churchTriggerThreshold: ${config.churchTriggerThreshold}`,
         `maxVerifyAttempts: ${config.maxVerifyAttempts}`,
         `mockLoopDelayMs: ${config.mockLoopDelayMs}`,
         `setupTimeoutMs: ${config.execution.setupTimeoutMs}`,
         `verifyTimeoutMs: ${config.execution.verifyTimeoutMs}`,
         `benchmarkTimeoutMs: ${config.execution.benchmarkTimeoutMs}`,
+        `agentMaxAttempts: ${config.resilience.agentMaxAttempts}`,
+        `commandMaxAttempts: ${config.resilience.commandMaxAttempts}`,
+        `submitMaxAttempts: ${config.resilience.submitMaxAttempts}`,
+        `maxConsecutiveLoopFailures: ${config.resilience.maxConsecutiveLoopFailures}`,
+        `retryBackoffMs: ${config.resilience.retryBaseDelayMs}..${config.resilience.retryMaxDelayMs}`,
+        `loopFailureBackoffMs: ${config.resilience.loopFailureBaseDelayMs}..${config.resilience.loopFailureMaxDelayMs}`,
         `advisor: ${config.advisor.enabled ? "enabled" : "disabled"} (${config.advisor.watchdogFile})`,
         ...CONFIGURABLE_ROLES.map(
           (role) =>
-            `role ${role}: ${config.roles[role].model}${config.roles[role].thinking ? ` (${config.roles[role].thinking})` : ""} · ${config.roles[role].prompt ?? `${role}.md`}`,
+            `role ${role}: ${config.roles[role].model}${config.roles[role].thinking ? ` (${config.roles[role].thinking})` : ""} · ${config.roles[role].prompt ?? `roles/${role}.md`}`,
         ),
       ].join("\n");
       console.log(summary);
@@ -311,9 +386,9 @@ export function registerAutoresearchCommand(
         }
         case "editPrompt": {
           const files = listPromptFiles(ctx.cwd);
-          const current = config.roles[result.role].prompt ?? `${result.role}.md`;
+          const current = config.roles[result.role].prompt ?? `roles/${result.role}.md`;
           const choice = await ctx.ui.select(
-            `Prompt for ${result.role} (current: ${current})`,
+            `Role prompt for ${result.role} (current: ${current})`,
             files.map((f) => f.label),
           );
           const picked = files.find((f) => f.label === choice);
