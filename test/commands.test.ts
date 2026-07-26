@@ -1,4 +1,8 @@
-import type { ExtensionAPI, ExtensionCommandContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+} from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
@@ -8,6 +12,7 @@ import { createCandidateRun, writeCandidateProposal } from "../src/archive.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { EXPERIMENT_SCHEMA_VERSION } from "../src/experiments.ts";
 import { newLoopState, saveState, STATE_DIR_NAME } from "../src/state.ts";
+import { loadOperatorSteering } from "../src/steering.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
 describe("/autoresearch status", () => {
@@ -71,6 +76,126 @@ describe("/autoresearch status", () => {
     );
     expect(notify).toHaveBeenCalledWith(expect.stringContaining("score  42 local"), "info");
     expect(sendMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe("/autoresearch steer", () => {
+  it("persists and surfaces a direction for the next Professor proposal", async () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-steer-"));
+    const stateDir = path.join(repoRoot, STATE_DIR_NAME);
+    const state = newLoopState({
+      name: "steer-challenge",
+      cli: "",
+      direction: "-",
+      setupCommand: "./setup.sh",
+      verifyCommand: "./verify.sh",
+      benchCommand: "./benchmark.sh",
+      submitNeedsModel: false,
+      editablePaths: ["src"],
+      scorePath: "score.json",
+    });
+    state.phase = "ready";
+    saveState(stateDir, state);
+
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: {
+          handler: (args: string, ctx: ExtensionCommandContext) => Promise<void> | void;
+        },
+      ) => {
+        handler = options.handler;
+      },
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+    const notify = vi.fn();
+    const setWidget = vi.fn();
+    const ctx = {
+      cwd: repoRoot,
+      hasUI: true,
+      mode: "rpc",
+      ui: { notify, setWidget },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!(
+        "steer prioritize cache locality before changing algorithms",
+        ctx,
+      );
+
+      expect(loadOperatorSteering(stateDir)?.text).toBe(
+        "prioritize cache locality before changing algorithms",
+      );
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringMatching(/operator direction saved.*next Professor proposal/),
+        "info",
+      );
+      expect(setWidget).toHaveBeenLastCalledWith(
+        "autoresearch",
+        expect.arrayContaining([
+          expect.stringContaining("Operator direction"),
+          expect.stringContaining("prioritize cache locality"),
+        ]),
+        { placement: "belowEditor" },
+      );
+
+      await handler!("steer clear", ctx);
+      expect(loadOperatorSteering(stateDir)).toBeNull();
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("autoresearch persistent dashboard", () => {
+  it("uses Pi's uncapped custom-component path below the editor in TUI mode", () => {
+    const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-dashboard-"));
+    const stateDir = path.join(repoRoot, STATE_DIR_NAME);
+    const state = newLoopState({
+      name: "dashboard-challenge",
+      cli: "",
+      direction: "-",
+      setupCommand: "./setup.sh",
+      verifyCommand: "./verify.sh",
+      benchCommand: "./benchmark.sh",
+      submitNeedsModel: false,
+      editablePaths: ["src"],
+      scorePath: "score.json",
+    });
+    state.phase = "paused";
+    saveState(stateDir, state);
+
+    const pi = {
+      registerCommand: vi.fn(),
+    } as unknown as ExtensionAPI;
+    const { restoreWidget } = registerAutoresearchCommand(pi);
+    const setWidget = vi.fn();
+    const setStatus = vi.fn();
+    const ctx = {
+      cwd: repoRoot,
+      hasUI: true,
+      mode: "tui",
+      ui: { setWidget, setStatus },
+    } as unknown as ExtensionContext;
+
+    try {
+      restoreWidget(ctx);
+
+      expect(setWidget).toHaveBeenCalledWith(
+        "autoresearch",
+        expect.any(Function),
+        { placement: "belowEditor" },
+      );
+      expect(setStatus).toHaveBeenCalledWith(
+        "autoresearch",
+        expect.stringContaining("paused"),
+      );
+    } finally {
+      fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
   });
 });
 
@@ -357,6 +482,7 @@ describe("/autoresearch startup errors", () => {
     const ctx = {
       cwd: repoRoot,
       hasUI: true,
+      mode: "rpc",
       ui: {
         notify,
         confirm: vi.fn().mockResolvedValue(true),
@@ -459,6 +585,7 @@ describe("/autoresearch startup errors", () => {
         expect.stringContaining("! STOPPED · INITIALIZATION"),
         expect.stringContaining(".autoresearch/logs/setup.log"),
       ]),
+      { placement: "belowEditor" },
     );
     expect(setupFailure.setStatus).toHaveBeenLastCalledWith(
       "autoresearch",

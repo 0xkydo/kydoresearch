@@ -183,6 +183,11 @@ export interface ProfessorProposalTaskInputV1 {
   runsDirectory: string;
   currentBestCandidateId: string;
   inFlightCandidateIds: string[];
+  /** Operator preference captured immutably when this proposal task is created. */
+  operatorSteering?: {
+    text: string;
+    updatedAt: string;
+  };
 }
 
 export type ProfessorProposalTaskV1 = ResearchTaskBaseV1<
@@ -361,6 +366,14 @@ export function validateResearchTask(input: unknown): ResearchTaskV1 {
       absolutePath(taskInput.runsDirectory, "task.input.runsDirectory");
       nonEmptyString(taskInput.currentBestCandidateId, "task.input.currentBestCandidateId");
       stringArray(taskInput.inFlightCandidateIds, "task.input.inFlightCandidateIds");
+      if (taskInput.operatorSteering !== undefined) {
+        const steering = record(
+          taskInput.operatorSteering,
+          "task.input.operatorSteering",
+        );
+        nonEmptyString(steering.text, "task.input.operatorSteering.text");
+        nonEmptyString(steering.updatedAt, "task.input.operatorSteering.updatedAt");
+      }
       validateObjective(taskInput.objective);
       break;
     case "implement":

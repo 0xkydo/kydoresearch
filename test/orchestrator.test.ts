@@ -14,6 +14,7 @@ import type { OrchestratorEvent } from "../src/orchestrator.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
 import type { Idea } from "../src/state.ts";
 import { loadState, saveState } from "../src/state.ts";
+import { setOperatorSteering } from "../src/steering.ts";
 import { readTelemetry } from "../src/telemetry.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
@@ -333,6 +334,51 @@ EOF
         proposalFile: idea.proposalFile,
       })),
     );
+  });
+
+  it("snapshots operator steering into the immutable Professor task", async () => {
+    const h = await makeHarness(repoRoot);
+    const state = loadState(h.stateDir)!;
+    state.loop = 1;
+    saveState(h.stateDir, state);
+    setOperatorSteering(
+      h.stateDir,
+      "Prioritize a cache-local representation experiment.",
+      "2026-07-26T10:00:00.000Z",
+    );
+
+    const first = h.makeOrchestrator() as unknown as {
+      propose(): Promise<void>;
+    };
+    await first.propose();
+    const taskPath = path.join(
+      h.stateDir,
+      "loops",
+      "loop-001",
+      "professor-task.json",
+    );
+    expect(JSON.parse(fs.readFileSync(taskPath, "utf8")).input.operatorSteering).toEqual({
+      text: "Prioritize a cache-local representation experiment.",
+      updatedAt: "2026-07-26T10:00:00.000Z",
+    });
+
+    setOperatorSteering(
+      h.stateDir,
+      "Replace the current direction after the task already exists.",
+      "2026-07-26T11:00:00.000Z",
+    );
+    const interrupted = loadState(h.stateDir)!;
+    interrupted.ideas = [];
+    saveState(h.stateDir, interrupted);
+
+    const resumed = h.makeOrchestrator() as unknown as {
+      propose(): Promise<void>;
+    };
+    await resumed.propose();
+    expect(JSON.parse(fs.readFileSync(taskPath, "utf8")).input.operatorSteering).toEqual({
+      text: "Prioritize a cache-local representation experiment.",
+      updatedAt: "2026-07-26T10:00:00.000Z",
+    });
   });
 
   it("repairs a missing ledger append for an already sealed candidate", async () => {

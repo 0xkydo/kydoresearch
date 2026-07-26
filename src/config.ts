@@ -110,12 +110,15 @@ export interface HarnessConfig {
   submitModelName?: string;
 }
 
+export const DEFAULT_SETUP_MODEL = "openai-codex/gpt-5.6-sol";
+const LEGACY_DEFAULT_SETUP_MODEL = "anthropic/claude-sonnet-5";
+
 export const DEFAULT_CONFIG: HarnessConfig = {
   version: 1,
   runner: "mock",
   roles: {
     setup: {
-      model: "anthropic/claude-sonnet-5",
+      model: DEFAULT_SETUP_MODEL,
       thinking: "medium",
       tools: ["read", "write", "edit", "bash"],
     },
@@ -189,6 +192,10 @@ export function loadConfig(stateDir: string): HarnessConfig {
   if (!onDisk) return structuredClone(DEFAULT_CONFIG);
   const { godTriggerThreshold: legacyGodTriggerThreshold, ...current } = onDisk;
   const defaults = structuredClone(DEFAULT_CONFIG);
+  const setup = { ...defaults.roles.setup, ...current.roles?.setup };
+  if (setup.model === LEGACY_DEFAULT_SETUP_MODEL) {
+    setup.model = DEFAULT_SETUP_MODEL;
+  }
   return {
     ...defaults,
     ...current,
@@ -197,7 +204,7 @@ export function loadConfig(stateDir: string): HarnessConfig {
       legacyGodTriggerThreshold ??
       DEFAULT_CONFIG.churchTriggerThreshold,
     roles: {
-      setup: { ...defaults.roles.setup, ...current.roles?.setup },
+      setup,
       professor: { ...defaults.roles.professor, ...current.roles?.professor },
       phd: { ...defaults.roles.phd, ...current.roles?.phd },
       god: { ...defaults.roles.god, ...current.roles?.god },

@@ -1,8 +1,13 @@
+import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
+import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { StatusReport } from "../../src/orchestrator.ts";
 import type { LocalEvaluationV1 } from "../../src/experiments.ts";
+import type { OperatorSteeringSnapshot } from "../../src/steering.ts";
 
 export interface StatusRenderOptions {
   recentActivity?: string[];
+  operatorSteering?: OperatorSteeringSnapshot | null;
+  running?: boolean;
 }
 
 export type InitializationStage =
@@ -148,6 +153,12 @@ export function renderStatusLines(
           : ""),
     );
   }
+  lines.push("├─ Operator direction");
+  lines.push(
+    options.operatorSteering
+      ? `│  ${oneLine(options.operatorSteering.text, 106)}`
+      : "│  no active steering · /autoresearch steer <direction>",
+  );
   lines.push("├─ Research controls");
   lines.push(
     `│  advisor ${report.lastAdvisorNotes.length} note(s) · taskboard ${report.taskboardOpen} open`,
@@ -158,6 +169,459 @@ export function renderStatusLines(
     lines.push(...activity.map((entry) => `│  · ${oneLine(entry, 104)}`));
   }
   lines.push("╰─ Inspect /autoresearch inspect <candidate> · Timing /autoresearch telemetry");
+  return lines;
+}
+
+/**
+ * Persistent, theme-aware control deck. Pi caps plain string-array widgets at
+ * ten lines; this renderer is used through the custom-component widget path.
+ */
+export function renderStatusDashboardLines(
+  challengeName: string,
+  report: StatusReport,
+  width: number,
+  theme: Theme,
+  options: StatusRenderOptions = {},
+): string[] {
+  const viewport = Math.max(32, width);
+  const lines: string[] = [
+    dashboardRule(theme, `AUTORESEARCH  ${challengeName}`, viewport, true),
+  ];
+  const running = options.running === true;
+  const runLabel =
+    report.phase === "done"
+      ? styled(theme, "success", true, "✓ COMPLETE")
+      : report.phase === "paused"
+        ? styled(theme, "warning", true, "! PAUSED")
+        : running
+          ? styled(theme, "accent", true, "● LIVE")
+          : styled(theme, "warning", true, "○ IDLE");
+  lines.push(
+    dashboardLine(
+      `${runLabel}  ${styled(theme, "text", true, `LOOP ${report.loop}`)}  ` +
+        `${styled(theme, phaseColor(report.phase), true, PHASE_LABELS[report.phase].toUpperCase())}`,
+      viewport,
+    ),
+  );
+  lines.push(
+    dashboardLine(
+      `${dashboardLabel(theme, "OBJECTIVE")}  ` +
+        `${styled(theme, "accent", true, String(report.bestScore ?? "—"))} local  ` +
+        `${styled(theme, "success", true, String(report.bestSubmittedScore ?? "—"))} submitted  ` +
+        `${styled(theme, "muted", false, scoreDirectionLabel(report.scoreDirection))}`,
+      viewport,
+    ),
+  );
+
+  const evaluation = report.localEvaluation
+    ? report.localEvaluation.fidelity === "full"
+      ? styled(theme, "success", true, "✓ FULL LOCAL")
+      : styled(theme, "warning", true, "△ REDUCED LOCAL")
+    : styled(theme, "muted", false, "evaluation unknown");
+  const plateau =
+    report.churchTriggerThreshold > 0
+      ? `${report.dryLoopStreak}/${report.churchTriggerThreshold} plateau`
+      : "church off";
+  const recovery = report.recovery
+    ? styled(
+        theme,
+        "error",
+        true,
+        `recovery ${report.recovery.consecutiveFailures}×`,
+      )
+    : styled(theme, "success", false, "recovery clear");
+  lines.push(
+    dashboardLine(
+      `${dashboardLabel(theme, "HEALTH")}  ${evaluation}  ·  ` +
+        `${styled(
+          theme,
+          report.dryLoopStreak > 0 ? "warning" : "muted",
+          report.dryLoopStreak > 0,
+          plateau,
+        )}  ·  advisor ${report.lastAdvisorNotes.length}  ·  tasks ${report.taskboardOpen}  ·  ${recovery}`,
+      viewport,
+    ),
+  );
+
+  const steering = options.operatorSteering
+    ? styled(
+        theme,
+        "accent",
+        true,
+        oneLine(options.operatorSteering.text, Math.max(24, viewport - 17)),
+      )
+    : styled(
+        theme,
+        "muted",
+        false,
+        "No operator direction · /autoresearch steer <direction>",
+      );
+  lines.push(
+    dashboardLine(`${dashboardLabel(theme, "DIRECTION")}  ${steering}`, viewport),
+  );
+
+  lines.push(
+    dashboardRule(
+      theme,
+      `CANDIDATES  ${renderCandidateCounts(report)}`,
+      viewport,
+    ),
+  );
+  if (report.ideas.length === 0) {
+    lines.push(
+      dashboardLine(
+        styled(
+          theme,
+          "muted",
+          false,
+          report.phase === "loop.proposing"
+            ? "Professor is forming the next portfolio."
+            : "No candidate work is currently materialized.",
+        ),
+        viewport,
+      ),
+    );
+  } else {
+    for (const idea of report.ideas) {
+      const attempt =
+        idea.status === "implementing" || idea.status === "verifying"
+          ? ` ${idea.verifyAttempts + 1}/${idea.maxVerifyAttempts ?? "?"}`
+          : "";
+      const score =
+        idea.localScore !== undefined
+          ? `  score ${idea.localScore}${scoreDelta(
+              idea.localScore,
+              idea.comparisonScore,
+              report.scoreDirection,
+            )}`
+          : "";
+      const lineage =
+        viewport >= 96 && idea.parentCandidateId
+          ? `  ← ${idea.parentCandidateId}`
+          : "";
+      const titleBudget = Math.max(
+        18,
+        viewport - visibleWidth(`${idea.id} ${idea.status}${attempt}${score}${lineage}`) - 10,
+      );
+      const status = `${candidateIcon(idea.status)} ${candidateStatusLabel(idea.status)}${attempt}`;
+      lines.push(
+        dashboardLine(
+          `${styled(theme, candidateColor(idea.status), true, status)}  ` +
+            `${styled(theme, "text", true, idea.id)}  ` +
+            `${styled(
+              theme,
+              isActiveCandidate(idea.status) ? "text" : "muted",
+              isActiveCandidate(idea.status),
+              oneLine(idea.title, titleBudget),
+            )}` +
+            `${styled(
+              theme,
+              idea.localScore !== undefined ? scoreColor(
+                idea.localScore,
+                idea.comparisonScore,
+                report.scoreDirection,
+              ) : "muted",
+              idea.status === "done-improved",
+              score + lineage,
+            )}`,
+          viewport,
+        ),
+      );
+      if (idea.lastVerifyError) {
+        lines.push(
+          dashboardLine(
+            `  ${styled(
+              theme,
+              "error",
+              true,
+              `! ${oneLine(idea.lastVerifyError, Math.max(20, viewport - 7))}`,
+            )}`,
+            viewport,
+          ),
+        );
+      }
+    }
+  }
+  const liveIdea = report.ideas.find((idea) => isActiveCandidate(idea.status));
+  if (liveIdea) {
+    const evidencePath =
+      liveIdea.status === "implementing"
+        ? `.autoresearch/runs/${liveIdea.id}/agent/`
+        : `.autoresearch/runs/${liveIdea.id}/logs/${
+            liveIdea.status === "verifying" ? "verify.log" : "benchmark.log"
+          }`;
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "EVIDENCE")}  ${styled(
+          theme,
+          "muted",
+          false,
+          evidencePath,
+        )}`,
+        viewport,
+      ),
+    );
+  }
+
+  if (report.recovery) {
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "RECOVERY")}  ` +
+          `${styled(
+            theme,
+            "error",
+            true,
+            `${report.recovery.scope} · ${oneLine(
+              report.recovery.message,
+              Math.max(20, viewport - 30),
+            )}`,
+          )}`,
+        viewport,
+      ),
+    );
+  }
+  const advisor = report.lastAdvisorNotes.at(-1);
+  if (advisor) {
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "ADVISOR")}  ${styled(
+          theme,
+          advisor.toLowerCase().includes("[blocker]") ? "error" : "warning",
+          true,
+          oneLine(advisor, Math.max(20, viewport - 15)),
+        )}`,
+        viewport,
+      ),
+    );
+  }
+  if (report.metaHarness) {
+    const activeCandidate = report.metaHarness.activeCandidateId
+      ? ` · evaluating ${report.metaHarness.activeCandidateId}`
+      : "";
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "META")}  ${styled(
+          theme,
+          "accent",
+          true,
+          `${report.metaHarness.phase} · gen ${report.metaHarness.generation} · champion ${report.metaHarness.championCandidateId}${activeCandidate}`,
+        )}`,
+        viewport,
+      ),
+    );
+  }
+
+  lines.push(dashboardRule(theme, "LIVE ACTIVITY", viewport));
+  const activity = (options.recentActivity ?? []).filter(Boolean).slice(0, 3);
+  if (activity.length === 0) {
+    lines.push(
+      dashboardLine(styled(theme, "muted", false, "· Waiting for the next durable event."), viewport),
+    );
+  } else {
+    for (const entry of activity) {
+      lines.push(
+        dashboardLine(
+          `${styled(theme, "accent", true, "·")} ${styled(
+            theme,
+            "muted",
+            false,
+            oneLine(entry, Math.max(20, viewport - 5)),
+          )}`,
+          viewport,
+        ),
+      );
+    }
+  }
+
+  lines.push(dashboardRule(theme, "CONTROLS", viewport));
+  if (viewport >= 92) {
+    lines.push(
+      dashboardLine(
+        `${dashboardAction(theme, "STEER", "/autoresearch steer <direction>")}   ` +
+          `${dashboardAction(theme, "INSPECT", "/autoresearch inspect [id]")}   ` +
+          `${dashboardAction(
+            theme,
+            running ? "PAUSE" : "RESUME",
+            running ? "/autoresearch stop" : "/autoresearch",
+          )}`,
+        viewport,
+      ),
+    );
+  } else {
+    lines.push(
+      dashboardLine(
+        dashboardAction(theme, "STEER", "/autoresearch steer <direction>"),
+        viewport,
+      ),
+    );
+    lines.push(
+      dashboardLine(
+        `${dashboardAction(theme, "INSPECT", "/autoresearch inspect [id]")}   ` +
+          `${dashboardAction(
+            theme,
+            running ? "PAUSE" : "RESUME",
+            running ? "/autoresearch stop" : "/autoresearch",
+          )}`,
+        viewport,
+      ),
+    );
+  }
+  lines.push(
+    truncateToWidth(
+      theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, viewport - 1))}`),
+      viewport,
+    ),
+  );
+  return lines;
+}
+
+/** Theme-aware first-run control deck using the same persistent hierarchy. */
+export function renderInitializationDashboardLines(
+  challengeName: string,
+  state: InitializationRenderState,
+  width: number,
+  theme: Theme,
+): string[] {
+  const viewport = Math.max(32, width);
+  const status = initializationStatus(state.status);
+  const tone =
+    state.status === "failed"
+      ? "error"
+      : state.status === "succeeded"
+        ? "success"
+        : state.status === "retrying" || state.status === "resuming"
+          ? "warning"
+          : "accent";
+  const attempt =
+    state.attempt !== undefined
+      ? ` · attempt ${state.attempt}/${state.maxAttempts ?? "?"}`
+      : "";
+  const lines = [
+    dashboardRule(theme, `AUTORESEARCH  ${challengeName}`, viewport, true),
+    dashboardLine(
+      `${styled(theme, tone, true, `${status.icon} ${status.label}`)}  ` +
+        `${styled(theme, "text", true, "INITIALIZATION")}  ·  ` +
+        `${styled(theme, "accent", true, initializationStageLabel(state.stage))}${attempt}`,
+      viewport,
+    ),
+    dashboardLine(
+      `${dashboardLabel(theme, "NOW")}  ${styled(
+        theme,
+        state.status === "failed" ? "error" : "text",
+        true,
+        oneLine(state.message, Math.max(20, viewport - 10)),
+      )}`,
+      viewport,
+    ),
+  ];
+  if (state.localEvaluation) {
+    const reduced = state.localEvaluation.fidelity === "reduced";
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "EVALUATION")}  ${styled(
+          theme,
+          reduced ? "warning" : "success",
+          true,
+          `${reduced ? "△ REDUCED" : "✓ FULL"} LOCAL${
+            state.localEvaluation.officialValidationRequired
+              ? " · official validation required"
+              : ""
+          }`,
+        )}`,
+        viewport,
+      ),
+    );
+    lines.push(
+      dashboardLine(
+        styled(
+          theme,
+          "muted",
+          false,
+          `  ${oneLine(state.localEvaluation.decision, Math.max(20, viewport - 5))}`,
+        ),
+        viewport,
+      ),
+    );
+  }
+  if (state.command || state.logPath) {
+    lines.push(dashboardRule(theme, "RUNTIME EVIDENCE", viewport));
+    if (state.command) {
+      lines.push(
+        dashboardLine(
+          `${dashboardLabel(theme, "COMMAND")}  ${styled(
+            theme,
+            "text",
+            true,
+            oneLine(state.command, Math.max(20, viewport - 14)),
+          )}`,
+          viewport,
+        ),
+      );
+    }
+    if (state.logPath) {
+      lines.push(
+        dashboardLine(
+          `${dashboardLabel(theme, "LOG")}  ${styled(
+            theme,
+            "muted",
+            false,
+            oneLine(state.logPath, Math.max(20, viewport - 10)),
+          )}`,
+          viewport,
+        ),
+      );
+    }
+  }
+  if (state.failure) {
+    lines.push(dashboardRule(theme, "NEEDS ATTENTION", viewport));
+    lines.push(
+      dashboardLine(
+        styled(
+          theme,
+          "error",
+          true,
+          `! ${oneLine(state.failure, Math.max(20, viewport - 5))}`,
+        ),
+        viewport,
+      ),
+    );
+  }
+  lines.push(dashboardRule(theme, "LIVE ACTIVITY", viewport));
+  const activity = state.recentActivity.filter(Boolean).slice(0, 3);
+  if (activity.length === 0) {
+    lines.push(
+      dashboardLine(styled(theme, "muted", false, "· Waiting for the next durable event."), viewport),
+    );
+  } else {
+    for (const entry of activity) {
+      lines.push(
+        dashboardLine(
+          `${styled(theme, "accent", true, "·")} ${styled(
+            theme,
+            "muted",
+            false,
+            oneLine(entry, Math.max(20, viewport - 5)),
+          )}`,
+          viewport,
+        ),
+      );
+    }
+  }
+  lines.push(dashboardRule(theme, "CONTROLS", viewport));
+  lines.push(
+    dashboardLine(
+      state.status === "failed"
+        ? dashboardAction(theme, "RETRY", "/autoresearch after resolving the issue")
+        : dashboardAction(theme, "DETAILS", "/autoresearch telemetry"),
+      viewport,
+    ),
+  );
+  lines.push(
+    truncateToWidth(
+      theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, viewport - 1))}`),
+      viewport,
+    ),
+  );
   return lines;
 }
 
@@ -271,4 +735,72 @@ function formatNumber(value: number): string {
 function oneLine(value: string, maxLength: number): string {
   const compact = value.replace(/\s+/g, " ").trim();
   return compact.length <= maxLength ? compact : `${compact.slice(0, maxLength - 1)}…`;
+}
+
+function dashboardRule(
+  theme: Theme,
+  title: string,
+  width: number,
+  top = false,
+): string {
+  const start = theme.fg("borderMuted", top ? "╭─ " : "├─ ");
+  const label = theme.fg(top ? "accent" : "muted", theme.bold(` ${title} `));
+  const tailWidth = Math.max(0, width - visibleWidth(start + label));
+  return truncateToWidth(
+    start + label + theme.fg("borderMuted", "─".repeat(tailWidth)),
+    width,
+  );
+}
+
+function dashboardLine(content: string, width: number): string {
+  return truncateToWidth(`│  ${content}`, width);
+}
+
+function dashboardLabel(theme: Theme, text: string): string {
+  return theme.fg("muted", theme.bold(text));
+}
+
+function dashboardAction(theme: Theme, label: string, command: string): string {
+  return `${theme.fg("accent", theme.bold(label))} ${theme.fg("text", theme.bold(command))}`;
+}
+
+function styled(
+  theme: Theme,
+  color: ThemeColor,
+  bold: boolean,
+  text: string,
+): string {
+  return theme.fg(color, bold ? theme.bold(text) : text);
+}
+
+function phaseColor(phase: StatusReport["phase"]): ThemeColor {
+  if (phase === "done") return "success";
+  if (phase === "paused") return "warning";
+  if (phase === "uninitialized" || phase === "ready") return "muted";
+  return "accent";
+}
+
+function candidateColor(status: string): ThemeColor {
+  if (status === "failed") return "error";
+  if (status === "done-improved") return "success";
+  if (status.startsWith("done-")) return "muted";
+  if (status === "verifying") return "warning";
+  if (status === "implementing" || status === "benching") return "accent";
+  return "dim";
+}
+
+function isActiveCandidate(status: string): boolean {
+  return status === "implementing" || status === "verifying" || status === "benching";
+}
+
+function scoreColor(
+  score: number,
+  comparisonScore: number | null | undefined,
+  direction: "+" | "-" = "-",
+): ThemeColor {
+  if (comparisonScore === null || comparisonScore === undefined) return "accent";
+  const improvement = direction === "+" ? score - comparisonScore : comparisonScore - score;
+  if (improvement > 0) return "success";
+  if (improvement < 0) return "warning";
+  return "muted";
 }

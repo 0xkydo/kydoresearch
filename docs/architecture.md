@@ -51,12 +51,13 @@ thresholds, setup or God behavior, the outer proposer, or controller source.
 ```text
 extensions/autoresearch/
   index.ts              extension entry point and session-start restoration
-  commands.ts           /autoresearch run|status|config|stop
+  commands.ts           /autoresearch run|status|steer|inspect|telemetry|config|stop
   config-ui.ts          role and harness configuration
   notes-tool.ts         knowledge-base and note access
   taskboard-tool.ts     shared persisted task board
-  widget.ts             persistent initialization plus live candidate, score,
-                        failure, and activity views
+  widget.ts             persistent below-editor control deck with responsive,
+                        theme-aware initialization, objective, health,
+                        steering, candidate, failure, activity, and control views
   inspect.ts            in-Pi candidate hypothesis and evidence inspection
   agents/
     setup/SOUL.md
@@ -220,13 +221,24 @@ defined in [`agent-profiles.md`](agent-profiles.md).
    `runs/baseline/source/`, record its Git revision and score, set
    `bestCandidateId` to `baseline`, and persist phase `ready`.
 
-The extension installs a persistent initialization widget before step 3. Every
-structured progress event updates its bordered stage, local-evaluation
+The extension installs a persistent initialization widget—a control deck below
+the Pi editor—before step 3. In TUI mode it uses `setWidget`'s
+custom-component path, which is not subject to Pi's ten-line cap for
+string-array widgets. Every
+structured progress event updates its width-aware stage, local-evaluation
 fidelity, command, attempt count, authoritative log path, and recent activity.
 Setup-agent, autonomous decision, and baseline-review work is therefore
-visible while Pi subprocesses run. A failure leaves the widget on screen with
-the actionable error and retry instruction. The research widget uses the same
-visual hierarchy for scores, candidates, controls, and recent evidence.
+visible while Pi subprocesses run. A failure leaves the deck on screen with
+the actionable error and retry instruction.
+
+The research deck keeps operator-critical context in one stable hierarchy:
+run/idle state, phase and loop, objective and direction, evaluation fidelity,
+plateau and recovery health, active steering, candidate attempts and failures,
+Advisor concern, recent durable events, and direct commands. Theme accent,
+success, warning, error, muted text, and bold weight carry semantics in both
+light and dark Pi themes. The plain renderer remains the notification/RPC
+fallback. Session start restores the same deck from durable state even when no
+worker process is active.
 
 The Setup role may use lightweight, non-mutating host probes when the setup log
 and repository instructions are insufficient. It never reruns setup, executes
@@ -371,6 +383,15 @@ Before proposing, the professor receives an immutable task pointing to:
 - `knowledge-base.md`, the navigational subject/leaderboard summary;
 - the current best candidate ID, objective, direction, improvement threshold,
   in-flight candidate IDs, and proposal budget.
+- the current operator steering snapshot, when present.
+
+`/autoresearch steer <direction>` atomically replaces the active preference in
+`operator-steering.json`. The next Professor task embeds that text and
+timestamp, making its influence reproducible even if the operator later
+changes or clears the active preference. An already-materialized Professor or
+PhD task is never rewritten. Operator steering is a search preference and
+hypothesis lead; evidence, evaluator integrity, role authority, and editable
+paths remain fixed.
 
 The professor can inspect relevant candidate diffs, metrics, failures, and
 postmortems rather than relying on an ever-growing chat session. Its canonical
@@ -450,6 +471,7 @@ The main filesystem layout is:
   journal.ndjson
   telemetry.ndjson
   knowledge-base.md
+  operator-steering.json
   leaderboard.json
   taskboard.json
   ledger.ndjson

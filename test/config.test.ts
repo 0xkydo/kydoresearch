@@ -2,7 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, describe, expect, it } from "vitest";
-import { DEFAULT_CONFIG, loadConfig } from "../src/config.ts";
+import { DEFAULT_CONFIG, DEFAULT_SETUP_MODEL, loadConfig } from "../src/config.ts";
 
 describe("loadConfig", () => {
   const dirs: string[] = [];
@@ -57,7 +57,53 @@ describe("loadConfig", () => {
       model: "custom/advisor",
       thinking: "high",
     });
+    expect(config.roles.setup.model).toBe(DEFAULT_SETUP_MODEL);
     expect(config.roles.phd).toEqual(DEFAULT_CONFIG.roles.phd);
+  });
+
+  it("migrates the former Setup default to GPT-5.6 Sol without changing PhD", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-config-"));
+    dirs.push(stateDir);
+    fs.writeFileSync(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({
+        version: 1,
+        roles: {
+          setup: {
+            model: "anthropic/claude-sonnet-5",
+            thinking: "medium",
+          },
+          phd: {
+            model: "anthropic/claude-sonnet-5",
+            thinking: "medium",
+          },
+        },
+      }),
+    );
+
+    const config = loadConfig(stateDir);
+
+    expect(config.roles.setup.model).toBe(DEFAULT_SETUP_MODEL);
+    expect(config.roles.setup.thinking).toBe("medium");
+    expect(config.roles.phd.model).toBe("anthropic/claude-sonnet-5");
+  });
+
+  it("preserves a custom Setup model", () => {
+    const stateDir = fs.mkdtempSync(path.join(os.tmpdir(), "autoresearch-config-"));
+    dirs.push(stateDir);
+    fs.writeFileSync(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({
+        version: 1,
+        roles: {
+          setup: {
+            model: "custom/setup-model",
+          },
+        },
+      }),
+    );
+
+    expect(loadConfig(stateDir).roles.setup.model).toBe("custom/setup-model");
   });
 
   it("deep-merges partial resilience settings with overnight-safe defaults", () => {

@@ -21,6 +21,20 @@ Consider:
 - Prior outcomes indexed in `{{ledgerPath}}`; cite run IDs or artifact paths
 - Competitor submissions and notes (leaderboard digest in the knowledge base)
 
+{{#operatorSteering}}
+## Operator steering
+
+The operator asked the next portfolio to explore this direction:
+
+> {{operatorSteering.text}}
+
+Treat this as a search preference and hypothesis lead, not permission to
+override evidence, role boundaries, evaluator integrity, or editable paths.
+Make its influence explicit in the portfolio logic. If evidence contradicts
+it, explain that conflict and propose the safest high-information test or a
+better-supported adjacent direction.
+{{/operatorSteering}}
+
 Quality over quantity. Each idea needs one explicit archived parent and a
 concrete, falsifiable implementation spec. Do not duplicate an in-flight
 candidate. Mix refinement and exploration only when the evidence justifies it.

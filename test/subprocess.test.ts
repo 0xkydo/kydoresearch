@@ -633,6 +633,10 @@ process.stdout.write(${JSON.stringify(rawEvents)});
           bestScore: 100,
           direction: "-",
           dryLoopStreak: 1,
+          operatorSteering: {
+            text: "Prioritize cache-local representations.",
+            updatedAt: "2026-07-26T10:00:00.000Z",
+          },
           traceDir,
         },
       }),
@@ -643,9 +647,10 @@ process.stdout.write(${JSON.stringify(rawEvents)});
     expect(fs.readFileSync(path.join(traceDir, "soul.md"), "utf8")).toContain(
       "research director and evidence-driven search strategist",
     );
-    expect(fs.readFileSync(path.join(traceDir, "context.md"), "utf8")).toContain(
-      "## Your job (loop 2)",
-    );
+    const context = fs.readFileSync(path.join(traceDir, "context.md"), "utf8");
+    expect(context).toContain("## Your job (loop 2)");
+    expect(context).toContain("## Operator steering");
+    expect(context).toContain("Prioritize cache-local representations.");
     expect(
       JSON.parse(fs.readFileSync(path.join(traceDir, "invocation.json"), "utf8")),
     ).toMatchObject({

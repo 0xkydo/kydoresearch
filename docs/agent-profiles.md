@@ -10,7 +10,11 @@ kydoresearch keeps three concerns separate:
    invocation fields, and response contract.
 
 The immutable task JSON remains the authoritative invocation contract. Current
-loop data belongs there and in the rendered prompt, never in a soul.
+loop data belongs there and in the rendered prompt, never in a soul. An
+operator direction set through `/autoresearch steer` is likewise dynamic task
+input: the next Professor task captures it as a search preference with a
+timestamp, while already-materialized Professor and PhD tasks remain
+unchanged.
 
 ## Bundled layout
 
@@ -69,7 +73,7 @@ pause, and resume.
 
 | Role | Stable responsibility | Default model / reasoning | Default tools |
 |---|---|---|---|
-| Setup | Map repository facts and compile the initial experiment contract | Claude Sonnet 5 / medium | `read`, `write`, `edit`, `bash` |
+| Setup | Map repository facts and compile the initial experiment contract | GPT-5.6 Sol / medium | `read`, `write`, `edit`, `bash` |
 | Professor | Direct evidence-backed search and explicit-parent proposals | Claude Fable 5 / high | `read`, `bash` |
 | PhD | Execute one bounded experiment and report evidence honestly | Claude Sonnet 5 / medium | `read`, `write`, `edit`, `bash` |
 | God | Restore perspective and agency without promising an outcome | Claude Fable 5 / high | `read`, `write` |
@@ -92,7 +96,10 @@ genuine external capability blocker.
 The Professor is a read-mostly research director. It inspects the compact
 ledger and selected raw run evidence, proposes falsifiable independent
 experiments, and declares each archived parent. It does not implement or run
-the full benchmark.
+the full benchmark. When its immutable task contains operator steering, it
+must make the direction's influence or evidentiary conflict explicit without
+treating that preference as authority to weaken the evaluator, role
+boundaries, or editable-path contract.
 
 ### PhD
 

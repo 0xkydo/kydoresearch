@@ -16,6 +16,16 @@ Read `{{stateDir}}/knowledge-base.md` first. Then inspect the most relevant
 recent idea specs and hypothesis, Advisor, church, and submission notes. Use the
 current values above when an older note differs.
 
+{{#operatorSteering}}
+The operator's current search preference is:
+
+> {{operatorSteering.text}}
+
+Use it as a hypothesis lead while keeping evidence and the fixed harness
+boundary authoritative. State how the portfolio responds to it, including any
+material conflict with observed evidence.
+{{/operatorSteering}}
+
 ## Method
 
 1. Build an evidence ledger: improvements, correctness failures, verified

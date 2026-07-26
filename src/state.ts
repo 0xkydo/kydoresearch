@@ -101,6 +101,7 @@ export function statePaths(stateDir: string) {
     journal: path.join(stateDir, "journal.ndjson"),
     telemetry: path.join(stateDir, "telemetry.ndjson"),
     knowledgeBase: path.join(stateDir, "knowledge-base.md"),
+    operatorSteering: path.join(stateDir, "operator-steering.json"),
     taskboard: path.join(stateDir, "taskboard.json"),
     leaderboard: path.join(stateDir, "leaderboard.json"),
     ledger: path.join(stateDir, "ledger.ndjson"),

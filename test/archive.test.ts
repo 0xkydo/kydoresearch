@@ -131,6 +131,44 @@ describe("proposal contracts", () => {
     ).toThrow(/setupSucceeded/);
   });
 
+  it("validates optional operator steering in Professor proposal tasks", () => {
+    const stateDir = path.join(os.tmpdir(), "professor-task-validation", ".autoresearch");
+    const task = {
+      schemaVersion: 1,
+      taskId: "L001-professor",
+      kind: "propose",
+      role: "professor",
+      taskPath: path.join(stateDir, "loops", "loop-001", "professor-task.json"),
+      stateDir,
+      resultPath: path.join(stateDir, "loops", "loop-001", "professor-result.json"),
+      input: {
+        loop: 1,
+        objective: { score: 10, direction: "-", minimumImprovement: 0.005 },
+        maxIdeas: 3,
+        ledgerPath: path.join(stateDir, "ledger.ndjson"),
+        knowledgeBasePath: path.join(stateDir, "knowledge-base.md"),
+        runsDirectory: path.join(stateDir, "runs"),
+        currentBestCandidateId: "baseline",
+        inFlightCandidateIds: [],
+        operatorSteering: {
+          text: "Test cache locality first.",
+          updatedAt: "2026-07-26T10:00:00.000Z",
+        },
+      },
+    };
+
+    expect(validateResearchTask(task)).toEqual(task);
+    expect(() =>
+      validateResearchTask({
+        ...task,
+        input: {
+          ...task.input,
+          operatorSteering: { ...task.input.operatorSteering, text: "" },
+        },
+      }),
+    ).toThrow(/operatorSteering\.text/);
+  });
+
   it("validates immutable baseline-review evidence for Setup", () => {
     const repoRoot = path.join(os.tmpdir(), "setup-review-validation");
     const stateDir = path.join(repoRoot, ".autoresearch");

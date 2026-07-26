@@ -172,18 +172,39 @@ challenge data and submit an improvement automatically.
 
 ### 5. Operate and resume
 
-The persistent initialization widget appears as soon as confirmation closes.
-Its bordered dashboard separates current stage, local-evaluation fidelity,
-runtime command, evidence path, and recent activity. It shows dependency setup,
-the Setup agent, autonomous decision resolution, baseline attempts, and
-baseline-review. An initialization failure remains on screen with its
-actionable reason instead of disappearing as a transient notification.
+The persistent initialization control deck appears below Pi's editor as soon as
+confirmation closes. It uses Pi's width-aware custom-component path rather
+than the ten-line-capped plain widget path, so runtime evidence is not replaced
+by a `widget truncated` marker. Its hierarchy keeps the current stage,
+local-evaluation fidelity, runtime command, evidence path, actionable failure,
+recent activity, and controls visible. An initialization failure remains on
+screen with its reason instead of disappearing as a transient notification.
 
-After initialization, the live Pi dashboard groups the current stage, scores,
-local-evaluation fidelity, candidate titles, parents, verification attempts,
-benchmark deltas, failures, controls, and recent research events into compact
-sections. It remains visible when a run pauses or completes and is restored
-from durable state after Pi restarts.
+After initialization, the same always-present control deck keeps the run/idle
+state, loop and phase, local and submitted objectives, evaluation fidelity,
+plateau/recovery health, current operator direction, candidate status and
+attempts, failures, Advisor concern, live events, and steering/inspection
+commands visible. Active work uses the Pi accent, improvements and full local
+evaluation use success color, retries and reduced fidelity use warning color,
+and failures or blockers use error color. Primary state, objective values,
+candidate IDs, active work, and commands are bold. The deck remains visible
+when a run pauses or completes and is restored from durable state after Pi
+restarts.
+
+Use `/autoresearch steer <direction>` to influence the next Professor
+portfolio, for example:
+
+```text
+/autoresearch steer prioritize cache locality before changing algorithms
+```
+
+The direction is stored in `.autoresearch/operator-steering.json` and captured
+inside the next immutable Professor task. It never rewrites an in-flight PhD
+task or grants permission to weaken evidence, verification, or path
+boundaries. If the current portfolio already exists, the deck and notification
+say that the direction takes effect at the next proposal. Use
+`/autoresearch steer clear` to return future proposals to evidence-only
+direction.
 
 Use `/autoresearch status` for the same immediate snapshot in a notification.
 Use `/autoresearch inspect` to list current and recent candidates, then
@@ -300,6 +321,8 @@ research references behind the design.
 | `/autoresearch` | Initialize and start, or resume saved state. |
 | `/autoresearch run` | Explicit form of `/autoresearch`. |
 | `/autoresearch status` | Show the phase, loop, scores, ideas, dry streak, advisor notes, and open task count. |
+| `/autoresearch steer <direction>` | Persist a search preference for the next immutable Professor proposal task; use `steer clear` to remove it. |
+| `/autoresearch inspect [candidate]` | List candidates or inspect one candidate's hypothesis, lineage, result, and evidence paths. |
 | `/autoresearch telemetry` | Aggregate local flow timings by count, total, average, maximum, and failures. |
 | `/autoresearch config` | Edit runner, role models, souls, prompts, thresholds, timeouts, advisor behavior, and submission model. |
 | `/autoresearch stop` | Abort active work safely and persist a resumable paused state. |
@@ -362,7 +385,7 @@ fields; loading deep-merges it with these defaults.
   "runner": "mock", // "mock" for the fixture demo; "subprocess" for real Pi agents
   "roles": {
     "setup": {
-      "model": "anthropic/claude-sonnet-5",
+      "model": "openai-codex/gpt-5.6-sol",
       "thinking": "medium",
       "tools": ["read", "write", "edit", "bash"]
     },
@@ -437,6 +460,10 @@ fields; loading deep-merges it with these defaults.
   // "submitModelName": "my-model-label"
 }
 ```
+
+Existing version-1 configs that still name the former Setup default
+(`anthropic/claude-sonnet-5`) are migrated in memory to GPT-5.6 Sol. Custom
+Setup model selections and the PhD model are left unchanged.
 
 ### Role settings
 
@@ -550,6 +577,7 @@ All runtime data lives in `.autoresearch/` inside the challenge repository:
   telemetry.ndjson          local-only completed flow timings and outcomes
   ledger.ndjson             compact index of completed candidate experiments
   knowledge-base.md         human-readable research navigation
+  operator-steering.json    active operator direction for future Professor tasks
   leaderboard.json          last parsed submission snapshot
   taskboard.json            shared persisted task board
   loops/                    immutable loop tasks and non-candidate traces
@@ -661,6 +689,9 @@ the role's tool policy, and retains the raw JSONL event stream.
 - **A long command appears stuck:** `/autoresearch status` shows the active
   phase. Tail the matching main-checkout or candidate log; increase its timeout
   only after confirming useful progress.
+- **A steering direction did not change active candidates:** candidate and
+  Professor tasks are immutable once materialized. The control deck shows the
+  saved direction; it takes effect when the next Professor task is created.
 - **The loop uses canned ideas:** open `/autoresearch config` and change
   `runner` from `mock` to `subprocess`.
 - **A role subprocess fails immediately:** verify the configured

@@ -1,4 +1,9 @@
-import type { ExtensionAPI, ExtensionCommandContext, ExtensionContext } from "@earendil-works/pi-coding-agent";
+import type {
+  ExtensionAPI,
+  ExtensionCommandContext,
+  ExtensionContext,
+  Theme,
+} from "@earendil-works/pi-coding-agent";
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
@@ -18,6 +23,11 @@ import type { OrchestratorEvent, StatusReport } from "../../src/orchestrator.ts"
 import { Orchestrator } from "../../src/orchestrator.ts";
 import { loadState, STATE_DIR_NAME, statePaths } from "../../src/state.ts";
 import { Taskboard } from "../../src/taskboard.ts";
+import {
+  clearOperatorSteering,
+  loadOperatorSteering,
+  setOperatorSteering,
+} from "../../src/steering.ts";
 import { readTelemetry, renderTelemetryReport } from "../../src/telemetry.ts";
 import type {
   ConfigPanelResult,
@@ -28,9 +38,12 @@ import type {
 import { ConfigPanel, CONFIGURABLE_ROLES } from "./config-ui.ts";
 import { renderCandidateInspection, renderCandidateList } from "./inspect.ts";
 import {
+  renderInitializationDashboardLines,
   renderInitializationLines,
+  renderStatusDashboardLines,
   renderStatusLines,
   type InitializationRenderState,
+  type StatusRenderOptions,
 } from "./widget.ts";
 
 const WIDGET_KEY = "autoresearch";
@@ -45,11 +58,12 @@ interface RunHandle {
   controller: AbortController;
   orchestrator: { status(): StatusReport; runUntilDone(): Promise<void> };
   challengeName: string;
+  stateDir: string;
   running: Promise<void>;
   recentActivity: string[];
 }
 
-/** Registers /autoresearch with subcommands run|status|config|stop. */
+/** Registers /autoresearch and its run, steering, inspection, and config controls. */
 export function registerAutoresearchCommand(
   pi: ExtensionAPI,
   options: AutoresearchCommandOptions = {},
@@ -62,13 +76,78 @@ export function registerAutoresearchCommand(
     else console.log(`[autoresearch] ${message}`);
   }
 
+  function operatorSteeringForUi(stateDir: string) {
+    try {
+      return loadOperatorSteering(stateDir);
+    } catch {
+      // A display refresh must not become a new failure mode for the durable
+      // loop. The Professor checkpoint still validates the file strictly.
+      return null;
+    }
+  }
+
+  function setPersistentWidget(
+    ctx: ExtensionContext,
+    plainLines: string[],
+    themedLines: (width: number, theme: Theme) => string[],
+  ): void {
+    if (!ctx.hasUI) return;
+    const placement = { placement: "belowEditor" as const };
+    // Pi added ctx.mode after the custom widget API. Treat an absent mode from
+    // older supported Pi releases as interactive; only RPC requires the
+    // serializable string-array fallback.
+    if (ctx.mode !== "rpc") {
+      ctx.ui.setWidget(
+        WIDGET_KEY,
+        (_tui, theme) => ({
+          render: (width: number) => themedLines(width, theme),
+          invalidate() {},
+        }),
+        placement,
+      );
+      return;
+    }
+    ctx.ui.setWidget(WIDGET_KEY, plainLines, placement);
+  }
+
+  function setResearchDashboard(
+    ctx: ExtensionContext,
+    challengeName: string,
+    report: StatusReport,
+    options: StatusRenderOptions,
+  ): void {
+    setPersistentWidget(
+      ctx,
+      renderStatusLines(challengeName, report, options),
+      (width, theme) =>
+        renderStatusDashboardLines(challengeName, report, width, theme, options),
+    );
+  }
+
+  function setInitializationDashboard(
+    ctx: ExtensionContext,
+    challengeName: string,
+    state: InitializationRenderState,
+  ): void {
+    setPersistentWidget(
+      ctx,
+      renderInitializationLines(challengeName, state),
+      (width, theme) =>
+        renderInitializationDashboardLines(challengeName, state, width, theme),
+    );
+  }
+
   function updateWidget(ctx: ExtensionContext) {
     if (!ctx.hasUI || !active) return;
-    ctx.ui.setWidget(
-      WIDGET_KEY,
-      renderStatusLines(active.challengeName, active.orchestrator.status(), {
+    setResearchDashboard(
+      ctx,
+      active.challengeName,
+      active.orchestrator.status(),
+      {
         recentActivity: active.recentActivity,
-      }),
+        operatorSteering: operatorSteeringForUi(active.stateDir),
+        running: true,
+      },
     );
   }
 
@@ -162,10 +241,7 @@ export function registerAutoresearchCommand(
             : activity,
         };
         if (ctx.hasUI) {
-          ctx.ui.setWidget(
-            WIDGET_KEY,
-            renderInitializationLines(manifest.name, initialization),
-          );
+          setInitializationDashboard(ctx, manifest.name, initialization);
           ctx.ui.setStatus(
             WIDGET_KEY,
             `autoresearch: initializing (${progress.stage})`,
@@ -173,10 +249,7 @@ export function registerAutoresearchCommand(
         }
       };
       if (ctx.hasUI) {
-        ctx.ui.setWidget(
-          WIDGET_KEY,
-          renderInitializationLines(manifest.name, initialization),
-        );
+        setInitializationDashboard(ctx, manifest.name, initialization);
         ctx.ui.setStatus(WIDGET_KEY, "autoresearch: initializing");
       }
       try {
@@ -200,10 +273,7 @@ export function registerAutoresearchCommand(
           ].slice(0, 3),
         };
         if (ctx.hasUI) {
-          ctx.ui.setWidget(
-            WIDGET_KEY,
-            renderInitializationLines(manifest.name, initialization),
-          );
+          setInitializationDashboard(ctx, manifest.name, initialization);
           ctx.ui.setStatus(WIDGET_KEY, "autoresearch: initialization failed");
         }
         notify(ctx, `init failed: ${failure}`, "error");
@@ -256,6 +326,7 @@ export function registerAutoresearchCommand(
       controller,
       orchestrator,
       challengeName: state.challenge.name,
+      stateDir,
       running: Promise.resolve(),
       recentActivity: readRecentActivity(stateDir),
     };
@@ -276,11 +347,15 @@ export function registerAutoresearchCommand(
         if (active === runHandle) {
           const finalReport = orchestrator.status();
           if (ctx.hasUI) {
-            ctx.ui.setWidget(
-              WIDGET_KEY,
-              renderStatusLines(state.challenge.name, finalReport, {
+            setResearchDashboard(
+              ctx,
+              state.challenge.name,
+              finalReport,
+              {
                 recentActivity: runHandle.recentActivity,
-              }),
+                operatorSteering: operatorSteeringForUi(stateDir),
+                running: false,
+              },
             );
             ctx.ui.setStatus(
               WIDGET_KEY,
@@ -314,11 +389,87 @@ export function registerAutoresearchCommand(
     const lines = active
       ? renderStatusLines(active.challengeName, active.orchestrator.status(), {
           recentActivity: active.recentActivity,
+          operatorSteering: operatorSteeringForUi(stateDir),
+          running: true,
         })
       : renderStatusLines(state.challenge.name, statusFromState(stateDir, state), {
           recentActivity: readRecentActivity(stateDir),
+          operatorSteering: operatorSteeringForUi(stateDir),
+          running: false,
         });
     notify(ctx, lines.join("\n"));
+  }
+
+  async function steerResearch(
+    ctx: ExtensionCommandContext,
+    requestedDirection: string,
+  ): Promise<void> {
+    const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
+    const state = loadState(stateDir);
+    if (!state) {
+      notify(
+        ctx,
+        "no autoresearch state in this repo; run /autoresearch first",
+        "warning",
+      );
+      return;
+    }
+
+    let direction = requestedDirection.trim();
+    if (!direction && ctx.hasUI) {
+      direction =
+        (
+          await ctx.ui.input(
+            "Steer the next Professor portfolio:",
+            operatorSteeringForUi(stateDir)?.text ?? "",
+          )
+        )?.trim() ?? "";
+    }
+    if (!direction) {
+      notify(
+        ctx,
+        "usage: /autoresearch steer <direction> (or /autoresearch steer clear)",
+        "warning",
+      );
+      return;
+    }
+
+    if (direction.toLowerCase() === "clear") {
+      clearOperatorSteering(stateDir);
+      notify(ctx, "operator direction cleared; future Professor tasks are evidence-led");
+    } else {
+      const steering = setOperatorSteering(stateDir, direction);
+      const currentPhase = active?.orchestrator.status().phase ?? state.phase;
+      const appliesNextLoop =
+        currentPhase === "loop.proposing" ||
+        currentPhase === "loop.ideas" ||
+        currentPhase === "loop.finalizing" ||
+        currentPhase === "loop.end" ||
+        currentPhase === "church" ||
+        currentPhase === "god";
+      notify(
+        ctx,
+        `operator direction saved: ${firstDisplayLine(steering.text)} · ` +
+          (appliesNextLoop
+            ? "the current portfolio is immutable, so this takes effect at the next Professor proposal"
+            : "this will be snapshotted into the next Professor proposal"),
+      );
+    }
+
+    if (active) {
+      updateWidget(ctx);
+    } else {
+      setResearchDashboard(
+        ctx,
+        state.challenge.name,
+        statusFromState(stateDir, state),
+        {
+          recentActivity: readRecentActivity(stateDir),
+          operatorSteering: operatorSteeringForUi(stateDir),
+          running: false,
+        },
+      );
+    }
   }
 
   function showCandidate(ctx: ExtensionCommandContext, candidateId?: string): void {
@@ -659,9 +810,9 @@ export function registerAutoresearchCommand(
   }
 
   pi.registerCommand("autoresearch", {
-    description: "AutoResearch harness: run|status|inspect|telemetry|config|stop (default: run)",
+    description: "AutoResearch harness: run|status|steer|inspect|telemetry|config|stop (default: run)",
     getArgumentCompletions: (prefix: string) => {
-      const items = ["run", "status", "inspect", "telemetry", "config", "stop"]
+      const items = ["run", "status", "steer", "inspect", "telemetry", "config", "stop"]
         .filter((c) => c.startsWith(prefix))
         .map((c) => ({ value: c, label: c }));
       return items.length > 0 ? items : null;
@@ -676,14 +827,16 @@ export function registerAutoresearchCommand(
         );
         return;
       }
-      const [sub = "run", candidateId] = (args ?? "").trim().split(/\s+/).filter(Boolean);
+      const [sub = "run", ...rest] = (args ?? "").trim().split(/\s+/).filter(Boolean);
       switch (sub) {
         case "run":
           return startRun(ctx);
         case "status":
           return showStatus(ctx);
+        case "steer":
+          return steerResearch(ctx, rest.join(" "));
         case "inspect":
-          return showCandidate(ctx, candidateId);
+          return showCandidate(ctx, rest[0]);
         case "telemetry":
           return showTelemetry(ctx);
         case "config":
@@ -693,7 +846,7 @@ export function registerAutoresearchCommand(
         default:
           notify(
             ctx,
-            `unknown subcommand "${sub}" — use run|status|inspect|telemetry|config|stop`,
+            `unknown subcommand "${sub}" — use run|status|steer|inspect|telemetry|config|stop`,
             "warning",
           );
       }
@@ -707,11 +860,15 @@ export function registerAutoresearchCommand(
       const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
       const state = loadState(stateDir);
       if (state && ctx.hasUI) {
-        ctx.ui.setWidget(
-          WIDGET_KEY,
-          renderStatusLines(state.challenge.name, statusFromState(stateDir, state), {
+        setResearchDashboard(
+          ctx,
+          state.challenge.name,
+          statusFromState(stateDir, state),
+          {
             recentActivity: readRecentActivity(stateDir),
-          }),
+            operatorSteering: operatorSteeringForUi(stateDir),
+            running: false,
+          },
         );
         ctx.ui.setStatus(
           WIDGET_KEY,

@@ -54,6 +54,7 @@ import { abortableDelay, retryBackoffMs, retryOperation } from "./retry.ts";
 import type { Idea, LoopState, LoopSummary } from "./state.ts";
 import type { MetaHarnessStatus } from "./metaharness.ts";
 import { loadState, saveState, statePaths } from "./state.ts";
+import { loadOperatorSteering } from "./steering.ts";
 import { Taskboard } from "./taskboard.ts";
 import { LocalTelemetry, type TelemetryContext, type TelemetryOutcome } from "./telemetry.ts";
 import { appendJournal, atomicWriteJson, betterScore, isImprovement, Mutex } from "./util.ts";
@@ -480,7 +481,8 @@ export class Orchestrator {
     );
     fs.mkdirSync(loopDir, { recursive: true });
     const professorTaskPath = path.join(loopDir, "professor-task.json");
-    const professorTask: ProfessorProposalTaskV1 = {
+    const operatorSteering = loadOperatorSteering(this.stateDir);
+    const proposedProfessorTask: ProfessorProposalTaskV1 = {
       schemaVersion: EXPERIMENT_SCHEMA_VERSION,
       taskId: `L${String(this.state.loop).padStart(3, "0")}-professor`,
       kind: "propose",
@@ -501,10 +503,23 @@ export class Orchestrator {
         runsDirectory: this.paths.runsDir,
         currentBestCandidateId,
         inFlightCandidateIds: this.state.ideas.map((idea) => idea.id),
+        ...(operatorSteering ? { operatorSteering } : {}),
       },
     };
-    validateResearchTask(professorTask);
-    if (!fs.existsSync(professorTaskPath)) atomicWriteJson(professorTaskPath, professorTask);
+    let professorTask: ProfessorProposalTaskV1;
+    if (fs.existsSync(professorTaskPath)) {
+      const existing = validateResearchTask(
+        JSON.parse(fs.readFileSync(professorTaskPath, "utf8")),
+      );
+      if (existing.kind !== "propose") {
+        throw new Error(`Expected Professor proposal task at ${professorTaskPath}`);
+      }
+      professorTask = existing;
+    } else {
+      validateResearchTask(proposedProfessorTask);
+      atomicWriteJson(professorTaskPath, proposedProfessorTask);
+      professorTask = proposedProfessorTask;
+    }
     type PersistedProfessorResult = ProfessorProposalResultV1 & { baseRevision: string };
     let proposals: CandidateProposalV1[];
     let baseRevision: string;
