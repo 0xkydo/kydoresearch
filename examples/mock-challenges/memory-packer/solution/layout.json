@@ -1,0 +1,6 @@
+{
+  "allocator": "baseline-eager",
+  "tileSize": 8,
+  "precision": "fp32",
+  "reuseBuffers": false
+}

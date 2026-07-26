@@ -1,4 +1,240 @@
+import * as fs from "node:fs";
+import * as path from "node:path";
 import type { ProposedIdea } from "./types.ts";
+
+export const MOCK_SCENARIO_FILE = "mock-scenario.json";
+
+export interface MockScenarioIdea {
+  title: string;
+  spec: string;
+  attempts: unknown[];
+}
+
+export interface MockScenario {
+  schemaVersion: 1;
+  subjectArea: string;
+  solutionPath: string;
+  knowledge: {
+    objective: string;
+    levers: string[];
+    constraints: string[];
+    competitorIntel: string[];
+    verification: string[];
+  };
+  loops: Record<string, MockScenarioIdea[]>;
+  defaultIdea: MockScenarioIdea;
+  churchConversation: string;
+}
+
+/**
+ * Load the optional declarative playlist used by the hands-on mock examples.
+ * The original fixture deliberately has no playlist and continues through the
+ * legacy hard-coded scenario below.
+ */
+export function loadMockScenario(repoRoot: string): MockScenario | null {
+  const scenarioPath = path.join(repoRoot, MOCK_SCENARIO_FILE);
+  if (!fs.existsSync(scenarioPath)) return null;
+
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(fs.readFileSync(scenarioPath, "utf8"));
+  } catch (error) {
+    throw new Error(
+      `${MOCK_SCENARIO_FILE} is not valid JSON: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  }
+  return validateMockScenario(parsed);
+}
+
+export function mockScenarioProposals(
+  scenario: MockScenario,
+  loop: number,
+): ProposedIdea[] {
+  const ideas = scenario.loops[String(loop)] ?? [scenario.defaultIdea];
+  return ideas.map(({ title, spec }) => ({ title, spec }));
+}
+
+export function mockScenarioEdit(
+  scenario: MockScenario,
+  loop: number,
+  ideaIndex: number,
+  attempt: number,
+): unknown {
+  const ideas = scenario.loops[String(loop)] ?? [scenario.defaultIdea];
+  const idea = ideas[ideaIndex];
+  if (!idea) {
+    throw new Error(
+      `${MOCK_SCENARIO_FILE} has no idea ${ideaIndex + 1} for loop ${loop}`,
+    );
+  }
+  return idea.attempts[Math.min(Math.max(attempt - 1, 0), idea.attempts.length - 1)];
+}
+
+export function mockScenarioKnowledgeBase(
+  scenario: MockScenario,
+  manifestName: string,
+): string {
+  return [
+    `# Knowledge base: ${manifestName}`,
+    "",
+    "## Subject area",
+    scenario.subjectArea,
+    "",
+    "## Contextual graph",
+    `- Objective: ${scenario.knowledge.objective}`,
+    ...scenario.knowledge.levers.map((entry) => `- Lever: ${entry}`),
+    ...scenario.knowledge.constraints.map((entry) => `- Constraint: ${entry}`),
+    ...scenario.knowledge.competitorIntel.map(
+      (entry) => `- Competitor intel: ${entry}`,
+    ),
+    "",
+    "## Verification scheme",
+    ...scenario.knowledge.verification.map((entry) => `- ${entry}`),
+    "",
+    "## Loop log",
+  ].join("\n");
+}
+
+export function mockScenarioNote(
+  scenario: MockScenario,
+  ideaTitle: string,
+  score: number | undefined,
+  best: number | null,
+): string {
+  return [
+    `# Hypothesis note: ${ideaTitle}`,
+    "",
+    `Local score: ${score ?? "n/a"} (current best: ${best ?? "none"}).`,
+    "",
+    "## Interpretation",
+    `This ${scenario.subjectArea.toLowerCase()} experiment did not clear the current frontier.`,
+    "Treat the verifier and benchmark logs as the source of truth, then change",
+    "one lever or test a different mechanism in the next loop.",
+  ].join("\n");
+}
+
+function validateMockScenario(value: unknown): MockScenario {
+  const scenario = record(value, MOCK_SCENARIO_FILE);
+  if (scenario.schemaVersion !== 1) {
+    throw new Error(`${MOCK_SCENARIO_FILE} schemaVersion must be 1`);
+  }
+  const solutionPath = nonEmptyString(
+    scenario.solutionPath,
+    `${MOCK_SCENARIO_FILE}.solutionPath`,
+  );
+  if (
+    path.isAbsolute(solutionPath) ||
+    solutionPath === "." ||
+    solutionPath.split(/[\\/]/).includes("..")
+  ) {
+    throw new Error(
+      `${MOCK_SCENARIO_FILE}.solutionPath must stay inside the challenge repository`,
+    );
+  }
+
+  const knowledge = record(
+    scenario.knowledge,
+    `${MOCK_SCENARIO_FILE}.knowledge`,
+  );
+  const rawLoops = record(scenario.loops, `${MOCK_SCENARIO_FILE}.loops`);
+  const loops = Object.fromEntries(
+    Object.entries(rawLoops).map(([loop, ideas]) => {
+      if (!/^[1-9]\d*$/.test(loop)) {
+        throw new Error(`${MOCK_SCENARIO_FILE}.loops keys must be positive integers`);
+      }
+      if (!Array.isArray(ideas) || ideas.length === 0) {
+        throw new Error(`${MOCK_SCENARIO_FILE}.loops.${loop} must contain ideas`);
+      }
+      return [
+        loop,
+        ideas.map((idea, index) =>
+          mockScenarioIdea(
+            idea,
+            `${MOCK_SCENARIO_FILE}.loops.${loop}[${index}]`,
+          ),
+        ),
+      ];
+    }),
+  );
+
+  return {
+    schemaVersion: 1,
+    subjectArea: nonEmptyString(
+      scenario.subjectArea,
+      `${MOCK_SCENARIO_FILE}.subjectArea`,
+    ),
+    solutionPath,
+    knowledge: {
+      objective: nonEmptyString(
+        knowledge.objective,
+        `${MOCK_SCENARIO_FILE}.knowledge.objective`,
+      ),
+      levers: stringArray(
+        knowledge.levers,
+        `${MOCK_SCENARIO_FILE}.knowledge.levers`,
+      ),
+      constraints: stringArray(
+        knowledge.constraints,
+        `${MOCK_SCENARIO_FILE}.knowledge.constraints`,
+      ),
+      competitorIntel: stringArray(
+        knowledge.competitorIntel,
+        `${MOCK_SCENARIO_FILE}.knowledge.competitorIntel`,
+      ),
+      verification: stringArray(
+        knowledge.verification,
+        `${MOCK_SCENARIO_FILE}.knowledge.verification`,
+      ),
+    },
+    loops,
+    defaultIdea: mockScenarioIdea(
+      scenario.defaultIdea,
+      `${MOCK_SCENARIO_FILE}.defaultIdea`,
+    ),
+    churchConversation: nonEmptyString(
+      scenario.churchConversation,
+      `${MOCK_SCENARIO_FILE}.churchConversation`,
+    ),
+  };
+}
+
+function mockScenarioIdea(value: unknown, label: string): MockScenarioIdea {
+  const idea = record(value, label);
+  if (!Array.isArray(idea.attempts) || idea.attempts.length === 0) {
+    throw new Error(`${label}.attempts must contain at least one file value`);
+  }
+  return {
+    title: nonEmptyString(idea.title, `${label}.title`),
+    spec: nonEmptyString(idea.spec, `${label}.spec`),
+    attempts: idea.attempts,
+  };
+}
+
+function record(value: unknown, label: string): Record<string, unknown> {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) {
+    throw new Error(`${label} must be an object`);
+  }
+  return value as Record<string, unknown>;
+}
+
+function nonEmptyString(value: unknown, label: string): string {
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`${label} must be a non-empty string`);
+  }
+  return value.trim();
+}
+
+function stringArray(value: unknown, label: string): string[] {
+  if (
+    !Array.isArray(value) ||
+    !value.every((entry) => typeof entry === "string" && entry.trim() !== "")
+  ) {
+    throw new Error(`${label} must be an array of non-empty strings`);
+  }
+  return value.map((entry) => entry.trim());
+}
 
 /**
  * Deterministic playlist for the fixture challenge (baseline score 10 at (0,0);

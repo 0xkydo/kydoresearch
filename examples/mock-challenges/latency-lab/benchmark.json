@@ -1,0 +1,10 @@
+{
+  "name": "mock-latency-lab",
+  "description": "Minimize deterministic request latency by tuning batching, caching, and prefetch.",
+  "setupCommand": "./setup.sh",
+  "benchmarkCommand": "./benchmark.sh",
+  "scorePath": "score.json",
+  "direction": "-",
+  "editablePaths": ["solution/"],
+  "preSubmitCommand": "./verify.sh"
+}

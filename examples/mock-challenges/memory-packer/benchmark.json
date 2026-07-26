@@ -1,0 +1,10 @@
+{
+  "name": "mock-memory-packer",
+  "description": "Minimize deterministic peak memory with tile size, precision, and buffer reuse.",
+  "setupCommand": "./setup.sh",
+  "benchmarkCommand": "./benchmark.sh",
+  "scorePath": "score.json",
+  "direction": "-",
+  "editablePaths": ["solution/"],
+  "preSubmitCommand": "./verify.sh"
+}

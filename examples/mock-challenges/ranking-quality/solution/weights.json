@@ -1,0 +1,6 @@
+{
+  "strategy": "semantic-heavy-baseline",
+  "semanticWeight": 0.8,
+  "freshnessWeight": 0.1,
+  "diversityWeight": 0.1
+}

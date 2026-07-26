@@ -2,6 +2,11 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentResult, AgentRunner, AgentTask, ProposedIdea } from "./types.ts";
 import {
+  loadMockScenario,
+  mockScenarioEdit,
+  mockScenarioKnowledgeBase,
+  mockScenarioNote,
+  mockScenarioProposals,
   scriptedChurchConversation,
   scriptedEdit,
   scriptedKnowledgeBase,
@@ -45,9 +50,15 @@ export class MockAgentRunner implements AgentRunner {
       benchmarkCommand: string;
       preSubmitCommand?: string;
     };
-    const subjectArea = "2D quadratic optimization (toy research space for harness development).";
+    const scenario = this.scenario(task);
+    const subjectArea =
+      scenario?.subjectArea ??
+      "2D quadratic optimization (toy research space for harness development).";
     const kbPath = path.join(task.stateDir, "knowledge-base.md");
-    fs.writeFileSync(kbPath, scriptedKnowledgeBase(subjectArea, manifest.name) + "\n");
+    const knowledgeBase = scenario
+      ? mockScenarioKnowledgeBase(scenario, manifest.name)
+      : scriptedKnowledgeBase(subjectArea, manifest.name);
+    fs.writeFileSync(kbPath, `${knowledgeBase}\n`);
     // The mock "reads the repo" by trusting the manifest: preSubmitCommand is the
     // fast correctness gate when present (mlxfast-style), else the benchmark itself.
     return {
@@ -110,7 +121,12 @@ export class MockAgentRunner implements AgentRunner {
   private propose(task: AgentTask): AgentResult {
     const loop = task.input.loop as number;
     const cap = (task.input.maxIdeasPerLoop as number) ?? 5;
-    const ideas: ProposedIdea[] = scriptedProposals(loop).slice(0, cap);
+    const scenario = this.scenario(task);
+    const ideas: ProposedIdea[] = (
+      scenario
+        ? mockScenarioProposals(scenario, loop)
+        : scriptedProposals(loop)
+    ).slice(0, cap);
     return {
       ok: true,
       output: `Proposed ${ideas.length} idea(s) for loop ${loop}.`,
@@ -123,24 +139,40 @@ export class MockAgentRunner implements AgentRunner {
     const loop = task.input.loop as number;
     const ideaIndex = task.input.ideaIndex as number;
     const attempt = task.input.attempt as number;
-    const edit = scriptedEdit(loop, ideaIndex, attempt);
-    const paramsPath = path.join(task.cwd, "src/solution/params.json");
-    const content = typeof edit === "string" ? edit : JSON.stringify(edit, null, 2) + "\n";
-    fs.writeFileSync(paramsPath, content);
+    const scenario = this.scenario(task);
+    const edit = scenario
+      ? mockScenarioEdit(scenario, loop, ideaIndex, attempt)
+      : scriptedEdit(loop, ideaIndex, attempt);
+    const solutionPath = path.join(
+      task.cwd,
+      scenario?.solutionPath ?? "src/solution/params.json",
+    );
+    const content =
+      typeof edit === "string" ? edit : `${JSON.stringify(edit, null, 2)}\n`;
+    fs.mkdirSync(path.dirname(solutionPath), { recursive: true });
+    fs.writeFileSync(solutionPath, content);
     return {
       ok: true,
       output: `Implemented idea L${loop}-I${ideaIndex + 1} (attempt ${attempt}).`,
-      filesWritten: [paramsPath],
+      filesWritten: [solutionPath],
     };
   }
 
   private writeNote(task: AgentTask): AgentResult {
     const notePath = task.input.notePath as string;
-    const note = scriptedNote(
-      task.input.ideaTitle as string,
-      task.input.localScore as number | undefined,
-      task.input.bestScore as number | null,
-    );
+    const scenario = this.scenario(task);
+    const note = scenario
+      ? mockScenarioNote(
+          scenario,
+          task.input.ideaTitle as string,
+          task.input.localScore as number | undefined,
+          task.input.bestScore as number | null,
+        )
+      : scriptedNote(
+          task.input.ideaTitle as string,
+          task.input.localScore as number | undefined,
+          task.input.bestScore as number | null,
+        );
     fs.mkdirSync(path.dirname(notePath), { recursive: true });
     fs.writeFileSync(notePath, note + "\n");
     return { ok: true, output: note, filesWritten: [notePath] };
@@ -148,7 +180,13 @@ export class MockAgentRunner implements AgentRunner {
 
   private goToChurch(task: AgentTask): AgentResult {
     const notePath = task.input.notePath as string;
-    const conversation = scriptedChurchConversation(task.input.loop as number, task.input.streak as number);
+    const scenario = this.scenario(task);
+    const conversation =
+      scenario?.churchConversation ??
+      scriptedChurchConversation(
+        task.input.loop as number,
+        task.input.streak as number,
+      );
     fs.mkdirSync(path.dirname(notePath), { recursive: true });
     fs.writeFileSync(notePath, conversation + "\n");
     return { ok: true, output: conversation, filesWritten: [notePath] };
@@ -211,6 +249,10 @@ export class MockAgentRunner implements AgentRunner {
       structured: { candidateId, profilePath },
       filesWritten: [profilePath, professorPrompt],
     };
+  }
+
+  private scenario(task: AgentTask) {
+    return loadMockScenario(path.dirname(task.stateDir));
   }
 }
 
