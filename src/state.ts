@@ -36,7 +36,9 @@ export interface LoopSummary {
   improved: boolean;
   bestScoreAfter: number | null;
   ideas: { id: string; title: string; status: IdeaStatus; localScore?: number }[];
-  godConversation?: string; // notes file path
+  churchNote?: string; // notes file path
+  /** Legacy v1 snapshots used this field name. */
+  godConversation?: string;
   advisorNotes?: string[];
 }
 
@@ -54,6 +56,14 @@ export interface ChallengeInfo {
   subjectArea?: string; // from init.explore
 }
 
+export interface RecoveryState {
+  scope: string;
+  message: string;
+  consecutiveFailures: number;
+  failedAt: string;
+  nextRetryAt?: string;
+}
+
 export interface LoopState {
   version: 1;
   phase: Phase;
@@ -67,8 +77,12 @@ export interface LoopState {
   history: LoopSummary[];
   /** Active phase to re-enter when phase is "paused". Optional for v1 state compatibility. */
   resumePhase?: Phase;
-  /** Loop-end bookkeeping persisted before a God turn or final history commit. */
+  /** Loop-end bookkeeping persisted before church or final history commit. */
   pendingSummary?: LoopSummary;
+  /** Last systemic loop failure and its automatic recovery status. */
+  recovery?: RecoveryState;
+  /** Best-effort worktree removals that will be retried at the next checkpoint. */
+  pendingCleanup?: string[];
   challenge: ChallengeInfo;
   startedAt: string;
   updatedAt: string;
@@ -91,6 +105,7 @@ export function statePaths(stateDir: string) {
     ideasDir: path.join(stateDir, "ideas"),
     logsDir: path.join(stateDir, "logs"),
     notesDir: path.join(stateDir, "notes"),
+    mainSnapshotsDir: path.join(stateDir, "main-snapshots"),
     worktreesDir: path.join(stateDir, "worktrees"),
     metaHarnessDir: path.join(stateDir, "metaharness"),
   };

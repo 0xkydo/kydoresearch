@@ -157,13 +157,14 @@ export interface FrozenRuntimeContractV1 {
     sha256: string;
   }>;
   innerPolicy: {
-    godTriggerThreshold: number;
+    churchTriggerThreshold: number;
     maxVerifyAttempts: number;
     maxIdeasPerLoop: number;
     maxLoops: number | null;
     minImprovement: number;
     mockLoopDelayMs: number;
     execution: HarnessConfig["execution"];
+    resilience: HarnessConfig["resilience"];
     advisor: HarnessConfig["advisor"];
     submitModelName?: string;
   };
@@ -1679,13 +1680,14 @@ function captureFrozenRuntime(
       sha256: hashFile(filePath!),
     })),
     innerPolicy: {
-      godTriggerThreshold: config.godTriggerThreshold,
+      churchTriggerThreshold: config.churchTriggerThreshold,
       maxVerifyAttempts: config.maxVerifyAttempts,
       maxIdeasPerLoop: config.maxIdeasPerLoop,
       maxLoops: config.maxLoops,
       minImprovement: config.minImprovement,
       mockLoopDelayMs: config.mockLoopDelayMs,
       execution: { ...config.execution },
+      resilience: { ...config.resilience },
       advisor: { ...config.advisor },
       ...(config.submitModelName === undefined
         ? {}

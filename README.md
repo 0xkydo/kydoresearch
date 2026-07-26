@@ -196,7 +196,7 @@ research loop
   archive every terminal candidate and write a result-aware postmortem
   best meaningful improvement → apply to main → re-verify → re-bench → submit
   advisor reviews the loop; a configured blocker pauses it
-  repeated dry loops → reflective God turn → next loop
+  repeated dry loops → Professor goes to church and reflects with God → next loop
 ```
 
 Pi subprocess sessions are deliberately fresh and ephemeral. Durable
@@ -325,7 +325,7 @@ fields; loading deep-merges it with these defaults.
       "tools": ["read", "write", "edit", "bash"]
     }
   },
-  "godTriggerThreshold": 3, // consecutive dry loops; 0 disables the God turn
+  "churchTriggerThreshold": 3, // consecutive dry loops before church; 0 disables
   "maxVerifyAttempts": 3,
   "maxIdeasPerLoop": 5,
   "maxLoops": null, // null means unlimited
@@ -335,6 +335,16 @@ fields; loading deep-merges it with these defaults.
     "setupTimeoutMs": 1800000,
     "verifyTimeoutMs": 600000,
     "benchmarkTimeoutMs": 3600000
+  },
+  "resilience": {
+    "agentMaxAttempts": 3, // first call + 2 retries
+    "commandMaxAttempts": 2, // first call + 1 retry
+    "submitMaxAttempts": 5, // first call + 4 retries, with remote reconciliation
+    "maxConsecutiveLoopFailures": 12, // then pause the durable checkpoint
+    "retryBaseDelayMs": 2000,
+    "retryMaxDelayMs": 60000,
+    "loopFailureBaseDelayMs": 60000,
+    "loopFailureMaxDelayMs": 900000
   },
   "advisor": {
     "enabled": true,
@@ -352,7 +362,7 @@ fields; loading deep-merges it with these defaults.
     "proposalCooldownLoops": 2,
     "minCandidateSuccessRate": 0.5,
     "maxProfileBytes": 524288
-  }
+  },
   // Optional name passed to CLIs that require `submit --model`:
   // "submitModelName": "my-model-label"
 }
@@ -375,11 +385,15 @@ fields; loading deep-merges it with these defaults.
 - `prompt` remains the dynamic task-prompt template for compatibility. A bare
   filename resolves from `extensions/autoresearch/prompts/`; a path such as
   `.autoresearch/prompts/custom.md` resolves from the challenge repository.
+- Challenge-specific task suffixes may override the matching file under
+  `.autoresearch/prompts/tasks/`, such as `tasks/propose.md`.
 - The setup role runs only during initialization. Edit its JSON directly when
   its defaults need to change.
 - The meta-harness role runs only when `metaHarness.enabled` is true. Its own
   soul, prompt, model, and thinking level stay fixed during a campaign; it
   proposes candidate-local overrides for professor, PhD, and advisor.
+- Older configs using `godTriggerThreshold` load it as
+  `churchTriggerThreshold`.
 
 Current loop data belongs in a versioned immutable task JSON, not in a soul.
 Because ambient Pi context loading is disabled, applicable repository
@@ -428,6 +442,31 @@ rules:
   severity: concern
   text: "Two dry loops; consider changing idea family."
 ```
+
+See [`docs/agent-profiles.md`](docs/agent-profiles.md) for the six complete
+role contracts, including their authority, evidence policy, and output schemas.
+
+## Overnight failure policy
+
+Attempt counts include the first call. By default, model tasks get **3 total
+attempts**, harness commands get **2**, and submission gets **5**. Retries use
+bounded exponential backoff and honor `/autoresearch stop` immediately.
+
+| Failure | Automatic fallback |
+|---|---|
+| Setup or baseline command | Retry once; leave initialization incomplete with actionable logs if both attempts fail. |
+| Professor/setup/PhD model call | Retry twice. A PhD provider failure consumes a verify attempt only after its model retries are exhausted. |
+| Leaderboard sync/fetch | Retry once, then continue from `.autoresearch/leaderboard.json`; research is not blocked. |
+| Correctness or benchmark command | Retry once. An idea that still fails is isolated; other ideas continue. |
+| Best candidate fails on main | Mark only that candidate failed and try the next qualifying candidate. If all finalists fail, restore the pre-finalization main checkout snapshot. |
+| Submission | Reconcile against the remote user's submissions before each of five attempts. An exhausted submit remains at `loop.finalizing` for durable checkpoint recovery and is never marked submitted. |
+| Notes, Advisor, or church | Retry twice, log the failure, and continue. A failed church visit preserves the dry-loop streak so it is attempted again later. |
+| Worktree cleanup | Retry once, persist a cleanup queue, and try it again at the next checkpoint. |
+| Unexpected loop-level failure | Resume the same saved phase with a 1–15 minute backoff. After 12 consecutive failures, pause with a visible recovery reason instead of spinning or spending indefinitely. |
+
+Successful idea work is checkpointed throughout. An unfinished loop does not
+count toward `maxLoops`, so a transient failure on the final configured loop
+cannot make the harness declare completion early.
 
 ## State, memory, and recovery
 

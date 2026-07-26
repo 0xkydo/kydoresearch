@@ -7,6 +7,7 @@ import { detectCli, isInsideEditablePaths, readManifest } from "./challenge/dete
 import type { HarnessConfig } from "./config.ts";
 import { loadConfig, saveConfig } from "./config.ts";
 import type { ExecPort } from "./exec.ts";
+import { retryOperation, type RetryDelay } from "./retry.ts";
 import type { SetupTaskV1 } from "./experiments.ts";
 import { EXPERIMENT_SCHEMA_VERSION, validateResearchTask } from "./experiments.ts";
 import type { ChallengeInfo, LoopState } from "./state.ts";
@@ -25,8 +26,9 @@ export interface InitResult {
  *  2. Scaffold .autoresearch/ and hide it via .git/info/exclude (local-only,
  *     never dirties submission tarballs).
  *  3. Run setupCommand (dependency install) and fail loudly if it fails.
- *  4. Run the setup agent ("init.explore") to build the knowledge base and
- *     detect the verify vs perf commands (sometimes the same, sometimes not).
+ *  4. Run the setup agent ("init.explore") to classify the repository's
+ *     existing commands, confirm readiness, and pause for outside work when
+ *     needed.
  *  5. Persist config.json + state.json at phase "ready".
  */
 export async function initChallenge(opts: {
@@ -35,6 +37,8 @@ export async function initChallenge(opts: {
   exec: ExecPort;
   signal?: AbortSignal;
   emit?: (msg: string) => void;
+  /** Injectable for deterministic retry tests. */
+  delay?: RetryDelay;
 }): Promise<InitResult> {
   const { repoRoot, runner, exec } = opts;
   const emit = opts.emit ?? (() => {});
@@ -79,7 +83,23 @@ export async function initChallenge(opts: {
     logDir: paths.logsDir,
     exec,
   });
-  const setup = await bootstrapAdapter.setup(opts.signal);
+  const retryPolicy = {
+    maxAttempts: config.resilience.commandMaxAttempts,
+    baseDelayMs: config.resilience.retryBaseDelayMs,
+    maxDelayMs: config.resilience.retryMaxDelayMs,
+    signal: opts.signal,
+    delay: opts.delay,
+  };
+  const setup = await retryOperation({
+    ...retryPolicy,
+    operation: () => bootstrapAdapter.setup(opts.signal),
+    isSuccess: (result) => result.ok,
+    onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
+      emit(
+        `init: setup failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
+          (value?.raw ? ` · ${firstLine(value.raw)}` : ""),
+      ),
+  });
   if (!setup.ok) {
     throw new Error(
       `Dependency setup failed (exit ${setup.exitCode}):\n${setup.raw}\n\n` +
@@ -87,9 +107,9 @@ export async function initChallenge(opts: {
     );
   }
 
-  // Phase init.knowledge — setup agent reads the repo, builds the knowledge
-  // base, and reports the verification scheme.
-  emit("init: exploring repo and building knowledge base");
+  // Phase init.knowledge — Setup classifies the repo's existing harness inputs,
+  // confirms readiness, and writes the knowledge base.
+  emit("init: classifying repo and confirming readiness");
   appendJournal(paths.journal, { phase: "init.knowledge" });
   const setupTaskDir = path.join(paths.loopsDir, "init");
   fs.mkdirSync(setupTaskDir, { recursive: true });
@@ -110,23 +130,37 @@ export async function initChallenge(opts: {
   };
   validateResearchTask(setupTask);
   atomicWriteJson(setupTaskPath, setupTask);
-  const explore = await runner.run({
-    role: "setup",
-    kind: "init.explore",
-    cwd: repoRoot,
-    stateDir,
-    input: {
-      ...setupTask.input,
-      manifest,
-      setupCommand: manifest.setupCommand,
-      taskPath: setupTaskPath,
-      traceDir: path.join(paths.resolvedAgentsDir, "setup"),
-    },
-    signal: opts.signal,
+  const explore = await retryOperation({
+    ...retryPolicy,
+    maxAttempts: config.resilience.agentMaxAttempts,
+    operation: () =>
+      runner.run({
+        role: "setup",
+        kind: "init.explore",
+        cwd: repoRoot,
+        stateDir,
+        input: {
+          ...setupTask.input,
+          manifest,
+          setupCommand: manifest.setupCommand,
+          taskPath: setupTaskPath,
+          traceDir: path.join(paths.resolvedAgentsDir, "setup"),
+        },
+        signal: opts.signal,
+      }),
+    isSuccess: (result) => result.ok,
+    onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
+      emit(
+        `init: setup agent failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
+          (value ? ` · ${firstLine(value.error ?? value.output)}` : ""),
+      ),
   });
   if (!explore.ok) throw new Error(`Setup agent failed: ${explore.error ?? explore.output}`);
 
   const structured = explore.structured ?? {};
+  if (structured.status === "needs-user-action") {
+    throw new Error(formatSetupUserAction(structured.userAction));
+  }
   const verifyCommand =
     typeof structured.verifyCommand === "string"
       ? structured.verifyCommand
@@ -161,7 +195,16 @@ export async function initChallenge(opts: {
     logDir: paths.logsDir,
     exec,
   });
-  const baseline = await baselineAdapter.bench(undefined, opts.signal);
+  const baseline = await retryOperation({
+    ...retryPolicy,
+    operation: () => baselineAdapter.bench(undefined, opts.signal),
+    isSuccess: (result) => result.ok && result.score !== undefined,
+    onRetry: ({ attempt, maxAttempts, nextDelayMs, value }) =>
+      emit(
+        `init: baseline failed (attempt ${attempt}/${maxAttempts}); retrying in ${nextDelayMs}ms` +
+          (value?.raw ? ` · ${firstLine(value.raw)}` : ""),
+      ),
+  });
   if (!baseline.ok || baseline.score === undefined) {
     if (
       baseline.exitCode === 127 ||
@@ -199,6 +242,50 @@ export async function initChallenge(opts: {
   emit(`init: ready (verify: ${verifyCommand} · bench: ${benchCommand})`);
 
   return { state, config, stateDir };
+}
+
+function firstLine(value: string): string {
+  return value.trim().split("\n")[0] ?? "";
+}
+
+function formatSetupUserAction(value: unknown): string {
+  const action =
+    typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  const reason =
+    typeof action.reason === "string" && action.reason.trim()
+      ? action.reason.trim()
+      : "Setup found that the challenge is not ready.";
+  const location =
+    typeof action.location === "string" && action.location.trim()
+      ? `Where: ${action.location.trim()}`
+      : undefined;
+  const instructions = Array.isArray(action.instructions)
+    ? action.instructions.filter(
+        (instruction): instruction is string =>
+          typeof instruction === "string" && instruction.trim().length > 0,
+      )
+    : typeof action.instructions === "string" && action.instructions.trim()
+      ? [action.instructions.trim()]
+      : [];
+  const owner =
+    typeof action.suggestedOwner === "string" && action.suggestedOwner.trim()
+      ? `Suggested owner: ${action.suggestedOwner.trim()}`
+      : undefined;
+  const requiredAction =
+    instructions.length > 0
+      ? `Required action:\n${instructions.map((instruction) => `- ${instruction.trim()}`).join("\n")}`
+      : "Required action: Resolve the missing setup outside this agent.";
+
+  return [
+    "Initialization paused: Setup needs user action before the harness can continue.",
+    `Reason: ${reason}`,
+    location,
+    requiredAction,
+    owner,
+    "Complete the requested work, then retry /autoresearch.",
+  ]
+    .filter((line): line is string => line !== undefined)
+    .join("\n");
 }
 
 /** Add a pattern to .git/info/exclude (idempotent). No-op outside a git repo. */

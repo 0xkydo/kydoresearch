@@ -116,7 +116,10 @@ export class WorktreePool {
     const wtPath = path.join(this.worktreesDir, ideaId);
     await this.git(["worktree", "remove", "--force", wtPath]);
     if (fs.existsSync(wtPath)) fs.rmSync(wtPath, { recursive: true, force: true });
-    await this.git(["worktree", "prune"]);
+    const prune = await this.git(["worktree", "prune"]);
+    if (prune.code !== 0) {
+      throw new Error(`git worktree prune failed after removing ${ideaId}: ${prune.stderr.trim()}`);
+    }
   }
 
   /**
@@ -137,6 +140,49 @@ export class WorktreePool {
   }
 
   /**
+   * Capture the main checkout's complete editable surface before finalization.
+   * The completed marker makes this idempotent across process restarts.
+   */
+  ensureMainSnapshot(snapshotDir: string, editablePaths: string[]): void {
+    const marker = path.join(snapshotDir, ".complete");
+    if (fs.existsSync(marker)) return;
+
+    const tmpDir = `${snapshotDir}.tmp-${process.pid}`;
+    fs.rmSync(tmpDir, { recursive: true, force: true });
+    fs.mkdirSync(tmpDir, { recursive: true });
+    for (const editablePath of editablePaths) {
+      const src = path.join(this.repoRoot, editablePath);
+      if (!fs.existsSync(src)) continue;
+      const dst = path.join(tmpDir, editablePath);
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.cpSync(src, dst, { recursive: true });
+    }
+    fs.writeFileSync(path.join(tmpDir, ".complete"), "complete\n");
+    fs.mkdirSync(path.dirname(snapshotDir), { recursive: true });
+    fs.rmSync(snapshotDir, { recursive: true, force: true });
+    fs.renameSync(tmpDir, snapshotDir);
+  }
+
+  /** Restore the main editable surface exactly, including paths that were absent. */
+  restoreMainSnapshot(snapshotDir: string, editablePaths: string[]): void {
+    if (!fs.existsSync(path.join(snapshotDir, ".complete"))) {
+      throw new Error(`Main-checkout snapshot is incomplete: ${snapshotDir}`);
+    }
+    for (const editablePath of editablePaths) {
+      const src = path.join(snapshotDir, editablePath);
+      const dst = path.join(this.repoRoot, editablePath);
+      fs.rmSync(dst, { recursive: true, force: true });
+      if (!fs.existsSync(src)) continue;
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.cpSync(src, dst, { recursive: true });
+    }
+  }
+
+  discardMainSnapshot(snapshotDir: string): void {
+    fs.rmSync(snapshotDir, { recursive: true, force: true });
+  }
+
+  /**
    * Copy files that setup produced but git doesn't track (setup markers,
    * generated fixtures) into a worktree so verify/bench work there. Ignored
    * files (large weights, build dirs) are deliberately NOT copied — challenges
@@ -145,7 +191,9 @@ export class WorktreePool {
   async seedUntracked(ideaId: string): Promise<void> {
     const wtPath = path.join(this.worktreesDir, ideaId);
     const status = await this.git(["status", "--porcelain", "--untracked-files=all"]);
-    if (status.code !== 0) return;
+    if (status.code !== 0) {
+      throw new Error(`git status failed while seeding ${ideaId}: ${status.stderr.trim()}`);
+    }
     for (const line of status.stdout.split("\n")) {
       if (!line.startsWith("?? ")) continue;
       const rel = line.slice(3).trim();

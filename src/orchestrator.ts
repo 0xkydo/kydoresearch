@@ -20,7 +20,11 @@ import {
   writeCandidateProposal,
   writeCandidateTask,
 } from "./archive.ts";
-import type { ChallengeAdapter, LeaderboardEntry } from "./challenge/types.ts";
+import type {
+  ChallengeAdapter,
+  LeaderboardEntry,
+  SubmitResult,
+} from "./challenge/types.ts";
 import type { HarnessConfig } from "./config.ts";
 import type { ExecPort } from "./exec.ts";
 import type {
@@ -45,6 +49,7 @@ import {
 import { auditCandidateIntegrity } from "./integrity.ts";
 import type { Phase } from "./phases.ts";
 import { isIdeaTerminal } from "./phases.ts";
+import { abortableDelay, retryBackoffMs, retryOperation } from "./retry.ts";
 import type { Idea, LoopState, LoopSummary } from "./state.ts";
 import type { MetaHarnessStatus } from "./metaharness.ts";
 import { loadState, saveState, statePaths } from "./state.ts";
@@ -58,7 +63,7 @@ export type OrchestratorEvent =
   | { type: "phase"; phase: Phase; loop: number }
   | { type: "idea"; idea: Idea; message: string }
   | { type: "advice"; notes: AdvisorNote[]; loop: number }
-  | { type: "god"; loop: number; noteFile: string }
+  | { type: "church"; loop: number; noteFile: string }
   | { type: "submitted"; loop: number; ideaId: string; score: number; submissionId?: string }
   | { type: "log"; message: string };
 
@@ -78,10 +83,16 @@ export interface StatusReport {
   bestScore: number | null;
   bestSubmittedScore: number | null;
   dryLoopStreak: number;
-  godTriggerThreshold: number;
+  churchTriggerThreshold: number;
   ideas: { id: string; title: string; status: string; verifyAttempts: number; localScore?: number }[];
   taskboardOpen: number;
   lastAdvisorNotes: string[];
+  recovery?: {
+    scope: string;
+    message: string;
+    consecutiveFailures: number;
+    nextRetryAt?: string;
+  };
   metaHarness?: MetaHarnessStatus;
 }
 
@@ -114,7 +125,7 @@ export class Orchestrator {
       bestScore: this.state.bestScore,
       bestSubmittedScore: this.state.bestSubmittedScore,
       dryLoopStreak: this.state.dryLoopStreak,
-      godTriggerThreshold: this.config.godTriggerThreshold,
+      churchTriggerThreshold: this.config.churchTriggerThreshold,
       ideas: this.state.ideas.map((i) => ({
         id: i.id,
         title: i.title,
@@ -124,29 +135,82 @@ export class Orchestrator {
       })),
       taskboardOpen: this.taskboard.openCount(),
       lastAdvisorNotes: lastSummary?.advisorNotes ?? [],
+      ...(this.state.recovery
+        ? {
+            recovery: {
+              scope: this.state.recovery.scope,
+              message: this.state.recovery.message,
+              consecutiveFailures: this.state.recovery.consecutiveFailures,
+              nextRetryAt: this.state.recovery.nextRetryAt,
+            },
+          }
+        : {}),
     };
   }
 
-  /** Run loops until maxLoops, done, abort, or advisor blocker. */
+  /**
+   * Run loops until maxLoops, done, abort, advisor blocker, or the systemic
+   * failure circuit breaker. An unexpected failure resumes the same durable
+   * loop checkpoint automatically instead of escaping to the extension.
+   */
   async runUntilDone(): Promise<void> {
+    let consecutiveFailures = 0;
     while (true) {
       if (this.aborted()) return this.pause("aborted");
-      if (this.config.maxLoops !== null && this.state.loop >= this.config.maxLoops) {
+      const loopInProgress = this.state.loop > this.state.history.length;
+      if (
+        !loopInProgress &&
+        this.config.maxLoops !== null &&
+        this.state.loop >= this.config.maxLoops
+      ) {
         this.transition("done");
         return;
       }
-      const summary = await this.runLoop();
+      let summary: LoopSummary | null;
+      try {
+        summary = await this.runLoop();
+      } catch (error) {
+        if (this.aborted()) return this.pause("aborted");
+        consecutiveFailures += 1;
+        const message = errorMessage(error);
+        const maxFailures = Math.max(1, this.config.resilience.maxConsecutiveLoopFailures);
+        if (consecutiveFailures >= maxFailures) {
+          this.recordRecovery(message, consecutiveFailures);
+          this.emitLog(
+            `recovery circuit open after ${consecutiveFailures} consecutive failure(s): ${message}`,
+          );
+          this.pause("recovery-circuit-breaker");
+          return;
+        }
+
+        const delayMs = retryBackoffMs(
+          this.config.resilience.loopFailureBaseDelayMs,
+          this.config.resilience.loopFailureMaxDelayMs,
+          consecutiveFailures,
+        );
+        const nextRetryAt = new Date(Date.now() + delayMs).toISOString();
+        this.recordRecovery(message, consecutiveFailures, nextRetryAt);
+        this.emitLog(
+          `loop checkpoint failed (${consecutiveFailures}/${maxFailures}): ${message}; ` +
+            `resuming the same checkpoint in ${delayMs}ms`,
+        );
+        await (this.ports.delay ?? abortableDelay)(delayMs, this.ports.signal);
+        continue;
+      }
       if ((this.state.phase as Phase) === "paused" || (this.state.phase as Phase) === "done") return;
       if (summary === null) return; // aborted mid-loop
+      consecutiveFailures = 0;
+      this.clearRecovery();
       await this.waitAfterMockLoop();
     }
   }
 
   /**
    * One full loop: sync → propose → parallel idea pipelines → finalize winner
-   * → advisor → streak/god bookkeeping. Returns null if aborted mid-loop.
+   * → advisor → streak/church bookkeeping. Returns null if aborted mid-loop.
    */
   async runLoop(): Promise<LoopSummary | null> {
+    await this.drainPendingCleanup();
     const loopInProgress = this.state.loop > this.state.history.length;
     const inferredResumePhase: Phase =
       this.state.ideas.length === 0
@@ -158,11 +222,12 @@ export class Orchestrator {
       ? this.state.resumePhase ??
         (this.state.phase === "paused" ? inferredResumePhase : this.state.phase)
       : undefined;
+    const resumeAtChurch = resumePhase === "church" || resumePhase === "god";
     const resumeAtFinalizing =
       resumePhase === "loop.finalizing" ||
       resumePhase === "loop.end" ||
-      resumePhase === "god";
-    const resumeAtEnd = resumePhase === "loop.end" || resumePhase === "god";
+      resumeAtChurch;
+    const resumeAtEnd = resumePhase === "loop.end" || resumeAtChurch;
 
     if (!loopInProgress) {
       this.state.loop += 1;
@@ -206,6 +271,7 @@ export class Orchestrator {
       // Submission may have completed immediately before the process stopped.
       // A terminal winner is the durable idempotency marker: never submit it again.
       improved = this.state.ideas.some((idea) => idea.status === "done-improved");
+      if (!improved) this.restoreFinalizationSnapshot();
     } else {
       this.transition("loop.finalizing");
       if (this.aborted()) return this.abortLoop();
@@ -221,9 +287,9 @@ export class Orchestrator {
     }
     this.persist();
 
-    // Loop end: summary, advisor, streak, god.
+    // Loop end: summary, advisor, streak, church.
     let summary = this.state.pendingSummary;
-    if (!summary || (resumePhase !== "loop.end" && resumePhase !== "god")) {
+    if (!summary || (resumePhase !== "loop.end" && !resumeAtChurch)) {
       this.transition("loop.end");
       if (this.aborted()) return this.abortLoop();
       summary = {
@@ -238,7 +304,13 @@ export class Orchestrator {
         })),
       };
 
-      const advisorNotes = await this.runAdvisor(summary);
+      let advisorNotes: AdvisorNote[] = [];
+      try {
+        advisorNotes = await this.runAdvisor(summary);
+      } catch (error) {
+        if (this.aborted()) return this.abortLoop();
+        this.emitLog(`advisor failed unexpectedly; continuing without advice · ${errorMessage(error)}`);
+      }
       if (this.aborted()) return this.abortLoop();
       summary.advisorNotes = advisorNotes.map((note) => `[${note.severity}] ${note.text}`);
       this.state.dryLoopStreak = improved ? 0 : this.state.dryLoopStreak + 1;
@@ -247,13 +319,24 @@ export class Orchestrator {
     }
 
     if (
-      resumePhase === "god" ||
-      (this.config.godTriggerThreshold > 0 &&
-        this.state.dryLoopStreak >= this.config.godTriggerThreshold)
+      resumeAtChurch ||
+      (this.config.churchTriggerThreshold > 0 &&
+        this.state.dryLoopStreak >= this.config.churchTriggerThreshold)
     ) {
-      summary.godConversation = await this.godConversation();
+      let churchNote: string | undefined;
+      try {
+        churchNote = await this.goToChurch();
+      } catch (error) {
+        if (this.aborted()) return this.abortLoop();
+        this.emitLog(
+          `church reflection failed unexpectedly; continuing and preserving the dry-loop streak · ${errorMessage(error)}`,
+        );
+      }
       if (this.aborted()) return this.abortLoop();
-      this.state.dryLoopStreak = 0;
+      if (churchNote) {
+        summary.churchNote = churchNote;
+        this.state.dryLoopStreak = 0;
+      }
       this.state.pendingSummary = summary;
       this.persist();
     }
@@ -262,8 +345,9 @@ export class Orchestrator {
     // pending summary and idea IDs remain durable so resume can retry it.
     // Failed worktrees are intentionally kept for debugging.
     for (const idea of summary.ideas) {
-      if (idea.status !== "failed") await this.worktrees.remove(idea.id).catch(() => {});
+      if (idea.status !== "failed") await this.cleanupWorktree(idea.id);
     }
+    this.discardFinalizationSnapshot();
 
     this.state.history.push(summary);
     this.state.ideas = [];
@@ -284,10 +368,49 @@ export class Orchestrator {
 
   private async syncLeaderboard(): Promise<void> {
     this.transition("loop.syncing");
-    const [entries, syncResult] = await Promise.all([
-      this.ports.adapter.listSubmissions(true, this.ports.signal),
-      this.ports.adapter.sync(this.ports.signal),
-    ]);
+    if (this.aborted()) return;
+    let syncResult: { ok: boolean; raw: string };
+    try {
+      syncResult = await this.retryResult(
+        "leaderboard sync",
+        this.config.resilience.commandMaxAttempts,
+        () => this.ports.adapter.sync(this.ports.signal),
+        (result) => result.ok,
+      );
+    } catch (error) {
+      if (this.aborted()) return;
+      const cached = this.loadCachedLeaderboard();
+      this.emitLog(
+        `leaderboard sync threw after ${this.config.resilience.commandMaxAttempts} attempt(s); ` +
+          `continuing with ${cached.length} cached submission(s) · ${errorMessage(error)}`,
+      );
+      if (cached.length > 0) this.appendKnowledge(this.leaderboardDigest(cached));
+      return;
+    }
+    if (!syncResult.ok) {
+      const cached = this.loadCachedLeaderboard();
+      this.emitLog(
+        `leaderboard sync unavailable after ${this.config.resilience.commandMaxAttempts} attempt(s); ` +
+          `continuing with ${cached.length} cached submission(s) · ${firstLine(syncResult.raw)}`,
+      );
+      if (cached.length > 0) this.appendKnowledge(this.leaderboardDigest(cached));
+      return;
+    }
+
+    let entries: LeaderboardEntry[];
+    try {
+      entries = await this.retryResult(
+        "leaderboard fetch",
+        this.config.resilience.commandMaxAttempts,
+        () => this.ports.adapter.listSubmissions(true, this.ports.signal),
+        () => true,
+      );
+    } catch (error) {
+      entries = this.loadCachedLeaderboard();
+      this.emitLog(
+        `leaderboard fetch unavailable; continuing with ${entries.length} cached submission(s) · ${errorMessage(error)}`,
+      );
+    }
     atomicWriteJson(this.paths.leaderboard, { fetchedAt: new Date().toISOString(), entries });
     this.appendKnowledge(this.leaderboardDigest(entries));
     this.emitLog(`sync: ${entries.length} submissions on leaderboard · ${syncResult.raw.split("\n")[0] ?? ""}`);
@@ -307,6 +430,7 @@ export class Orchestrator {
 
   private async propose(): Promise<void> {
     this.transition("loop.proposing");
+    if (this.aborted()) return;
     const currentBestCandidateId = this.state.bestCandidateId ?? "baseline";
     this.ensureParentArtifact(currentBestCandidateId);
     const loopDir = path.join(
@@ -364,34 +488,50 @@ export class Orchestrator {
       baseRevision = persisted.baseRevision;
       this.emitLog(`resuming materialization from ${path.relative(this.stateDir, professorTask.resultPath)}`);
     } else {
-      const result = await this.ports.runner.run({
-        role: "professor",
-        kind: "propose",
-        cwd: this.repoRoot,
-        stateDir: this.stateDir,
-        input: {
-          ...professorTask.input,
-          taskPath: professorTaskPath,
-          traceDir: path.join(loopDir, "professor-agent"),
-          loop: this.state.loop,
-          maxIdeasPerLoop: this.config.maxIdeasPerLoop,
-          bestScore: this.state.bestScore,
-          direction: this.state.challenge.direction,
-          dryLoopStreak: this.state.dryLoopStreak,
-          history: this.state.history,
-        },
-        signal: this.ports.signal,
-      });
+      const result = await this.retryResult(
+        "professor proposal",
+        this.config.resilience.agentMaxAttempts,
+        () =>
+          this.ports.runner.run({
+            role: "professor",
+            kind: "propose",
+            cwd: this.repoRoot,
+            stateDir: this.stateDir,
+            input: {
+              ...professorTask.input,
+              taskPath: professorTaskPath,
+              traceDir: path.join(loopDir, "professor-agent"),
+              loop: this.state.loop,
+              maxIdeasPerLoop: this.config.maxIdeasPerLoop,
+              bestScore: this.state.bestScore,
+              direction: this.state.challenge.direction,
+              dryLoopStreak: this.state.dryLoopStreak,
+              history: this.state.history,
+            },
+            signal: this.ports.signal,
+          }),
+        (candidate) =>
+          candidate.ok &&
+          Array.isArray(candidate.structured?.ideas) &&
+          candidate.structured.ideas.length > 0,
+      );
       if (!result.ok) {
         if (this.aborted()) return;
-        throw new Error(`Professor propose failed: ${result.error ?? result.output}`);
+        throw new Error(
+          `Professor propose failed after ${this.config.resilience.agentMaxAttempts} attempt(s): ${
+            result.error ?? result.output
+          }`,
+        );
       }
       const rawProposals = ((result.structured?.ideas as ProposedIdea[] | undefined) ?? []).slice(
         0,
         this.config.maxIdeasPerLoop,
       );
       if (rawProposals.length === 0) {
-        throw new Error("Professor proposed zero ideas; cannot continue the loop.");
+        throw new Error(
+          `Professor proposed zero ideas after ${this.config.resilience.agentMaxAttempts} attempt(s); ` +
+            "the same loop checkpoint will be retried.",
+        );
       }
       proposals = rawProposals.map((raw) =>
         normalizeProposal(raw, {
@@ -467,11 +607,22 @@ export class Orchestrator {
         const parentCandidateId = idea.parentCandidateId ?? this.state.bestCandidateId ?? "baseline";
         const parentSource = this.ensureParentArtifact(parentCandidateId);
         idea.parentCandidateId = parentCandidateId;
-        idea.worktreePath = await this.worktrees.create(idea.id, {
-          parentArtifactDir: parentSource,
-          editablePaths: this.state.challenge.editablePaths,
-        });
-        await this.worktrees.seedUntracked(idea.id);
+        idea.worktreePath = await this.retryResult(
+          `worktree create ${idea.id}`,
+          this.config.resilience.commandMaxAttempts,
+          () =>
+            this.worktrees.create(idea.id, {
+              parentArtifactDir: parentSource,
+              editablePaths: this.state.challenge.editablePaths,
+            }),
+          () => true,
+        );
+        await this.retryResult(
+          `worktree seed ${idea.id}`,
+          this.config.resilience.commandMaxAttempts,
+          () => this.worktrees.seedUntracked(idea.id),
+          () => true,
+        );
         this.persist();
       }
 
@@ -482,30 +633,36 @@ export class Orchestrator {
         this.emitIdea(idea, `implementing (attempt ${idea.verifyAttempts + 1}/${this.config.maxVerifyAttempts})`);
 
         const task = this.materializePhdTask(idea);
-        const impl = await this.ports.runner.run({
-          role: "phd",
-          kind: "implement",
-          cwd: idea.worktreePath,
-          stateDir: this.stateDir,
-          input: {
-            ...task.input,
-            taskPath: task.taskPath,
-            traceDir: path.join(
-              runPaths.agentDir,
-              `attempt-${String(idea.verifyAttempts + 1).padStart(2, "0")}`,
-            ),
-            loop: this.state.loop,
-            ideaIndex,
-            attempt: idea.verifyAttempts + 1,
-            ideaId: idea.id,
-            specFile: path.join(this.stateDir, idea.specFile),
-            maxVerifyAttempts: this.config.maxVerifyAttempts,
-            editablePaths: this.state.challenge.editablePaths,
-            verifyCommand: this.state.challenge.verifyCommand,
-            lastVerifyError: idea.lastVerifyError,
-          },
-          signal: this.ports.signal,
-        });
+        const impl = await this.retryResult(
+          `PhD implementation ${idea.id}`,
+          this.config.resilience.agentMaxAttempts,
+          () =>
+            this.ports.runner.run({
+              role: "phd",
+              kind: "implement",
+              cwd: idea.worktreePath!,
+              stateDir: this.stateDir,
+              input: {
+                ...task.input,
+                taskPath: task.taskPath,
+                traceDir: path.join(
+                  runPaths.agentDir,
+                  `attempt-${String(idea.verifyAttempts + 1).padStart(2, "0")}`,
+                ),
+                loop: this.state.loop,
+                ideaIndex,
+                attempt: idea.verifyAttempts + 1,
+                ideaId: idea.id,
+                specFile: path.join(this.stateDir, idea.specFile),
+                maxVerifyAttempts: this.config.maxVerifyAttempts,
+                editablePaths: this.state.challenge.editablePaths,
+                verifyCommand: this.state.challenge.verifyCommand,
+                lastVerifyError: idea.lastVerifyError,
+              },
+              signal: this.ports.signal,
+            }),
+          (result) => result.ok,
+        );
         if (!impl.ok) {
           if (this.aborted()) return;
           idea.lastVerifyError = impl.error ?? impl.output;
@@ -544,10 +701,16 @@ export class Orchestrator {
         idea.status = "verifying";
         this.persist();
         const verifyStartedAt = new Date().toISOString();
-        const verify = await this.ports.adapter.verify(
-          idea.worktreePath,
-          this.ports.signal,
-          runPaths.verifyLog,
+        const verify = await this.retryResult(
+          `verify ${idea.id}`,
+          this.config.resilience.commandMaxAttempts,
+          () =>
+            this.ports.adapter.verify(
+              idea.worktreePath,
+              this.ports.signal,
+              runPaths.verifyLog,
+            ),
+          (result) => result.ok,
         );
         const verifyEndedAt = new Date().toISOString();
         idea.verifyRecords ??= [];
@@ -586,7 +749,17 @@ export class Orchestrator {
       this.persist();
       const benchStartedAt = new Date().toISOString();
       const bench = await this.benchLock.runExclusive(() =>
-        this.ports.adapter.bench(idea.worktreePath, this.ports.signal, runPaths.benchmarkLog),
+        this.retryResult(
+          `benchmark ${idea.id}`,
+          this.config.resilience.commandMaxAttempts,
+          () =>
+            this.ports.adapter.bench(
+              idea.worktreePath,
+              this.ports.signal,
+              runPaths.benchmarkLog,
+            ),
+          (result) => result.ok && result.score !== undefined,
+        ),
       );
       const benchEndedAt = new Date().toISOString();
       idea.benchmarkRecord = this.evaluationRecord(
@@ -621,191 +794,357 @@ export class Orchestrator {
     }
   }
 
-  /** Pick the best improving idea, apply to main, re-verify + re-bench there, submit. */
+  /**
+   * Try improving candidates in score order. A candidate-specific main-checkout
+   * gate failure falls through to the next candidate; a systemic submit outage
+   * leaves the candidate resumable and lets runUntilDone retry this checkpoint.
+   */
   private async finalizeLoop(): Promise<boolean> {
-    const benched = this.state.ideas.filter((i) => i.status === "benching" && i.localScore !== undefined);
-    const improving = benched.filter((i) =>
-      isImprovement(this.state.bestScore, i.localScore!, this.state.challenge.direction, this.config.minImprovement),
+    const benched = this.state.ideas.filter(
+      (idea) => idea.status === "benching" && idea.localScore !== undefined,
     );
-    improving.sort((a, b) =>
-      this.state.challenge.direction === "+" ? b.localScore! - a.localScore! : a.localScore! - b.localScore!,
-    );
-    const winner = improving[0];
-
-    // Non-winners that verified fine but didn't improve (or lost) get notes.
-    for (const idea of benched) {
-      if (idea === winner) continue;
-      idea.status = improving.includes(idea) ? "done-superseded" : "done-no-improvement";
-      this.persist();
-    }
-
-    if (!winner) return false;
-
-    // Apply the winner to the main repo and re-measure there to guard against
-    // worktree-only artifacts.
-    this.worktrees.applyToMain(winner.id, this.state.challenge.editablePaths);
-    const winnerPaths = candidateRunPaths(this.stateDir, winner.id);
-    const mainVerifyStartedAt = new Date().toISOString();
-    const verify = await this.ports.adapter.verify(
-      undefined,
-      this.ports.signal,
-      winnerPaths.verifyLog,
-    );
-    winner.verifyRecords ??= [];
-    winner.verifyRecords.push(
-      this.evaluationRecord(
-        this.state.challenge.verifyCommand,
-        this.repoRoot,
-        mainVerifyStartedAt,
-        new Date().toISOString(),
-        verify.exitCode,
-        winnerPaths.verifyLog,
-        this.config.execution.verifyTimeoutMs,
-        verify.timedOut ?? false,
+    const improving = benched.filter((idea) =>
+      isImprovement(
+        this.state.bestScore,
+        idea.localScore!,
+        this.state.challenge.direction,
+        this.config.minImprovement,
       ),
     );
-    if (!verify.ok) {
-      winner.status = "failed";
-      winner.lastVerifyError = `Re-verify on main repo failed after applying worktree diff:\n${verify.raw}`;
-      this.persist();
-      this.emitIdea(winner, "re-verify on main failed; not submitting");
-      return false;
-    }
-    const mainBenchStartedAt = new Date().toISOString();
-    const bench = await this.ports.adapter.bench(
-      undefined,
-      this.ports.signal,
-      winnerPaths.benchmarkLog,
-    );
-    winner.benchmarkRecord = this.evaluationRecord(
-      this.state.challenge.benchCommand,
-      this.repoRoot,
-      mainBenchStartedAt,
-      new Date().toISOString(),
-      bench.exitCode,
-      winnerPaths.benchmarkLog,
-      this.config.execution.benchmarkTimeoutMs,
-      bench.timedOut ?? false,
-    );
-    if (!bench.ok || bench.score === undefined) {
-      winner.status = "failed";
-      winner.lastVerifyError = `Re-bench on main repo failed:\n${bench.raw}`;
-      this.persist();
-      this.emitIdea(winner, "re-bench on main failed; not submitting");
-      return false;
-    }
-    if (
-      !isImprovement(this.state.bestScore, bench.score, this.state.challenge.direction, this.config.minImprovement)
-    ) {
-      winner.status = "done-no-improvement";
-      winner.localScore = bench.score;
-      this.persist();
-      return false;
-    }
-
-    winner.localScore = bench.score;
-    this.state.bestScore =
-      this.state.bestScore === null
-        ? bench.score
-        : betterScore(this.state.bestScore, bench.score, this.state.challenge.direction);
-    this.state.bestCandidateId = winner.id;
-
-    // Submission note is required and public in yukon challenges.
-    const noteRel = path.join("notes", `submission-loop-${String(this.state.loop).padStart(3, "0")}-${winner.id}.md`);
-    const notePath = path.join(this.stateDir, noteRel);
-    fs.writeFileSync(
-      notePath,
-      [
-        `# ${winner.title}`,
-        "",
-        `Local score: ${bench.score}. Idea ${winner.id}, loop ${this.state.loop}.`,
-        "",
-        fs.readFileSync(path.join(this.stateDir, winner.specFile), "utf8"),
-      ].join("\n"),
+    improving.sort((left, right) =>
+      this.state.challenge.direction === "+"
+        ? right.localScore! - left.localScore!
+        : left.localScore! - right.localScore!,
     );
 
-    const submit = await this.ports.adapter.submit(
-      {
-        noteFile: notePath,
-        model: this.state.challenge.submitNeedsModel ? this.config.submitModelName ?? "unknown" : undefined,
-      },
-      this.ports.signal,
-    );
-    winner.status = "done-improved";
-    winner.submitted = { submissionId: submit.submissionId, noteFile: noteRel };
-    if (submit.ok) {
+    if (improving.length > 0) {
+      await this.retryResult(
+        `snapshot main checkout for loop ${this.state.loop}`,
+        this.config.resilience.commandMaxAttempts,
+        async () =>
+          this.worktrees.ensureMainSnapshot(
+            this.finalizationSnapshotDir(),
+            this.state.challenge.editablePaths,
+          ),
+        () => true,
+      );
+    }
+
+    for (const idea of benched.filter((candidate) => !improving.includes(candidate))) {
+      idea.status = "done-no-improvement";
+      this.persist();
+    }
+
+    for (const candidate of improving) {
+      if (this.aborted()) return false;
+      const candidatePaths = candidateRunPaths(this.stateDir, candidate.id);
+
+      try {
+        await this.retryResult(
+          `apply ${candidate.id} to main`,
+          this.config.resilience.commandMaxAttempts,
+          async () => {
+            this.worktrees.applyToMain(candidate.id, this.state.challenge.editablePaths);
+          },
+          () => true,
+        );
+      } catch (error) {
+        await this.failFinalist(
+          candidate,
+          `Applying the worktree to main failed: ${errorMessage(error)}`,
+          "apply to main failed; trying the next qualifying idea",
+        );
+        continue;
+      }
+
+      const verifyStartedAt = new Date().toISOString();
+      const verify = await this.retryResult(
+        `main verify ${candidate.id}`,
+        this.config.resilience.commandMaxAttempts,
+        () =>
+          this.ports.adapter.verify(
+            undefined,
+            this.ports.signal,
+            candidatePaths.verifyLog,
+          ),
+        (result) => result.ok,
+      );
+      candidate.verifyRecords ??= [];
+      candidate.verifyRecords.push(
+        this.evaluationRecord(
+          this.state.challenge.verifyCommand,
+          this.repoRoot,
+          verifyStartedAt,
+          new Date().toISOString(),
+          verify.exitCode,
+          candidatePaths.verifyLog,
+          this.config.execution.verifyTimeoutMs,
+          verify.timedOut ?? false,
+        ),
+      );
+      if (this.aborted()) return false;
+      if (!verify.ok) {
+        await this.failFinalist(
+          candidate,
+          `Re-verify on main repo failed after applying worktree diff:\n${verify.raw}`,
+          "re-verify on main failed; trying the next qualifying idea",
+        );
+        continue;
+      }
+
+      const benchStartedAt = new Date().toISOString();
+      const bench = await this.retryResult(
+        `main benchmark ${candidate.id}`,
+        this.config.resilience.commandMaxAttempts,
+        () =>
+          this.ports.adapter.bench(
+            undefined,
+            this.ports.signal,
+            candidatePaths.benchmarkLog,
+          ),
+        (result) => result.ok && result.score !== undefined,
+      );
+      candidate.benchmarkRecord = this.evaluationRecord(
+        this.state.challenge.benchCommand,
+        this.repoRoot,
+        benchStartedAt,
+        new Date().toISOString(),
+        bench.exitCode,
+        candidatePaths.benchmarkLog,
+        this.config.execution.benchmarkTimeoutMs,
+        bench.timedOut ?? false,
+      );
+      if (this.aborted()) return false;
+      if (!bench.ok || bench.score === undefined) {
+        await this.failFinalist(
+          candidate,
+          `Re-bench on main repo failed:\n${bench.raw}`,
+          "re-bench on main failed; trying the next qualifying idea",
+        );
+        continue;
+      }
+      if (
+        !isImprovement(
+          this.state.bestScore,
+          bench.score,
+          this.state.challenge.direction,
+          this.config.minImprovement,
+        )
+      ) {
+        candidate.status = "done-no-improvement";
+        candidate.localScore = bench.score;
+        this.persist();
+        continue;
+      }
+
+      candidate.localScore = bench.score;
+
+      // Submission notes are required and public in Yukon challenges.
+      const noteRel = path.join(
+        "notes",
+        `submission-loop-${String(this.state.loop).padStart(3, "0")}-${candidate.id}.md`,
+      );
+      const notePath = path.join(this.stateDir, noteRel);
+      fs.writeFileSync(
+        notePath,
+        [
+          `# ${candidate.title}`,
+          "",
+          `Local score: ${bench.score}. Idea ${candidate.id}, loop ${this.state.loop}.`,
+          "",
+          fs.readFileSync(path.join(this.stateDir, candidate.specFile), "utf8"),
+        ].join("\n"),
+      );
+
+      const submit = await this.submitWithReconciliation(notePath, bench.score);
+      if (this.aborted()) return false;
+      if (!submit.ok) {
+        candidate.lastVerifyError =
+          `Submission failed after ${this.config.resilience.submitMaxAttempts} attempt(s):\n${submit.raw}`;
+        // Keep it nonterminal so finalization resumes this exact candidate.
+        candidate.status = "benching";
+        this.persist();
+        this.emitIdea(
+          candidate,
+          `submission unavailable after ${this.config.resilience.submitMaxAttempts} attempt(s); ` +
+            "preserving the candidate and retrying the loop checkpoint",
+        );
+        throw new Error(
+          `Submission for ${candidate.id} failed after ${this.config.resilience.submitMaxAttempts} attempt(s): ` +
+            firstLine(submit.raw),
+        );
+      }
+
+      candidate.lastVerifyError = undefined;
+      candidate.status = "done-improved";
+      candidate.submitted = { submissionId: submit.submissionId, noteFile: noteRel };
+      this.state.bestCandidateId = candidate.id;
+      this.state.bestScore =
+        this.state.bestScore === null
+          ? bench.score
+          : betterScore(this.state.bestScore, bench.score, this.state.challenge.direction);
       this.state.bestSubmittedScore =
         this.state.bestSubmittedScore === null
           ? bench.score
-          : betterScore(this.state.bestSubmittedScore, bench.score, this.state.challenge.direction);
+          : betterScore(
+              this.state.bestSubmittedScore,
+              bench.score,
+              this.state.challenge.direction,
+            );
+
+      for (const other of improving) {
+        if (other === candidate || other.status !== "benching") continue;
+        other.status = "done-superseded";
+        this.persist();
+      }
+
+      this.persist();
+      this.ports.emit({
+        type: "submitted",
+        loop: this.state.loop,
+        ideaId: candidate.id,
+        score: bench.score,
+        submissionId: submit.submissionId,
+      });
+      this.appendKnowledge(
+        `\n### Loop ${this.state.loop} submission\n- ${candidate.id} "${candidate.title}" · ` +
+          `local score ${bench.score} · submitted (${submit.submissionId ?? "id unknown"})\n`,
+      );
+      this.discardFinalizationSnapshot();
+      return true;
     }
+
+    this.restoreFinalizationSnapshot();
+    return false;
+  }
+
+  private async failFinalist(
+    idea: Idea,
+    diagnostic: string,
+    message: string,
+  ): Promise<void> {
+    idea.status = "failed";
+    idea.lastVerifyError = diagnostic;
     this.persist();
-    this.ports.emit({
-      type: "submitted",
-      loop: this.state.loop,
-      ideaId: winner.id,
-      score: bench.score,
-      submissionId: submit.submissionId,
-    });
-    this.appendKnowledge(
-      `\n### Loop ${this.state.loop} submission\n- ${winner.id} "${winner.title}" · local score ${bench.score} · ${
-        submit.ok ? `submitted (${submit.submissionId ?? "id unknown"})` : `SUBMIT FAILED: ${submit.raw.split("\n")[0]}`
-      }\n`,
+    this.emitIdea(idea, message);
+  }
+
+  /**
+   * Reconcile before every submit call. If a previous ambiguous CLI failure
+   * actually reached the server, the matching "my submissions" score acts as
+   * the remote idempotency marker and prevents a duplicate submission.
+   */
+  private async submitWithReconciliation(
+    notePath: string,
+    score: number,
+  ): Promise<SubmitResult> {
+    return this.retryResult(
+      "submission",
+      this.config.resilience.submitMaxAttempts,
+      async () => {
+        try {
+          const mine = await this.retryResult(
+            "submission reconciliation",
+            this.config.resilience.commandMaxAttempts,
+            () => this.ports.adapter.listSubmissions(false, this.ports.signal),
+            () => true,
+          );
+          const existing = mine.find((entry) => sameScore(entry.score, score));
+          if (existing) {
+            return {
+              ok: true,
+              submissionId: existing.id,
+              promoted: existing.promoted,
+              raw: `Reconciled existing submission ${existing.id} at score ${existing.score}.`,
+            };
+          }
+        } catch (error) {
+          if (this.aborted()) throw error;
+          this.emitLog(`submission reconciliation unavailable: ${errorMessage(error)}`);
+        }
+
+        return this.ports.adapter.submit(
+          {
+            noteFile: notePath,
+            model: this.state.challenge.submitNeedsModel
+              ? this.config.submitModelName ?? "unknown"
+              : undefined,
+          },
+          this.ports.signal,
+        );
+      },
+      (result) => result.ok,
     );
-    return true;
   }
 
   private async writeIdeaNote(idea: Idea, ideaIndex: number): Promise<void> {
     const noteRel = path.join("notes", `loop-${String(this.state.loop).padStart(3, "0")}-${idea.id}.md`);
-    const runPaths = await this.ensureCandidateRun(idea);
-    const postmortemTaskPath = path.join(runPaths.agentDir, "postmortem-task.json");
-    const postmortemTask: PhdPostmortemTaskV1 = {
-      schemaVersion: EXPERIMENT_SCHEMA_VERSION,
-      taskId: `${idea.id}-postmortem`,
-      kind: "postmortem",
-      role: "phd",
-      taskPath: postmortemTaskPath,
-      stateDir: this.stateDir,
-      resultPath: path.join(runPaths.agentDir, "postmortem-result.json"),
-      input: {
-        candidateId: idea.id,
-        proposalPath: runPaths.proposal,
-        implementationTaskPath: runPaths.task,
-        sourcePath: runPaths.source,
-        diffPath: runPaths.diff,
-        metricsPath: runPaths.metrics,
-        integrityPath: runPaths.integrity,
-        verifyLogPath: runPaths.verifyLog,
-        benchmarkLogPath: runPaths.benchmarkLog,
-        terminalStatus: idea.status as CandidateTerminalStatus,
-        ...(idea.localScore === undefined ? {} : { score: idea.localScore }),
-        comparisonScore: idea.comparisonScore ?? this.state.bestScore,
-        ...(idea.lastVerifyError ? { failure: idea.lastVerifyError } : {}),
-        postmortemPath: path.join(this.stateDir, noteRel),
-      },
-    };
-    validateResearchTask(postmortemTask);
-    if (!fs.existsSync(postmortemTaskPath)) atomicWriteJson(postmortemTaskPath, postmortemTask);
-    const result = await this.ports.runner.run({
-      role: "phd",
-      kind: "write-note",
-      cwd: runPaths.root,
-      stateDir: this.stateDir,
-      tools: ["read"],
-      input: {
-        ...postmortemTask.input,
+    let runPaths: ReturnType<typeof candidateRunPaths>;
+    let result;
+    try {
+      runPaths = await this.ensureCandidateRun(idea);
+      const postmortemTaskPath = path.join(runPaths.agentDir, "postmortem-task.json");
+      const postmortemTask: PhdPostmortemTaskV1 = {
+        schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+        taskId: `${idea.id}-postmortem`,
+        kind: "postmortem",
+        role: "phd",
         taskPath: postmortemTaskPath,
-        traceDir: path.join(runPaths.agentDir, "postmortem"),
-        notePath: path.join(this.stateDir, noteRel),
-        ideaTitle: idea.title,
-        ideaIndex,
-        localScore: idea.localScore,
-        bestScore: this.state.bestScore,
-        status: idea.status,
-        lastVerifyError: idea.lastVerifyError,
-      },
-      signal: this.ports.signal,
-    });
+        stateDir: this.stateDir,
+        resultPath: path.join(runPaths.agentDir, "postmortem-result.json"),
+        input: {
+          candidateId: idea.id,
+          proposalPath: runPaths.proposal,
+          implementationTaskPath: runPaths.task,
+          sourcePath: runPaths.source,
+          diffPath: runPaths.diff,
+          metricsPath: runPaths.metrics,
+          integrityPath: runPaths.integrity,
+          verifyLogPath: runPaths.verifyLog,
+          benchmarkLogPath: runPaths.benchmarkLog,
+          terminalStatus: idea.status as CandidateTerminalStatus,
+          ...(idea.localScore === undefined ? {} : { score: idea.localScore }),
+          comparisonScore: idea.comparisonScore ?? this.state.bestScore,
+          ...(idea.lastVerifyError ? { failure: idea.lastVerifyError } : {}),
+          postmortemPath: path.join(this.stateDir, noteRel),
+        },
+      };
+      validateResearchTask(postmortemTask);
+      if (!fs.existsSync(postmortemTaskPath)) {
+        atomicWriteJson(postmortemTaskPath, postmortemTask);
+      }
+      result = await this.retryResult(
+        `hypothesis note ${idea.id}`,
+        this.config.resilience.agentMaxAttempts,
+        () =>
+          this.ports.runner.run({
+            role: "phd",
+            kind: "write-note",
+            cwd: runPaths.root,
+            stateDir: this.stateDir,
+            tools: ["read"],
+            input: {
+              ...postmortemTask.input,
+              taskPath: postmortemTaskPath,
+              traceDir: path.join(runPaths.agentDir, "postmortem"),
+              notePath: path.join(this.stateDir, noteRel),
+              ideaTitle: idea.title,
+              ideaIndex,
+              localScore: idea.localScore,
+              bestScore: this.state.bestScore,
+              status: idea.status,
+              lastVerifyError: idea.lastVerifyError,
+            },
+            signal: this.ports.signal,
+          }),
+        (candidate) => candidate.ok,
+      );
+    } catch (error) {
+      if (!this.aborted()) {
+        this.emitLog(`hypothesis note ${idea.id} skipped · ${errorMessage(error)}`);
+      }
+      return;
+    }
     if (result.ok && result.output.trim() !== "") {
       const notePath = path.join(this.stateDir, noteRel);
       fs.mkdirSync(path.dirname(notePath), { recursive: true });
@@ -818,6 +1157,11 @@ export class Orchestrator {
           .split("\n")
           .slice(0, 6)
           .join("\n")}\n`,
+      );
+    } else if (!this.aborted()) {
+      this.emitLog(
+        `hypothesis note ${idea.id} skipped after ${this.config.resilience.agentMaxAttempts} attempt(s): ` +
+          firstLine(result.error ?? result.output),
       );
     }
   }
@@ -1199,23 +1543,37 @@ export class Orchestrator {
     };
     validateResearchTask(task);
     if (!fs.existsSync(taskPath)) atomicWriteJson(taskPath, task);
-    const result = await this.ports.runner.run({
-      role: "advisor",
-      kind: "advise",
-      cwd: this.repoRoot,
-      stateDir: this.stateDir,
-      input: {
-        ...task.input,
-        taskPath,
-        traceDir: path.join(loopDir, "advisor-agent"),
-        rules: watchdog.rules,
-        stateDiff,
-        summary,
-        watchdogFile: this.config.advisor.watchdogFile,
-      },
-      signal: this.ports.signal,
-    });
-    if (!result.ok) return [];
+    const result = await this.retryResult(
+      "advisor review",
+      this.config.resilience.agentMaxAttempts,
+      () =>
+        this.ports.runner.run({
+          role: "advisor",
+          kind: "advise",
+          cwd: this.repoRoot,
+          stateDir: this.stateDir,
+          input: {
+            ...task.input,
+            taskPath,
+            traceDir: path.join(loopDir, "advisor-agent"),
+            rules: watchdog.rules,
+            stateDiff,
+            summary,
+            watchdogFile: this.config.advisor.watchdogFile,
+          },
+          signal: this.ports.signal,
+        }),
+      (candidate) => candidate.ok,
+    );
+    if (!result.ok) {
+      if (!this.aborted()) {
+        this.emitLog(
+          `advisor unavailable after ${this.config.resilience.agentMaxAttempts} attempt(s); ` +
+            `continuing without advice · ${firstLine(result.error ?? result.output)}`,
+        );
+      }
+      return [];
+    }
     const notes = filterByThreshold(
       ((result.structured?.notes as AdvisorNote[] | undefined) ?? []).filter(
         (n) => n && typeof n.text === "string",
@@ -1236,13 +1594,15 @@ export class Orchestrator {
     return notes;
   }
 
-  private async godConversation(): Promise<string> {
-    this.transition("god");
-    const noteRel = path.join("notes", `god-${String(this.state.loop).padStart(3, "0")}.md`);
+  private async goToChurch(): Promise<string | undefined> {
+    this.transition("church");
+    if (this.aborted()) return undefined;
+    const noteRel = path.join("notes", `church-${String(this.state.loop).padStart(3, "0")}.md`);
     const loopDir = path.join(
       this.paths.loopsDir,
       `loop-${String(this.state.loop).padStart(3, "0")}`,
     );
+    fs.mkdirSync(loopDir, { recursive: true });
     const taskPath = path.join(loopDir, "god-task.json");
     const task: GodConversationTaskV1 = {
       schemaVersion: EXPERIMENT_SCHEMA_VERSION,
@@ -1263,26 +1623,43 @@ export class Orchestrator {
     };
     validateResearchTask(task);
     if (!fs.existsSync(taskPath)) atomicWriteJson(taskPath, task);
-    const result = await this.ports.runner.run({
-      role: "god",
-      kind: "god-conversation",
-      cwd: this.repoRoot,
-      stateDir: this.stateDir,
-      input: {
-        ...task.input,
-        taskPath,
-        traceDir: path.join(loopDir, "god-agent"),
-        loop: this.state.loop,
-        streak: this.state.dryLoopStreak,
-        history: this.state.history,
-      },
-      signal: this.ports.signal,
-    });
+    const result = await this.retryResult(
+      "church reflection",
+      this.config.resilience.agentMaxAttempts,
+      () =>
+        this.ports.runner.run({
+          role: "god",
+          kind: "church",
+          cwd: this.repoRoot,
+          stateDir: this.stateDir,
+          input: {
+            ...task.input,
+            taskPath,
+            traceDir: path.join(loopDir, "god-agent"),
+            notePath: path.join(this.stateDir, noteRel),
+            loop: this.state.loop,
+            streak: this.state.dryLoopStreak,
+            history: this.state.history,
+          },
+          signal: this.ports.signal,
+        }),
+      (candidate) => candidate.ok,
+    );
     if (result.ok) {
-      this.appendKnowledge(`\n### After loop ${this.state.loop}: the professor spoke with God\nSee ${noteRel}. Hope restored; strategy refocused.\n`);
-      this.ports.emit({ type: "god", loop: this.state.loop, noteFile: noteRel });
+      this.appendKnowledge(
+        `\n### After loop ${this.state.loop}: the Professor went to church\n` +
+          `See ${noteRel}. The plateau was reflected on and the strategy was refocused.\n`,
+      );
+      this.ports.emit({ type: "church", loop: this.state.loop, noteFile: noteRel });
+      return noteRel;
     }
-    return noteRel;
+    if (!this.aborted()) {
+      this.emitLog(
+        `church reflection unavailable after ${this.config.resilience.agentMaxAttempts} attempt(s); ` +
+          `continuing and preserving the dry-loop streak · ${firstLine(result.error ?? result.output)}`,
+      );
+    }
+    return undefined;
   }
 
   // ------------------------------------------------------------- plumbing
@@ -1301,6 +1678,114 @@ export class Orchestrator {
 
   private appendKnowledge(text: string): void {
     fs.appendFileSync(this.paths.knowledgeBase, text);
+  }
+
+  private async retryResult<T>(
+    label: string,
+    maxAttempts: number,
+    operation: (attempt: number) => Promise<T>,
+    isSuccess: (value: T) => boolean,
+  ): Promise<T> {
+    return retryOperation({
+      maxAttempts,
+      baseDelayMs: this.config.resilience.retryBaseDelayMs,
+      maxDelayMs: this.config.resilience.retryMaxDelayMs,
+      operation,
+      isSuccess,
+      signal: this.ports.signal,
+      delay: this.ports.delay,
+      onRetry: ({ attempt, maxAttempts: total, nextDelayMs, error, value }) => {
+        const detail = error === undefined ? retryValueDetail(value) : errorMessage(error);
+        this.emitLog(
+          `${label} failed (attempt ${attempt}/${total}); retrying in ${nextDelayMs}ms` +
+            (detail ? ` · ${firstLine(detail)}` : ""),
+        );
+      },
+    });
+  }
+
+  private loadCachedLeaderboard(): LeaderboardEntry[] {
+    if (!fs.existsSync(this.paths.leaderboard)) return [];
+    try {
+      const parsed = JSON.parse(fs.readFileSync(this.paths.leaderboard, "utf8")) as {
+        entries?: unknown;
+      };
+      if (!Array.isArray(parsed.entries)) return [];
+      return parsed.entries.filter(isLeaderboardEntry);
+    } catch {
+      return [];
+    }
+  }
+
+  private finalizationSnapshotDir(): string {
+    return path.join(
+      this.paths.mainSnapshotsDir,
+      `loop-${String(this.state.loop).padStart(3, "0")}`,
+    );
+  }
+
+  private restoreFinalizationSnapshot(): void {
+    const snapshotDir = this.finalizationSnapshotDir();
+    if (!fs.existsSync(path.join(snapshotDir, ".complete"))) return;
+    this.worktrees.restoreMainSnapshot(snapshotDir, this.state.challenge.editablePaths);
+    this.worktrees.discardMainSnapshot(snapshotDir);
+    this.emitLog(`restored main checkout after loop ${this.state.loop} produced no shippable winner`);
+  }
+
+  private discardFinalizationSnapshot(): void {
+    this.worktrees.discardMainSnapshot(this.finalizationSnapshotDir());
+  }
+
+  private recordRecovery(
+    message: string,
+    consecutiveFailures: number,
+    nextRetryAt?: string,
+  ): void {
+    this.state.recovery = {
+      scope: this.state.phase,
+      message,
+      consecutiveFailures,
+      failedAt: new Date().toISOString(),
+      ...(nextRetryAt ? { nextRetryAt } : {}),
+    };
+    this.persist();
+  }
+
+  private clearRecovery(): void {
+    if (!this.state.recovery) return;
+    this.state.recovery = undefined;
+    this.persist();
+  }
+
+  private async cleanupWorktree(ideaId: string): Promise<void> {
+    try {
+      await this.retryResult(
+        `worktree cleanup ${ideaId}`,
+        this.config.resilience.commandMaxAttempts,
+        () => this.worktrees.remove(ideaId),
+        () => true,
+      );
+      if (this.state.pendingCleanup?.includes(ideaId)) {
+        this.state.pendingCleanup = this.state.pendingCleanup.filter((id) => id !== ideaId);
+        this.persist();
+      }
+    } catch (error) {
+      if (this.aborted()) return;
+      this.state.pendingCleanup = Array.from(
+        new Set([...(this.state.pendingCleanup ?? []), ideaId]),
+      );
+      this.persist();
+      this.emitLog(
+        `worktree cleanup ${ideaId} deferred to the next checkpoint · ${errorMessage(error)}`,
+      );
+    }
+  }
+
+  private async drainPendingCleanup(): Promise<void> {
+    for (const ideaId of [...(this.state.pendingCleanup ?? [])]) {
+      if (this.aborted()) return;
+      await this.cleanupWorktree(ideaId);
+    }
   }
 
   private aborted(): boolean {
@@ -1338,17 +1823,39 @@ export class Orchestrator {
   }
 }
 
-function abortableDelay(ms: number, signal?: AbortSignal): Promise<void> {
-  if (signal?.aborted || ms <= 0) return Promise.resolve();
-  return new Promise((resolve) => {
-    const finish = () => {
-      clearTimeout(timer);
-      signal?.removeEventListener("abort", finish);
-      resolve();
-    };
-    const timer = setTimeout(finish, ms);
-    signal?.addEventListener("abort", finish, { once: true });
-  });
+function firstLine(value: string): string {
+  return value.trim().split("\n")[0] ?? "";
+}
+
+function errorMessage(error: unknown): string {
+  return error instanceof Error ? error.message : String(error);
+}
+
+function retryValueDetail(value: unknown): string {
+  if (typeof value === "string") return value;
+  if (typeof value !== "object" || value === null) return "";
+  const record = value as Record<string, unknown>;
+  for (const key of ["error", "raw", "output"]) {
+    if (typeof record[key] === "string") return record[key];
+  }
+  return "";
+}
+
+function sameScore(left: number, right: number): boolean {
+  const tolerance = Math.max(1, Math.abs(left), Math.abs(right)) * 1e-12;
+  return Math.abs(left - right) <= tolerance;
+}
+
+function isLeaderboardEntry(value: unknown): value is LeaderboardEntry {
+  if (typeof value !== "object" || value === null) return false;
+  const entry = value as Partial<LeaderboardEntry>;
+  return (
+    typeof entry.id === "string" &&
+    typeof entry.score === "number" &&
+    Number.isFinite(entry.score) &&
+    typeof entry.author === "string" &&
+    typeof entry.promoted === "boolean"
+  );
 }
 
 function sameJson(left: unknown, right: unknown): boolean {

@@ -62,8 +62,9 @@ extensions/autoresearch/
     phd/SOUL.md
     advisor/SOUL.md
     god/SOUL.md
-  prompts/*.md          task-prompt templates retained for compatibility
-
+    metaharness/SOUL.md
+  prompts/*.md          dynamic role/task compatibility templates
+  prompts/tasks/*.md    task-specific suffixes and override names
 src/
   orchestrator.ts       durable loop state machine and archive integration
   experiments.ts        versioned proposal, task, result, and metric contracts
@@ -178,18 +179,24 @@ security sandbox. Trust comes from disposable worktrees, scoped tools,
 deterministic evaluation, and the changed-path integrity gate. A container
 runner can be an optional future hardening layer.
 
+The role/task split, authority boundaries, and default tool envelopes are
+defined in [`agent-profiles.md`](agent-profiles.md).
+
 ## First-run initialization
 
 `initChallenge` performs these operations in order:
 
-1. Read `benchmark.json`, validate the repository, and reject
-   `.autoresearch/` when it falls under `editablePaths`.
+1. Read `benchmark.json` (including shell-string or argv commands), validate
+   the Git repository, and reject `.autoresearch/` under `editablePaths`.
 2. Create state, loop, run, trace, log, note, idea, and worktree directories.
    Add `.autoresearch/` to `.git/info/exclude` without changing `.gitignore`.
-3. Run `setupCommand` with `setupTimeoutMs`.
+3. Run `setupCommand` with `setupTimeoutMs`, streamed logs, bounded command
+   retries, and abort propagation.
 4. Materialize a typed setup task and invoke the setup role to identify
-   correctness/performance commands and build the initial knowledge base.
-5. Run the baseline benchmark and parse `scorePath`.
+   correctness/performance commands and build the initial knowledge base,
+   using the model retry budget.
+5. Run the baseline benchmark with bounded retries and parse a fresh finite
+   value from `scorePath`.
 6. Snapshot the complete baseline `editablePaths` surface under
    `runs/baseline/source/`, record its Git revision and score, set
    `bestCandidateId` to `baseline`, and persist phase `ready`.
@@ -209,7 +216,7 @@ ready
   → loop.ideas
   → loop.finalizing
   → loop.end
-  → god? → next loop | paused | done
+  → church? → next loop | paused | done
 ```
 
 One candidate follows:
@@ -231,6 +238,59 @@ typed proposal + explicit parent
 ```
 
 Core invariants:
+
+- **Parallel agents, serialized Git metadata:** idea pipelines run through
+  `Promise.all`, but the worktree registry lock serializes `git worktree
+  add/remove/prune` so concurrent setup cannot contend on repository metadata.
+- **One benchmark at a time:** the benchmark lock covers idea performance
+  measurements. Correctness checks and model work can still overlap.
+- **Isolation:** every PhD edits a detached worktree. Only the selected
+  winner's complete `editablePaths` are copied to the main checkout.
+- **Main-checkout gate:** the winner is re-verified and re-benched on main
+  before the challenge adapter is allowed to submit it.
+- **Direction-aware selection:** `betterScore` and `minImprovement` honor both
+  lower-is-better (`-`) and higher-is-better (`+`) manifests.
+- **Failure containment:** an individual model crash, verify exhaustion, or
+  benchmark failure marks only that idea failed. Failed worktrees are retained
+  deliberately for diagnosis.
+- **Candidate fallback:** main-checkout verification or benchmarking failure
+  rejects only that finalist; finalization proceeds to the next qualifying
+  candidate in score order. A durable editable-path snapshot restores the main
+  checkout if every finalist fails.
+
+## Retry and fallback policy
+
+`resilience` uses total-attempt counts rather than ambiguous retry counts:
+`agentMaxAttempts: 3`, `commandMaxAttempts: 2`, and
+`submitMaxAttempts: 5`. Operation retries back off from 2 seconds to at most
+one minute. These bounds apply independently, so a failed PhD subprocess gets
+three infrastructure attempts before one of the idea's
+`maxVerifyAttempts` research cycles is consumed.
+
+Failures are split by blast radius:
+
+- Leaderboard sync and fetch are advisory. After command retries are exhausted,
+  the orchestrator reads the last atomic `leaderboard.json` and continues.
+- Idea implementation, verification, and benchmarking are isolated to that
+  idea. Parallel siblings and later loops continue.
+- Hypothesis notes, Advisor review, and church reflection are best-effort. They
+  retry as model tasks and then log-and-continue. A failed church visit does not
+  reset the dry-loop streak.
+- Worktree removal is best-effort but durable: failed cleanup IDs are stored in
+  `pendingCleanup` and retried at the next loop checkpoint.
+- Proposal and submission are essential checkpoints. Exhausting their local
+  attempts raises to `runUntilDone`, which persists `recovery`, waits with a
+  1–15 minute exponential backoff, and resumes the same phase. Twelve
+  consecutive failed resumptions open the circuit breaker and pause the run.
+
+Submission has an additional ambiguity guard. Before every submit attempt, the
+adapter reads the user's remote submissions and matches the measured score. If
+a previous command reached the server but lost its response, that remote entry
+becomes the idempotency marker. A failed submit is never assigned
+`done-improved`, never advances `bestSubmittedScore`, and remains resumable in
+`loop.finalizing`.
+
+Additional archive and lineage invariants:
 
 - **Parallel workers, serialized Git metadata:** candidate pipelines run in
   parallel, while worktree registry mutations are protected by a mutex.
@@ -428,15 +488,24 @@ number. Existing version-1 states may omit lineage/archive fields; the
 orchestrator reconstructs a canonical candidate run where possible and creates
 a baseline snapshot on first use.
 
-`pendingSummary` checkpoints advisor and dry-streak bookkeeping before a God
-turn or final history commit. This prevents an interrupted God conversation
-from double-counting a dry loop. God's role and conversational behavior are
-unchanged.
+`pendingSummary` checkpoints Advisor results and dry-streak bookkeeping before
+church or final history commit. This prevents an interrupted church visit from
+double-counting a dry loop. Legacy snapshots whose saved phase is `god` resume
+at church. Aborted model, verify, and benchmark operations are not charged as
+failed verify attempts.
+God's stable role and conversational behavior are unchanged.
 
 A `done-improved` idea with its persisted submission record remains the local
 idempotency marker. The harness prevents replay after the adapter result is
 stored, although no local state file can make a remote submission and a hard
 process kill transactionally atomic.
+
+The external challenge CLI does not expose a submission idempotency key. The
+harness prevents replay after the adapter result is persisted and reconciles a
+matching score before retrying after an ambiguous failure. A hard process kill
+in the narrow interval after remote acceptance and before local persistence is
+therefore normally recovered by the remote score check, though score matching
+is not as strong as a server-issued idempotency key.
 
 Outer state is independently atomic. An active profile records its start
 score, target loop count, completed loop IDs, idea/failure counts, and last
@@ -495,6 +564,12 @@ Focused suites cover:
 
 The full scenario matrix continues to cover parallel agents, retries,
 nonzero benchmarks, advisor blockers, every resumable phase, live
-mid-implementation interruption, God interruption, post-submit resume,
+mid-implementation interruption, church interruption, post-submit resume,
 direction-aware selection, duplicate-submission prevention, and worktree
 cleanup.
+
+The resilience suite additionally covers cached advisory fallback, model and
+command retry budgets, ambiguous-submit reconciliation, loop-level recovery
+backoff and circuit breaking, finalist failover, main-snapshot restoration,
+and durable deferred cleanup. Config loading deep-merges partial persisted
+objects so new execution, resilience, and meta-harness fields receive defaults.

@@ -2,8 +2,8 @@ import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentResult, AgentRunner, AgentTask, ProposedIdea } from "./types.ts";
 import {
+  scriptedChurchConversation,
   scriptedEdit,
-  scriptedGodConversation,
   scriptedKnowledgeBase,
   scriptedNote,
   scriptedProposals,
@@ -25,8 +25,9 @@ export class MockAgentRunner implements AgentRunner {
         return this.implement(task);
       case "write-note":
         return this.writeNote(task);
+      case "church":
       case "god-conversation":
-        return this.godConversation(task);
+        return this.goToChurch(task);
       case "advise":
         return this.advise(task);
       case "evolve-harness":
@@ -49,6 +50,7 @@ export class MockAgentRunner implements AgentRunner {
       ok: true,
       output: `Explored repo. Subject area: ${subjectArea}`,
       structured: {
+        status: "ready",
         subjectArea,
         verifyCommand: manifest.preSubmitCommand ?? manifest.benchmarkCommand,
         benchCommand: manifest.benchmarkCommand,
@@ -96,9 +98,9 @@ export class MockAgentRunner implements AgentRunner {
     return { ok: true, output: note, filesWritten: [notePath] };
   }
 
-  private godConversation(task: AgentTask): AgentResult {
+  private goToChurch(task: AgentTask): AgentResult {
     const notePath = task.input.notePath as string;
-    const conversation = scriptedGodConversation(task.input.loop as number, task.input.streak as number);
+    const conversation = scriptedChurchConversation(task.input.loop as number, task.input.streak as number);
     fs.mkdirSync(path.dirname(notePath), { recursive: true });
     fs.writeFileSync(notePath, conversation + "\n");
     return { ok: true, output: conversation, filesWritten: [notePath] };

@@ -46,6 +46,23 @@ export interface ExecutionConfig {
   benchmarkTimeoutMs: number;
 }
 
+export interface ResilienceConfig {
+  /** Total calls for one model task, including the first call. */
+  agentMaxAttempts: number;
+  /** Total calls for setup, verify, benchmark, sync, and worktree operations. */
+  commandMaxAttempts: number;
+  /** Submission gets a wider retry window because it is the final valuable step. */
+  submitMaxAttempts: number;
+  /** Consecutive failed loop resumptions before the overnight circuit breaker pauses. */
+  maxConsecutiveLoopFailures: number;
+  /** Exponential backoff for retries within one operation. */
+  retryBaseDelayMs: number;
+  retryMaxDelayMs: number;
+  /** Longer exponential backoff between failed resumptions of the same loop. */
+  loopFailureBaseDelayMs: number;
+  loopFailureMaxDelayMs: number;
+}
+
 export interface MetaHarnessConfig {
   /** Enable bilevel search over harness profiles. Disabled for legacy runs. */
   enabled: boolean;
@@ -75,8 +92,8 @@ export interface HarnessConfig {
   version: 1;
   runner: "mock" | "subprocess";
   roles: RolesConfig;
-  /** Consecutive dry loops before the professor talks to God. 0 disables. */
-  godTriggerThreshold: number;
+  /** Consecutive dry loops before the professor goes to church. 0 disables. */
+  churchTriggerThreshold: number;
   maxVerifyAttempts: number;
   /** Cap on ideas the professor may propose per loop (professor decides actual count <= cap). */
   maxIdeasPerLoop: number;
@@ -86,6 +103,7 @@ export interface HarnessConfig {
   /** Demo-only pause after each completed mock loop. 0 disables. */
   mockLoopDelayMs: number;
   execution: ExecutionConfig;
+  resilience: ResilienceConfig;
   advisor: { enabled: boolean; watchdogFile: string };
   metaHarness: MetaHarnessConfig;
   /** Model name passed to `submit --model` when the challenge requires it (mlxfast). */
@@ -127,7 +145,7 @@ export const DEFAULT_CONFIG: HarnessConfig = {
       tools: ["read", "write", "edit", "bash"],
     },
   },
-  godTriggerThreshold: 3,
+  churchTriggerThreshold: 3,
   maxVerifyAttempts: 3,
   maxIdeasPerLoop: 5,
   maxLoops: null,
@@ -137,6 +155,16 @@ export const DEFAULT_CONFIG: HarnessConfig = {
     setupTimeoutMs: 30 * 60_000,
     verifyTimeoutMs: 10 * 60_000,
     benchmarkTimeoutMs: 60 * 60_000,
+  },
+  resilience: {
+    agentMaxAttempts: 3,
+    commandMaxAttempts: 2,
+    submitMaxAttempts: 5,
+    maxConsecutiveLoopFailures: 12,
+    retryBaseDelayMs: 2_000,
+    retryMaxDelayMs: 60_000,
+    loopFailureBaseDelayMs: 60_000,
+    loopFailureMaxDelayMs: 15 * 60_000,
   },
   advisor: { enabled: true, watchdogFile: "WATCHDOG.md" },
   metaHarness: {
@@ -155,23 +183,31 @@ export const DEFAULT_CONFIG: HarnessConfig = {
 };
 
 export function loadConfig(stateDir: string): HarnessConfig {
-  const onDisk = readJsonIfExists<Partial<HarnessConfig>>(statePaths(stateDir).config);
+  const onDisk = readJsonIfExists<
+    Partial<HarnessConfig> & { godTriggerThreshold?: number }
+  >(statePaths(stateDir).config);
   if (!onDisk) return structuredClone(DEFAULT_CONFIG);
+  const { godTriggerThreshold: legacyGodTriggerThreshold, ...current } = onDisk;
   const defaults = structuredClone(DEFAULT_CONFIG);
   return {
     ...defaults,
-    ...onDisk,
+    ...current,
+    churchTriggerThreshold:
+      current.churchTriggerThreshold ??
+      legacyGodTriggerThreshold ??
+      DEFAULT_CONFIG.churchTriggerThreshold,
     roles: {
-      setup: { ...defaults.roles.setup, ...onDisk.roles?.setup },
-      professor: { ...defaults.roles.professor, ...onDisk.roles?.professor },
-      phd: { ...defaults.roles.phd, ...onDisk.roles?.phd },
-      god: { ...defaults.roles.god, ...onDisk.roles?.god },
-      advisor: { ...defaults.roles.advisor, ...onDisk.roles?.advisor },
-      metaharness: { ...defaults.roles.metaharness, ...onDisk.roles?.metaharness },
+      setup: { ...defaults.roles.setup, ...current.roles?.setup },
+      professor: { ...defaults.roles.professor, ...current.roles?.professor },
+      phd: { ...defaults.roles.phd, ...current.roles?.phd },
+      god: { ...defaults.roles.god, ...current.roles?.god },
+      advisor: { ...defaults.roles.advisor, ...current.roles?.advisor },
+      metaharness: { ...defaults.roles.metaharness, ...current.roles?.metaharness },
     },
-    execution: { ...defaults.execution, ...(onDisk.execution ?? {}) },
-    advisor: { ...defaults.advisor, ...(onDisk.advisor ?? {}) },
-    metaHarness: { ...defaults.metaHarness, ...(onDisk.metaHarness ?? {}) },
+    execution: { ...defaults.execution, ...(current.execution ?? {}) },
+    resilience: { ...defaults.resilience, ...(current.resilience ?? {}) },
+    advisor: { ...defaults.advisor, ...(current.advisor ?? {}) },
+    metaHarness: { ...defaults.metaHarness, ...(current.metaHarness ?? {}) },
     version: 1,
   };
 }

@@ -18,7 +18,7 @@ export function registerNotesTool(pi: ExtensionAPI): void {
     promptSnippet: "List/read autoresearch notes and knowledge base",
     parameters: Type.Object({
       action: StringEnum(["list", "read", "read-kb", "append-kb"] as const),
-      name: Type.Optional(Type.String({ description: "Note filename, e.g. god-005.md" })),
+      name: Type.Optional(Type.String({ description: "Note filename, e.g. church-005.md" })),
       text: Type.Optional(Type.String()),
     }),
     async execute(_toolCallId, params, _signal, _onUpdate, ctx) {
