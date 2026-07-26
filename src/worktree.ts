@@ -3,6 +3,12 @@ import * as path from "node:path";
 import type { ExecPort } from "./exec.ts";
 import { Mutex } from "./util.ts";
 
+export interface ParentArtifact {
+  /** Directory containing a snapshot rooted by each editable path. */
+  parentArtifactDir: string;
+  editablePaths: readonly string[];
+}
+
 /**
  * Per-idea git worktrees under .autoresearch/worktrees/<ideaId>/, so parallel
  * PhDs edit isolated checkouts. Requires the challenge repo to be a git repo
@@ -21,12 +27,17 @@ export class WorktreePool {
     return this.exec("git", args, { cwd });
   }
 
-  /** Create a detached worktree at the current HEAD for an idea. */
-  async create(ideaId: string): Promise<string> {
-    return this.registryLock.runExclusive(() => this.createUnlocked(ideaId));
+  /**
+   * Create a detached worktree at the current HEAD for an idea. When a parent
+   * artifact is supplied, replace every editable path with its archived
+   * counterpart before returning the worktree.
+   */
+  async create(ideaId: string, parent?: ParentArtifact): Promise<string> {
+    if (parent) this.validateParentArtifact(parent);
+    return this.registryLock.runExclusive(() => this.createUnlocked(ideaId, parent));
   }
 
-  private async createUnlocked(ideaId: string): Promise<string> {
+  private async createUnlocked(ideaId: string, parent?: ParentArtifact): Promise<string> {
     const wtPath = path.join(this.worktreesDir, ideaId);
     if (fs.existsSync(wtPath)) await this.removeUnlocked(ideaId); // stale from a previous crash
     fs.mkdirSync(this.worktreesDir, { recursive: true });
@@ -34,10 +45,67 @@ export class WorktreePool {
     if (result.code !== 0) {
       throw new Error(`git worktree add failed for ${ideaId}: ${result.stderr.trim()}`);
     }
+    if (parent) {
+      try {
+        this.materializeParent(wtPath, parent);
+      } catch (error) {
+        await this.removeUnlocked(ideaId).catch(() => {});
+        throw error;
+      }
+    }
     // Untracked, uncommitted setup artifacts (markers, weights symlinks, build
     // dirs) don't travel with worktrees. Copy untracked non-ignored… is risky;
     // instead copy known setup markers and rely on setup being idempotent.
     return wtPath;
+  }
+
+  private validateParentArtifact(parent: ParentArtifact): void {
+    const artifactDir = path.resolve(parent.parentArtifactDir);
+    if (!fs.existsSync(artifactDir) || !fs.statSync(artifactDir).isDirectory()) {
+      throw new Error(`Parent artifact directory does not exist: ${parent.parentArtifactDir}`);
+    }
+    if (parent.editablePaths.length === 0) {
+      throw new Error("Parent artifact requires at least one editable path");
+    }
+    for (const editablePath of parent.editablePaths) {
+      this.resolveEditablePath(artifactDir, editablePath, "parent artifact");
+      // Validate against the eventual worktree root as well. Both calls are
+      // intentional: path rules can differ across roots on some platforms.
+      this.resolveEditablePath(path.resolve(this.worktreesDir, "__candidate__"), editablePath, "worktree");
+    }
+  }
+
+  private materializeParent(wtPath: string, parent: ParentArtifact): void {
+    const artifactDir = path.resolve(parent.parentArtifactDir);
+    for (const editablePath of parent.editablePaths) {
+      const src = this.resolveEditablePath(artifactDir, editablePath, "parent artifact");
+      const dst = this.resolveEditablePath(wtPath, editablePath, "worktree");
+
+      // A snapshot is authoritative over the complete editable surface.
+      // Absence in the parent therefore means the path was deleted.
+      fs.rmSync(dst, { recursive: true, force: true });
+      if (!fs.existsSync(src)) continue;
+      fs.mkdirSync(path.dirname(dst), { recursive: true });
+      fs.cpSync(src, dst, { recursive: true });
+    }
+  }
+
+  private resolveEditablePath(root: string, editablePath: string, label: string): string {
+    if (editablePath.trim() === "" || path.isAbsolute(editablePath)) {
+      throw new Error(`Editable path must be non-empty and relative: ${JSON.stringify(editablePath)}`);
+    }
+    const resolvedRoot = path.resolve(root);
+    const resolved = path.resolve(resolvedRoot, editablePath);
+    const relative = path.relative(resolvedRoot, resolved);
+    if (
+      relative === "" ||
+      relative === ".." ||
+      relative.startsWith(`..${path.sep}`) ||
+      path.isAbsolute(relative)
+    ) {
+      throw new Error(`Editable path escapes the ${label}: ${JSON.stringify(editablePath)}`);
+    }
+    return resolved;
   }
 
   async remove(ideaId: string): Promise<void> {
@@ -61,8 +129,8 @@ export class WorktreePool {
     for (const ep of editablePaths) {
       const src = path.join(wtPath, ep);
       const dst = path.join(this.repoRoot, ep);
-      if (!fs.existsSync(src)) continue;
       fs.rmSync(dst, { recursive: true, force: true });
+      if (!fs.existsSync(src)) continue;
       fs.mkdirSync(path.dirname(dst), { recursive: true });
       fs.cpSync(src, dst, { recursive: true });
     }

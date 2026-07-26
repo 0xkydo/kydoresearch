@@ -5,6 +5,7 @@ import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import { MockAgentRunner } from "../src/agents/mock.ts";
 import { PiSubprocessRunner } from "../src/agents/subprocess.ts";
+import { candidateRunPaths } from "../src/archive.ts";
 import { YukonCliAdapter } from "../src/challenge/adapter.ts";
 import { detectCli, readManifest } from "../src/challenge/detect.ts";
 import type { HarnessConfig } from "../src/config.ts";
@@ -130,7 +131,10 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
     });
     expect(mySubmissions(repoRoot)).toEqual([]);
     expect(
-      fs.readFileSync(path.join(statePaths(harness.stateDir).logsDir, "benchmark.log"), "utf8"),
+      fs.readFileSync(
+        candidateRunPaths(harness.stateDir, "L001-I1").benchmarkLog,
+        "utf8",
+      ),
     ).toContain("intentional benchmark failure");
   });
 

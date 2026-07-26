@@ -48,4 +48,15 @@ describe("nodeExec", () => {
     );
     await expect(running).resolves.toMatchObject({ code: 0 });
   });
+
+  it("classifies process timeout separately from a normal nonzero exit", async () => {
+    const result = await nodeExec(
+      process.execPath,
+      ["-e", "setInterval(() => {}, 1000)"],
+      { timeout: 50 },
+    );
+
+    expect(result.code).not.toBe(0);
+    expect(result.timedOut).toBe(true);
+  });
 });

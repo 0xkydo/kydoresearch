@@ -22,6 +22,13 @@ describe("initChallenge", () => {
     expect(fs.existsSync(path.join(stateDir, "state.json"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "config.json"))).toBe(true);
     expect(fs.existsSync(path.join(stateDir, "knowledge-base.md"))).toBe(true);
+    expect(fs.existsSync(path.join(stateDir, "loops", "init", "setup-task.json"))).toBe(true);
+    expect(
+      fs.existsSync(
+        path.join(stateDir, "runs", "baseline", "source", "src", "solution", "params.json"),
+      ),
+    ).toBe(true);
+    expect(state.bestCandidateId).toBe("baseline");
     expect(fs.existsSync(path.join(repoRoot, ".autoresearch-setup-done"))).toBe(true); // setup ran
 
     // verify and bench detected as DIFFERENT commands (mlxfast-style split).

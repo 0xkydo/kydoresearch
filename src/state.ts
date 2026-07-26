@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import type { EvaluationCommandV1 } from "./experiments.ts";
 import type { IdeaStatus, Phase } from "./phases.ts";
 import type { Direction } from "./util.ts";
 import { atomicWriteJson, readJsonIfExists } from "./util.ts";
@@ -7,13 +8,26 @@ export interface Idea {
   id: string; // "L003-I2"
   loop: number;
   title: string;
+  /** Explicit archived artifact this candidate was materialized from. */
+  parentCandidateId?: string;
   specFile: string; // ideas/loop-003/idea-2.md (relative to stateDir)
+  /** Canonical versioned experiment proposal (relative to stateDir). */
+  proposalFile?: string;
+  /** Immutable PhD task contract (relative to stateDir). */
+  taskFile?: string;
   status: IdeaStatus;
   verifyAttempts: number; // 0..maxVerifyAttempts
   lastVerifyError?: string;
   localScore?: number;
+  /** Score this candidate was required to beat when it was proposed. */
+  comparisonScore?: number | null;
+  /** Durable evaluator provenance, retained across pause/resume. */
+  verifyRecords?: EvaluationCommandV1[];
+  benchmarkRecord?: EvaluationCommandV1;
   worktreePath?: string; // present while in flight (or kept on failure for debugging)
   noteFile?: string; // notes/<...>.md (relative to stateDir)
+  /** ISO timestamp written after the candidate evidence bundle is sealed. */
+  archivedAt?: string;
   submitted?: { submissionId?: string; noteFile: string };
 }
 
@@ -45,6 +59,8 @@ export interface LoopState {
   phase: Phase;
   loop: number; // current loop number, 1-based; 0 before first loop
   bestScore: number | null; // best LOCAL score (direction-aware)
+  /** Candidate ID whose archived source produced bestScore. Optional for legacy v1 state. */
+  bestCandidateId?: string;
   bestSubmittedScore: number | null;
   dryLoopStreak: number;
   ideas: Idea[]; // current loop's ideas
@@ -68,6 +84,10 @@ export function statePaths(stateDir: string) {
     knowledgeBase: path.join(stateDir, "knowledge-base.md"),
     taskboard: path.join(stateDir, "taskboard.json"),
     leaderboard: path.join(stateDir, "leaderboard.json"),
+    ledger: path.join(stateDir, "ledger.ndjson"),
+    loopsDir: path.join(stateDir, "loops"),
+    runsDir: path.join(stateDir, "runs"),
+    resolvedAgentsDir: path.join(stateDir, "resolved-agents"),
     ideasDir: path.join(stateDir, "ideas"),
     logsDir: path.join(stateDir, "logs"),
     notesDir: path.join(stateDir, "notes"),
@@ -82,6 +102,7 @@ export function newLoopState(challenge: ChallengeInfo): LoopState {
     phase: "uninitialized",
     loop: 0,
     bestScore: null,
+    bestCandidateId: "baseline",
     bestSubmittedScore: null,
     dryLoopStreak: 0,
     ideas: [],
