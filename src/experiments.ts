@@ -133,6 +133,9 @@ export interface SetupTaskInputV1 {
   repoRoot: string;
   manifestPath: string;
   knowledgeBasePath: string;
+  setupCommand: string;
+  setupLogPath: string;
+  setupSucceeded: true;
 }
 
 export type SetupTaskV1 = ResearchTaskBaseV1<"init.explore", "setup", SetupTaskInputV1>;
@@ -283,6 +286,11 @@ export function validateResearchTask(input: unknown): ResearchTaskV1 {
       absolutePath(taskInput.repoRoot, "task.input.repoRoot");
       absolutePath(taskInput.manifestPath, "task.input.manifestPath");
       absolutePath(taskInput.knowledgeBasePath, "task.input.knowledgeBasePath");
+      nonEmptyString(taskInput.setupCommand, "task.input.setupCommand");
+      absolutePath(taskInput.setupLogPath, "task.input.setupLogPath");
+      if (taskInput.setupSucceeded !== true) {
+        throw new Error("task.input.setupSucceeded must be true");
+      }
       break;
     case "propose":
       expectedRole(task.role, "professor", task.kind);

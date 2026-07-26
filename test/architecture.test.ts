@@ -66,6 +66,18 @@ describe("architecture documentation contract", () => {
     }
   });
 
+  it("documents hardware-aware setup evidence and local fidelity", () => {
+    for (const detail of [
+      "setup-log evidence",
+      "local hardware",
+      "repository-supported flags",
+      "effective benchmark command",
+      "reduced-fidelity",
+    ]) {
+      expect(architecture).toContain(detail);
+    }
+  });
+
   it("defines simple bounded roles and separate task prompts", () => {
     for (const detail of [
       "| Setup |",
@@ -98,6 +110,9 @@ describe("architecture documentation contract", () => {
   it("keeps Setup focused on organization and explicit readiness pauses", () => {
     expect(setupRole).toContain("repository cartographer and experiment-contract compiler");
     expect(setupRole).toContain("Confirm that setup produced a usable environment");
+    expect(setupRole).toContain("setup log");
+    expect(setupRole).toContain("local hardware");
+    expect(setupTask).toContain("latest successful setup invocation");
     expect(setupTask).toContain('"status": "needs-user-action"');
     expect(setupTask).toContain("user or another agent");
     expect(setupTask).not.toContain("Optimization levers");

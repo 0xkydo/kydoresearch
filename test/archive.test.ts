@@ -89,6 +89,48 @@ describe("proposal contracts", () => {
     );
   });
 
+  it("requires successful setup evidence in initialization tasks", () => {
+    const repoRoot = path.join(os.tmpdir(), "setup-task-validation");
+    const stateDir = path.join(repoRoot, ".autoresearch");
+    const setupTask = {
+      schemaVersion: 1,
+      taskId: "init-setup",
+      kind: "init.explore",
+      role: "setup",
+      taskPath: path.join(stateDir, "loops", "init", "setup-task.json"),
+      stateDir,
+      resultPath: path.join(stateDir, "loops", "init", "setup-result.json"),
+      input: {
+        repoRoot,
+        manifestPath: path.join(repoRoot, "benchmark.json"),
+        knowledgeBasePath: path.join(stateDir, "knowledge-base.md"),
+        setupCommand: "./setup.sh",
+        setupLogPath: path.join(stateDir, "logs", "setup.log"),
+        setupSucceeded: true,
+      },
+    };
+
+    expect(validateResearchTask(setupTask)).toEqual(setupTask);
+    expect(() =>
+      validateResearchTask({
+        ...setupTask,
+        input: { ...setupTask.input, setupCommand: undefined },
+      }),
+    ).toThrow(/setupCommand/);
+    expect(() =>
+      validateResearchTask({
+        ...setupTask,
+        input: { ...setupTask.input, setupLogPath: "relative\/setup.log" },
+      }),
+    ).toThrow(/setupLogPath.*absolute path/);
+    expect(() =>
+      validateResearchTask({
+        ...setupTask,
+        input: { ...setupTask.input, setupSucceeded: false },
+      }),
+    ).toThrow(/setupSucceeded/);
+  });
+
   it("validates versioned task envelopes and kind-specific immutable input", () => {
     const stateDir = path.join(os.tmpdir(), "task-validation", ".autoresearch");
     const task = makeTask(stateDir, "L001-I1", "baseline");

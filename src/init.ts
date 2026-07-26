@@ -134,6 +134,9 @@ export async function initChallenge(opts: {
       repoRoot,
       manifestPath: path.join(repoRoot, "benchmark.json"),
       knowledgeBasePath: paths.knowledgeBase,
+      setupCommand: manifest.setupCommand,
+      setupLogPath: path.join(paths.logsDir, "setup.log"),
+      setupSucceeded: true,
     },
   };
   validateResearchTask(setupTask);
@@ -154,7 +157,6 @@ export async function initChallenge(opts: {
             input: {
               ...setupTask.input,
               manifest,
-              setupCommand: manifest.setupCommand,
               taskPath: setupTaskPath,
               traceDir: path.join(paths.resolvedAgentsDir, "setup"),
             },
