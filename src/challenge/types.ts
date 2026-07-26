@@ -18,6 +18,13 @@ export interface ScoreResult {
   raw: string; // combined stdout/stderr tail for diagnostics
   exitCode: number;
   timedOut?: boolean;
+  failureKind?:
+    | "command-not-found"
+    | "timeout"
+    | "command-exit"
+    | "score-file-missing"
+    | "score-json-invalid"
+    | "score-value-invalid";
 }
 
 export interface SubmitResult {

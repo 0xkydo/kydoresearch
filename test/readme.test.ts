@@ -55,4 +55,12 @@ describe("README contract", () => {
       expect(readme).toContain(phrase);
     }
   });
+
+  it("documents guided profile review and durable setup feedback", () => {
+    expect(readme).toContain("guided profile review");
+    expect(readme).toContain("Start Research");
+    expect(readme).toContain("Stay Ready");
+    expect(readme).toContain(".autoresearch/loops/init/status.json");
+    expect(readme).toContain("pending, running, retrying, passed, or failed");
+  });
 });

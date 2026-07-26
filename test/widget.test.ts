@@ -58,6 +58,53 @@ describe("autoresearch initialization rendering", () => {
     expect(rendered).toContain("cannot provide a reliable correctness result");
     expect(rendered).toContain("Retry /autoresearch");
   });
+
+  it("renders the durable checklist and final readiness contract", () => {
+    const report = {
+      schemaVersion: 1 as const,
+      challengeName: "mlxfast-challenge",
+      status: "ready-with-limitations" as const,
+      currentStep: "archive" as const,
+      steps: [
+        { id: "validate" as const, label: "Validate challenge", status: "passed" as const },
+        { id: "setup" as const, label: "Install dependencies", status: "passed" as const },
+        { id: "setup-agent" as const, label: "Map hardware", status: "passed" as const },
+        { id: "baseline" as const, label: "Measure baseline", status: "passed" as const },
+        { id: "archive" as const, label: "Archive baseline", status: "passed" as const },
+      ],
+      recentActivity: ["baseline 12 · ready with limitations"],
+      updatedAt: "2026-07-26T12:00:00.000Z",
+      summary: {
+        readiness: "ready-with-limitations" as const,
+        baselineScore: 12,
+        direction: "-" as const,
+        verifyCommand: "./verify.sh --local",
+        benchCommand: "./benchmark.sh --local",
+        localEvaluation: {
+          fidelity: "reduced" as const,
+          decision: "Use the documented local mode.",
+          limitations: ["Official hardware is still required."],
+          officialValidationRequired: true,
+        },
+        submissionReady: true,
+        evidencePath: ".autoresearch/runs/baseline",
+      },
+    };
+    const rendered = renderInitializationLines("mlxfast-challenge", {
+      stage: "archive",
+      status: "succeeded",
+      message: "initialization complete",
+      localEvaluation: report.summary.localEvaluation,
+      recentActivity: report.recentActivity,
+      report,
+    }).join("\n");
+
+    expect(rendered).toContain("Setup checklist");
+    expect(rendered).toContain("✓ Validate challenge");
+    expect(rendered).toContain("△ READY WITH LIMITATIONS · baseline 12");
+    expect(rendered).toContain("verify  ./verify.sh --local");
+    expect(rendered).toContain("bench   ./benchmark.sh --local");
+  });
 });
 
 describe("autoresearch status rendering", () => {

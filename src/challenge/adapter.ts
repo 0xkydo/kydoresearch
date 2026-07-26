@@ -72,6 +72,15 @@ export class YukonCliAdapter implements ChallengeAdapter {
       raw: tail(result),
       exitCode: result.code,
       timedOut: result.timedOut,
+      ...(result.code === 0
+        ? {}
+        : {
+            failureKind: result.timedOut
+              ? ("timeout" as const)
+              : result.code === 127
+                ? ("command-not-found" as const)
+                : ("command-exit" as const),
+          }),
     };
   }
 
@@ -89,6 +98,15 @@ export class YukonCliAdapter implements ChallengeAdapter {
       raw: tail(result),
       exitCode: result.code,
       timedOut: result.timedOut,
+      ...(result.code === 0
+        ? {}
+        : {
+            failureKind: result.timedOut
+              ? ("timeout" as const)
+              : result.code === 127
+                ? ("command-not-found" as const)
+                : ("command-exit" as const),
+          }),
     };
   }
 
@@ -110,6 +128,11 @@ export class YukonCliAdapter implements ChallengeAdapter {
         raw: tail(result),
         exitCode: result.code,
         timedOut: result.timedOut,
+        failureKind: result.timedOut
+          ? "timeout"
+          : result.code === 127
+            ? "command-not-found"
+            : "command-exit",
       };
     }
     if (!fs.existsSync(scoreFile)) {
@@ -117,6 +140,7 @@ export class YukonCliAdapter implements ChallengeAdapter {
         ok: false,
         raw: `${tail(result)}\n[bench succeeded but ${this.manifest.scorePath} was not written]`,
         exitCode: result.code,
+        failureKind: "score-file-missing",
       };
     }
     let parsed: { score?: unknown };
@@ -129,10 +153,16 @@ export class YukonCliAdapter implements ChallengeAdapter {
           error instanceof Error ? error.message : String(error)
         }]`,
         exitCode: 1,
+        failureKind: "score-json-invalid",
       };
     }
     if (typeof parsed.score !== "number" || !Number.isFinite(parsed.score)) {
-      return { ok: false, raw: `${tail(result)}\n[invalid score in ${this.manifest.scorePath}]`, exitCode: 1 };
+      return {
+        ok: false,
+        raw: `${tail(result)}\n[invalid score in ${this.manifest.scorePath}]`,
+        exitCode: 1,
+        failureKind: "score-value-invalid",
+      };
     }
     return { ok: true, score: parsed.score, raw: tail(result), exitCode: 0 };
   }

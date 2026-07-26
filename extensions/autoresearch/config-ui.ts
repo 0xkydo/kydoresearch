@@ -1,8 +1,13 @@
 import type { Theme } from "@earendil-works/pi-coding-agent";
 import { matchesKey, truncateToWidth, type TUI } from "@earendil-works/pi-tui";
 import type { HarnessConfig, ThinkingLevel } from "../../src/config.ts";
+import {
+  ROLE_PROFILE_DESCRIPTORS,
+  type ProfileRole,
+} from "./onboarding.ts";
+import type { RolesConfig } from "../../src/config.ts";
 
-/** Roles editable in the config panel. Setup runs once at init, so it is excluded. */
+/** Every role can be reviewed; onboarding may pass a smaller active-role list. */
 export const CONFIGURABLE_ROLES = [
   "professor",
   "phd",
@@ -10,7 +15,11 @@ export const CONFIGURABLE_ROLES = [
   "advisor",
   "metaharness",
 ] as const;
-export type ConfigurableRole = (typeof CONFIGURABLE_ROLES)[number];
+export type ConfigurableRole = keyof RolesConfig;
+export const ALL_CONFIGURABLE_ROLES: readonly ConfigurableRole[] = [
+  "setup",
+  ...CONFIGURABLE_ROLES,
+];
 
 const THINKING_LEVELS: ThinkingLevel[] = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
@@ -56,6 +65,7 @@ export type ConfigPanelResult =
   | { type: "editModel"; role: ConfigurableRole; nav: NavState }
   | { type: "editSoul"; role: ConfigurableRole; nav: NavState }
   | { type: "editPrompt"; role: ConfigurableRole; nav: NavState }
+  | { type: "editTools"; role: ConfigurableRole; nav: NavState }
   | { type: "editSetting"; field: EditableSettingField; nav: NavState };
 
 interface Row {
@@ -68,6 +78,12 @@ interface Row {
 const LEFT_WIDTH = 14;
 const LABEL_WIDTH = 18;
 
+export interface ConfigPanelOptions {
+  roles?: readonly ConfigurableRole[];
+  title?: string;
+  describeRoles?: boolean;
+}
+
 export class ConfigPanel {
   constructor(
     private readonly config: HarnessConfig,
@@ -75,10 +91,11 @@ export class ConfigPanel {
     private readonly tui: TUI,
     private readonly theme: Theme,
     private readonly done: (result: ConfigPanelResult) => void,
+    private readonly options: ConfigPanelOptions = {},
   ) {}
 
   private leftItems(): string[] {
-    return [...CONFIGURABLE_ROLES, "settings"];
+    return [...(this.options.roles ?? CONFIGURABLE_ROLES), "settings"];
   }
 
   private rows(): Row[] {
@@ -89,6 +106,12 @@ export class ConfigPanel {
       return [
         { id: "model", label: "model", value: spec.model, kind: "edit" },
         { id: "thinking", label: "thinking", value: spec.thinking ?? "off", kind: "cycle" },
+        {
+          id: "tools",
+          label: "tools",
+          value: spec.tools?.join(", ") ?? "Pi defaults",
+          kind: "edit",
+        },
         { id: "soul", label: "soul", value: spec.soul ?? "SOUL.md", kind: "edit" },
         { id: "prompt", label: "prompt", value: spec.prompt ?? `${role}.md`, kind: "edit" },
       ];
@@ -219,6 +242,8 @@ export class ConfigPanel {
         return this.done({ type: "editSoul", role: role!, nav: this.nav });
       case "prompt":
         return this.done({ type: "editPrompt", role: role!, nav: this.nav });
+      case "tools":
+        return this.done({ type: "editTools", role: role!, nav: this.nav });
       default:
         return this.done({ type: "editSetting", field: row.id as EditableSettingField, nav: this.nav });
     }
@@ -231,9 +256,19 @@ export class ConfigPanel {
     const sep = th.fg("borderMuted", "│ ");
     const lines: string[] = [""];
 
-    const title = th.fg("accent", " autoresearch config ");
-    lines.push(truncateToWidth(th.fg("borderMuted", "───") + title + th.fg("borderMuted", "─".repeat(Math.max(0, width - 25))), width));
+    const titleText = this.options.title ?? "autoresearch config";
+    const title = th.fg("accent", ` ${titleText} `);
+    lines.push(truncateToWidth(th.fg("borderMuted", "───") + title + th.fg("borderMuted", "─".repeat(Math.max(0, width - titleText.length - 7))), width));
     lines.push("");
+
+    const selectedItem = leftItems[this.nav.left];
+    if (this.options.describeRoles && selectedItem !== "settings") {
+      const descriptor = ROLE_PROFILE_DESCRIPTORS[selectedItem as ProfileRole];
+      lines.push(truncateToWidth(`  ${th.bold(descriptor.label)} — ${descriptor.purpose}`, width));
+      lines.push(truncateToWidth(`  ${th.fg("muted", descriptor.timing)}`, width));
+      lines.push(truncateToWidth(`  ${th.fg("dim", descriptor.authority)}`, width));
+      lines.push("");
+    }
 
     // Left column: roles, a divider, then settings.
     const leftCells: string[] = [];

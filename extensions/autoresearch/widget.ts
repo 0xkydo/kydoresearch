@@ -2,6 +2,11 @@ import type { Theme, ThemeColor } from "@earendil-works/pi-coding-agent";
 import { truncateToWidth, visibleWidth } from "@earendil-works/pi-tui";
 import type { StatusReport } from "../../src/orchestrator.ts";
 import type { LocalEvaluationV1 } from "../../src/experiments.ts";
+import type {
+  InitializationDiagnosticV1,
+  InitializationReportV1,
+  InitializationStepStatus,
+} from "../../src/initialization.ts";
 import type { OperatorSteeringSnapshot } from "../../src/steering.ts";
 
 export interface StatusRenderOptions {
@@ -11,10 +16,12 @@ export interface StatusRenderOptions {
 }
 
 export type InitializationStage =
+  | "validate"
   | "setup"
   | "setup-agent"
   | "baseline"
   | "baseline-review"
+  | "archive"
   | "ready";
 
 export interface InitializationRenderState {
@@ -26,6 +33,8 @@ export interface InitializationRenderState {
   maxAttempts?: number;
   logPath?: string;
   failure?: string;
+  diagnostic?: InitializationDiagnosticV1;
+  report?: InitializationReportV1;
   localEvaluation?: LocalEvaluationV1;
   recentActivity: string[];
 }
@@ -62,6 +71,18 @@ export function renderInitializationLines(
     `├─ ${initializationStageLabel(state.stage)}`,
     `│  ${oneLine(state.message, 108)}${attempt}`,
   ];
+  if (state.report) {
+    lines.push("├─ Setup checklist");
+    for (const step of state.report.steps) {
+      lines.push(
+        `│  ${initializationStepIcon(step.status)} ${step.label}${
+          step.attempt !== undefined
+            ? ` · attempt ${step.attempt}/${step.maxAttempts ?? "?"}`
+            : ""
+        }`,
+      );
+    }
+  }
   if (state.localEvaluation) {
     lines.push("├─ Local evaluation");
     lines.push(...renderLocalEvaluation(state.localEvaluation));
@@ -71,9 +92,30 @@ export function renderInitializationLines(
     if (state.command) lines.push(`│  command  ${oneLine(state.command, 102)}`);
     if (state.logPath) lines.push(`│  log      ${oneLine(state.logPath, 106)}`);
   }
-  if (state.failure) {
+  if (state.diagnostic) {
+    lines.push("├─ Needs attention");
+    lines.push(`│  ${state.diagnostic.title}`);
+    lines.push(`│  why  ${oneLine(state.diagnostic.reason, 103)}`);
+    lines.push(`│  fix  ${oneLine(state.diagnostic.action, 103)}`);
+    if (state.diagnostic.evidencePath) {
+      lines.push(`│  log  ${oneLine(state.diagnostic.evidencePath, 103)}`);
+    }
+  } else if (state.failure) {
     lines.push("├─ Needs attention");
     lines.push(`│  ${oneLine(state.failure, 108)}`);
+  }
+  if (state.report?.summary) {
+    const summary = state.report.summary;
+    lines.push("├─ Readiness");
+    lines.push(
+      `│  ${
+        summary.readiness === "ready" ? "✓ READY" : "△ READY WITH LIMITATIONS"
+      } · baseline ${summary.baselineScore} · ${
+        summary.direction === "+" ? "higher" : "lower"
+      } wins`,
+    );
+    lines.push(`│  verify  ${oneLine(summary.verifyCommand, 100)}`);
+    lines.push(`│  bench   ${oneLine(summary.benchCommand, 100)}`);
   }
   const activity = state.recentActivity.filter(Boolean).slice(0, 3);
   if (activity.length > 0) {
@@ -514,6 +556,46 @@ export function renderInitializationDashboardLines(
       viewport,
     ),
   ];
+  if (state.report) {
+    lines.push(dashboardRule(theme, "SETUP CHECKLIST", viewport));
+    for (const step of state.report.steps) {
+      const stepTone =
+        step.status === "failed"
+          ? "error"
+          : step.status === "passed"
+            ? "success"
+            : step.status === "pending"
+              ? "muted"
+              : step.status === "retrying" || step.status === "resuming"
+                ? "warning"
+                : "accent";
+      lines.push(
+        dashboardLine(
+          `${styled(
+            theme,
+            stepTone,
+            true,
+            initializationStepIcon(step.status),
+          )} ${styled(
+            theme,
+            stepTone,
+            step.id === state.report.currentStep,
+            oneLine(step.label, Math.max(20, viewport - 12)),
+          )}${
+            step.attempt !== undefined
+              ? styled(
+                  theme,
+                  "muted",
+                  false,
+                  ` · attempt ${step.attempt}/${step.maxAttempts ?? "?"}`,
+                )
+              : ""
+          }`,
+          viewport,
+        ),
+      );
+    }
+  }
   if (state.localEvaluation) {
     const reduced = state.localEvaluation.fidelity === "reduced";
     lines.push(
@@ -572,7 +654,55 @@ export function renderInitializationDashboardLines(
       );
     }
   }
-  if (state.failure) {
+  if (state.diagnostic) {
+    lines.push(dashboardRule(theme, "NEEDS ATTENTION", viewport));
+    lines.push(
+      dashboardLine(
+        styled(
+          theme,
+          "error",
+          true,
+          `! ${oneLine(state.diagnostic.title, Math.max(20, viewport - 5))}`,
+        ),
+        viewport,
+      ),
+    );
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "WHY")}  ${styled(
+          theme,
+          "text",
+          false,
+          oneLine(state.diagnostic.reason, Math.max(20, viewport - 10)),
+        )}`,
+        viewport,
+      ),
+    );
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "FIX")}  ${styled(
+          theme,
+          "warning",
+          true,
+          oneLine(state.diagnostic.action, Math.max(20, viewport - 10)),
+        )}`,
+        viewport,
+      ),
+    );
+    if (state.diagnostic.evidencePath) {
+      lines.push(
+        dashboardLine(
+          `${dashboardLabel(theme, "EVIDENCE")}  ${styled(
+            theme,
+            "muted",
+            false,
+            oneLine(state.diagnostic.evidencePath, Math.max(20, viewport - 15)),
+          )}`,
+          viewport,
+        ),
+      );
+    }
+  } else if (state.failure) {
     lines.push(dashboardRule(theme, "NEEDS ATTENTION", viewport));
     lines.push(
       dashboardLine(
@@ -582,6 +712,45 @@ export function renderInitializationDashboardLines(
           true,
           `! ${oneLine(state.failure, Math.max(20, viewport - 5))}`,
         ),
+        viewport,
+      ),
+    );
+  }
+  if (state.report?.summary) {
+    const summary = state.report.summary;
+    lines.push(dashboardRule(theme, "READINESS", viewport));
+    lines.push(
+      dashboardLine(
+        styled(
+          theme,
+          summary.readiness === "ready" ? "success" : "warning",
+          true,
+          summary.readiness === "ready"
+            ? `✓ READY · baseline ${summary.baselineScore}`
+            : `△ READY WITH LIMITATIONS · baseline ${summary.baselineScore}`,
+        ),
+        viewport,
+      ),
+    );
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "VERIFY")}  ${styled(
+          theme,
+          "text",
+          true,
+          oneLine(summary.verifyCommand, Math.max(20, viewport - 13)),
+        )}`,
+        viewport,
+      ),
+    );
+    lines.push(
+      dashboardLine(
+        `${dashboardLabel(theme, "BENCH")}  ${styled(
+          theme,
+          "text",
+          true,
+          oneLine(summary.benchCommand, Math.max(20, viewport - 12)),
+        )}`,
         viewport,
       ),
     );
@@ -663,6 +832,8 @@ function initializationStatus(
 
 function initializationStageLabel(stage: InitializationStage): string {
   switch (stage) {
+    case "validate":
+      return "Challenge validation";
     case "setup":
       return "Dependency setup";
     case "setup-agent":
@@ -671,8 +842,26 @@ function initializationStageLabel(stage: InitializationStage): string {
       return "Local baseline";
     case "baseline-review":
       return "Baseline recovery decision";
+    case "archive":
+      return "Baseline archive";
     case "ready":
       return "Ready";
+  }
+}
+
+function initializationStepIcon(status: InitializationStepStatus): string {
+  switch (status) {
+    case "pending":
+      return "○";
+    case "running":
+      return "●";
+    case "retrying":
+    case "resuming":
+      return "↻";
+    case "passed":
+      return "✓";
+    case "failed":
+      return "×";
   }
 }
 

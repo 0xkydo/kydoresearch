@@ -11,7 +11,12 @@ import { registerAutoresearchCommand } from "../extensions/autoresearch/commands
 import { createCandidateRun, writeCandidateProposal } from "../src/archive.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
 import { EXPERIMENT_SCHEMA_VERSION } from "../src/experiments.ts";
-import { newLoopState, saveState, STATE_DIR_NAME } from "../src/state.ts";
+import {
+  loadState,
+  newLoopState,
+  saveState,
+  STATE_DIR_NAME,
+} from "../src/state.ts";
 import { loadOperatorSteering } from "../src/steering.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
@@ -450,6 +455,236 @@ describe("/autoresearch config", () => {
       expect(saved.roles.professor.model).toBe("openai/gpt-5.6");
     } finally {
       fs.rmSync(repoRoot, { recursive: true, force: true });
+    }
+  });
+});
+
+describe("/autoresearch guided first run", () => {
+  it("reviews profiles before the setup plan and cancellation runs no setup command", async () => {
+    const challenge = makeTmpChallenge();
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: {
+          handler: (
+            args: string,
+            ctx: ExtensionCommandContext,
+          ) => Promise<void> | void;
+        },
+      ) => {
+        handler = options.handler;
+      },
+      sendMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const custom = vi.fn().mockResolvedValue({ type: "close" });
+    const confirm = vi.fn().mockResolvedValue(false);
+    const ctx = {
+      cwd: challenge.repoRoot,
+      hasUI: true,
+      mode: "interactive",
+      ui: {
+        custom,
+        confirm,
+        notify: vi.fn(),
+        setWidget: vi.fn(),
+        setStatus: vi.fn(),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!("run", ctx);
+      expect(custom).toHaveBeenCalledOnce();
+      expect(custom.mock.invocationCallOrder[0]).toBeLessThan(
+        confirm.mock.invocationCallOrder[0]!,
+      );
+      expect(confirm).toHaveBeenCalledWith(
+        'Initialize autoresearch for "mock-challenge"?',
+        expect.stringMatching(
+          /1\. Validate benchmark\.json.*2\. Install dependencies.*6\. Archive/s,
+        ),
+      );
+      expect(
+        fs.existsSync(path.join(challenge.repoRoot, ".autoresearch-setup-done")),
+      ).toBe(false);
+      expect(
+        fs.existsSync(
+          path.join(challenge.repoRoot, STATE_DIR_NAME, "state.json"),
+        ),
+      ).toBe(false);
+      expect(
+        fs.existsSync(
+          path.join(challenge.repoRoot, STATE_DIR_NAME, "onboarding.json"),
+        ),
+      ).toBe(false);
+      expect(
+        fs.readFileSync(
+          path.join(challenge.repoRoot, ".git", "info", "exclude"),
+          "utf8",
+        ),
+      ).toContain(".autoresearch/");
+    } finally {
+      challenge.cleanup();
+    }
+  });
+
+  it("persists a readiness checklist and can stay ready without starting research", async () => {
+    const challenge = makeTmpChallenge();
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: {
+          handler: (
+            args: string,
+            ctx: ExtensionCommandContext,
+          ) => Promise<void> | void;
+        },
+      ) => {
+        handler = options.handler;
+      },
+      sendMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const notify = vi.fn();
+    const confirm = vi
+      .fn()
+      .mockResolvedValueOnce(true)
+      .mockResolvedValueOnce(false);
+    const ctx = {
+      cwd: challenge.repoRoot,
+      hasUI: true,
+      mode: "interactive",
+      ui: {
+        custom: vi.fn().mockResolvedValue({ type: "close" }),
+        confirm,
+        notify,
+        setWidget: vi.fn(),
+        setStatus: vi.fn(),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!("run", ctx);
+      const stateDir = path.join(challenge.repoRoot, STATE_DIR_NAME);
+      expect(loadState(stateDir)?.phase).toBe("ready");
+      expect(
+        JSON.parse(
+          fs.readFileSync(
+            path.join(stateDir, "loops", "init", "status.json"),
+            "utf8",
+          ),
+        ),
+      ).toMatchObject({
+        status: "ready",
+        steps: [
+          { id: "validate", status: "passed" },
+          { id: "setup", status: "passed" },
+          { id: "setup-agent", status: "passed" },
+          { id: "baseline", status: "passed" },
+          { id: "archive", status: "passed" },
+        ],
+        summary: {
+          baselineScore: 10,
+          verifyCommand: "./verify.sh",
+          benchCommand: "./benchmark.sh",
+        },
+      });
+      expect(confirm).toHaveBeenLastCalledWith(
+        "Setup complete — start research?",
+        expect.stringMatching(/Ready: full local evaluation.*Baseline: 10/s),
+      );
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringMatching(/setup is ready.*run \/autoresearch/s),
+        "info",
+      );
+      expect(notify.mock.calls.flat().join("\n")).not.toContain("init:");
+      expect(
+        fs.existsSync(path.join(stateDir, "onboarding.json")),
+      ).toBe(true);
+    } finally {
+      challenge.cleanup();
+    }
+  });
+
+  it("reviews MLX profiles before reporting missing submission attribution", async () => {
+    const challenge = makeTmpChallenge();
+    const manifestPath = path.join(challenge.repoRoot, "benchmark.json");
+    const manifest = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    manifest.name = "MLX Fast Challenge";
+    fs.writeFileSync(manifestPath, JSON.stringify(manifest, null, 2));
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: {
+          handler: (
+            args: string,
+            ctx: ExtensionCommandContext,
+          ) => Promise<void> | void;
+        },
+      ) => {
+        handler = options.handler;
+      },
+      sendMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const custom = vi.fn().mockResolvedValue({ type: "close" });
+    const notify = vi.fn();
+    const ctx = {
+      cwd: challenge.repoRoot,
+      hasUI: true,
+      mode: "interactive",
+      modelRegistry: {
+        getAvailable: () => [
+          { provider: "openai-codex", id: "gpt-5.6-sol" },
+          { provider: "anthropic", id: "claude-fable-5" },
+          { provider: "anthropic", id: "claude-sonnet-5" },
+        ],
+      },
+      ui: {
+        custom,
+        confirm: vi.fn(),
+        notify,
+        setWidget: vi.fn(),
+        setStatus: vi.fn(),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!("run", ctx);
+      expect(custom).toHaveBeenCalledOnce();
+      expect(notify).toHaveBeenCalledWith(
+        expect.stringMatching(
+          /MLX Fast requires exact model attribution.*submit model.*GPT 5\.6 Sol/is,
+        ),
+        "error",
+      );
+      expect(custom.mock.invocationCallOrder[0]).toBeLessThan(
+        notify.mock.invocationCallOrder[0]!,
+      );
+      const saved = JSON.parse(
+        fs.readFileSync(
+          path.join(challenge.repoRoot, STATE_DIR_NAME, "config.json"),
+          "utf8",
+        ),
+      );
+      expect(saved.runner).toBe("subprocess");
+      expect(
+        fs.existsSync(path.join(challenge.repoRoot, ".autoresearch-setup-done")),
+      ).toBe(false);
+    } finally {
+      challenge.cleanup();
     }
   });
 });
