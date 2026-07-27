@@ -218,6 +218,30 @@
       "category": "phase-local"
     },
     {
+      "id": "ui.agent-monitor",
+      "file": "test/agent-monitor.test.ts",
+      "phases": ["ui"],
+      "segments": ["ui:dashboard"],
+      "tiers": ["phase-contract"],
+      "category": "phase-local"
+    },
+    {
+      "id": "ui.trace-view",
+      "file": "test/trace-view.test.ts",
+      "phases": ["ui"],
+      "segments": ["ui:dashboard"],
+      "tiers": ["phase-contract"],
+      "category": "phase-local"
+    },
+    {
+      "id": "ui.run-overview",
+      "file": "test/run-overview.test.ts",
+      "phases": ["finalization", "ui"],
+      "segments": ["finalization:submission", "ui:dashboard"],
+      "tiers": ["phase-flow"],
+      "category": "adjacent-boundary"
+    },
+    {
       "id": "ui.config",
       "file": "test/config-ui.test.ts",
       "phases": ["ui"],
@@ -230,6 +254,14 @@
       "file": "test/ui/config-interaction.test.ts",
       "phases": ["ui"],
       "segments": ["ui:config"],
+      "tiers": ["phase-flow"],
+      "category": "phase-local"
+    },
+    {
+      "id": "ui.research-editor-interaction",
+      "file": "test/ui/research-editor-interaction.test.ts",
+      "phases": ["ui"],
+      "segments": ["ui:dashboard"],
       "tiers": ["phase-flow"],
       "category": "phase-local"
     },
@@ -268,6 +300,14 @@
     {
       "id": "crosscut.agents-doc",
       "file": "test/agents-doc.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
+      "id": "crosscut.agent-activity",
+      "file": "test/agent-activity.test.ts",
       "phases": [],
       "segments": [],
       "tiers": ["full"],
@@ -402,7 +442,7 @@
       "reason": "Frozen meta-harness evaluator and profile contract"
     },
     {
-      "patterns": ["extensions/autoresearch/widget.ts", "extensions/autoresearch/config-ui.ts", "extensions/autoresearch/commands.ts", "extensions/autoresearch/index.ts", "extensions/autoresearch/inspect.ts", "extensions/autoresearch/*-tool.ts"],
+      "patterns": ["extensions/autoresearch/widget.ts", "extensions/autoresearch/config-ui.ts", "extensions/autoresearch/commands.ts", "extensions/autoresearch/index.ts", "extensions/autoresearch/inspect.ts", "extensions/autoresearch/agent-monitor.ts", "extensions/autoresearch/research-editor.ts", "extensions/autoresearch/trace-view.ts", "extensions/autoresearch/*-tool.ts"],
       "phases": ["ui"],
       "tiers": ["kernel", "phase-contract", "phase-flow", "integration", "pty"],
       "reason": "Interactive Pi control-plane semantics"
@@ -415,7 +455,7 @@
       "escalateToFull": true
     },
     {
-      "patterns": ["src/orchestrator.ts", "src/state.ts", "src/phases.ts", "src/experiments.ts", "src/retry.ts", "src/exec.ts", "src/util.ts", "src/config.ts", "src/agents/types.ts", "src/agents/subprocess.ts", "src/agents/mock.ts", "src/agents/mock-scripts.ts", "src/telemetry.ts"],
+      "patterns": ["src/orchestrator.ts", "src/state.ts", "src/phases.ts", "src/experiments.ts", "src/retry.ts", "src/exec.ts", "src/util.ts", "src/config.ts", "src/agent-activity.ts", "src/agents/types.ts", "src/agents/subprocess.ts", "src/agents/mock.ts", "src/agents/mock-scripts.ts", "src/telemetry.ts"],
       "phases": [],
       "tiers": ["full"],
       "reason": "Shared lifecycle, state, task, retry, runner, or evaluator foundation",

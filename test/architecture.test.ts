@@ -148,6 +148,42 @@ describe("architecture documentation contract", () => {
     expect(profiles).toContain("first-run profile review");
   });
 
+  it("defines the interactive agent-monitor and onboarding UI contract", () => {
+    for (const detail of [
+      "Agent Monitor",
+      "Composer",
+      "Control Deck",
+      "Activity Navigator",
+      "Run Overview",
+      "Overview",
+      "Focus",
+      "ResearchEditor",
+      "`NAV`",
+      "`TYPE`",
+      "**Continue**",
+      "**Cancel**",
+      "restores it exactly once",
+    ]) {
+      expect(architecture).toContain(detail);
+    }
+  });
+
+  it("documents durable invocation usage and incremental trace recovery", () => {
+    for (const detail of [
+      ".autoresearch/agent-invocations.ndjson",
+      "input, output, cache-read, and cache-write tokens",
+      "completeness flag",
+      "PiTraceFileTailer",
+      "complete JSONL lines only",
+      "partial trailing line",
+      "replacement, truncation",
+      "incremental-tail pattern used by OMP",
+      "raw per-invocation `events.ndjson` remains authoritative",
+    ]) {
+      expect(architecture).toContain(detail);
+    }
+  });
+
   it("uses runner-only GitHub contexts at step scope", () => {
     expect(testWorkflow).not.toMatch(
       /^ {4}env:\n(?: {6}.+\n)* {6}[A-Z_]+:.*\$\{\{\s*runner\./m,

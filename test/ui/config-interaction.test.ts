@@ -6,12 +6,13 @@ import {
   applyConfigSetting,
   ConfigPanel,
   type ConfigPanelResult,
+  type NavState,
 } from "../../extensions/autoresearch/config-ui.ts";
 
 describe("config component interaction", () => {
   it("handles arrows, tab, enter, space, escape, and Ctrl-C with stable focus", () => {
     const config = structuredClone(DEFAULT_CONFIG);
-    const nav = { pane: "left" as const, left: 0, right: 0 };
+    const nav: NavState = { pane: "left", left: 0, right: 0 };
     const done = vi.fn<(result: ConfigPanelResult) => void>();
     const requestRender = vi.fn();
     const panel = new ConfigPanel(
@@ -72,6 +73,89 @@ describe("config component interaction", () => {
       ok: false,
       changed: false,
     });
+  });
+
+  it("requires an explicit onboarding action to continue", () => {
+    const done = vi.fn<(result: ConfigPanelResult) => void>();
+    const nav: NavState = { pane: "left", left: 0, right: 0 };
+    const panel = new ConfigPanel(
+      structuredClone(DEFAULT_CONFIG),
+      nav,
+      { requestRender: () => {} } as unknown as TUI,
+      plainTheme(),
+      done,
+      {
+        roles: ["setup"],
+        onboardingActions: true,
+      },
+    );
+
+    panel.handleInput("\t");
+    expect(nav.pane).toBe("right");
+    expect(done).not.toHaveBeenCalled();
+
+    panel.handleInput("\t");
+    expect(nav.pane).toBe("actions");
+    expect(nav.action).toBe(0);
+    expect(done).not.toHaveBeenCalled();
+
+    panel.handleInput("\r");
+    expect(done).toHaveBeenCalledOnce();
+    expect(done).toHaveBeenCalledWith({ type: "continue", nav });
+  });
+
+  it("navigates between onboarding actions and cancels explicitly", () => {
+    const done = vi.fn<(result: ConfigPanelResult) => void>();
+    const nav: NavState = {
+      pane: "actions",
+      left: 0,
+      right: 4,
+      action: 0,
+    };
+    const panel = new ConfigPanel(
+      structuredClone(DEFAULT_CONFIG),
+      nav,
+      { requestRender: () => {} } as unknown as TUI,
+      plainTheme(),
+      done,
+      {
+        roles: ["setup"],
+        onboardingActions: true,
+      },
+    );
+
+    panel.handleInput("\u001b[A");
+    expect(nav.pane).toBe("right");
+    expect(nav.right).toBe(4);
+    panel.handleInput("\u001b[B");
+    expect(nav.pane).toBe("actions");
+
+    panel.handleInput("\u001b[C");
+    expect(nav.action).toBe(1);
+    panel.handleInput("\r");
+    expect(done).toHaveBeenCalledWith({ type: "cancel", nav });
+  });
+
+  it.each([
+    ["Escape", "\u001b"],
+    ["Ctrl-C", "\u0003"],
+  ])("treats %s as onboarding cancellation from any pane", (_name, key) => {
+    const done = vi.fn<(result: ConfigPanelResult) => void>();
+    const nav: NavState = { pane: "right", left: 0, right: 2 };
+    const panel = new ConfigPanel(
+      structuredClone(DEFAULT_CONFIG),
+      nav,
+      { requestRender: () => {} } as unknown as TUI,
+      plainTheme(),
+      done,
+      {
+        roles: ["setup"],
+        onboardingActions: true,
+      },
+    );
+
+    panel.handleInput(key);
+    expect(done).toHaveBeenCalledWith({ type: "cancel", nav });
   });
 });
 

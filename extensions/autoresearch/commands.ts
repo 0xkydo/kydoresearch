@@ -7,9 +7,17 @@ import type {
 import { VERSION as PI_VERSION } from "@earendil-works/pi-coding-agent";
 import * as fs from "node:fs";
 import * as path from "node:path";
+import {
+  loadAgentInvocations,
+  type AgentInvocationSummary,
+} from "../../src/agent-activity.ts";
 import { MockAgentRunner } from "../../src/agents/mock.ts";
 import { PiSubprocessRunner } from "../../src/agents/subprocess.ts";
-import type { AgentRunner } from "../../src/agents/types.ts";
+import type {
+  AgentActivityEvent,
+  AgentActivityObserver,
+  AgentRunner,
+} from "../../src/agents/types.ts";
 import { YukonCliAdapter } from "../../src/challenge/adapter.ts";
 import { detectCli, readManifest } from "../../src/challenge/detect.ts";
 import { loadConfig, saveConfig } from "../../src/config.ts";
@@ -36,7 +44,10 @@ import {
   MetaHarnessController,
 } from "../../src/metaharness.ts";
 import type { OrchestratorEvent, StatusReport } from "../../src/orchestrator.ts";
-import { Orchestrator } from "../../src/orchestrator.ts";
+import {
+  loadRunOverviewStatus,
+  Orchestrator,
+} from "../../src/orchestrator.ts";
 import { loadState, STATE_DIR_NAME, statePaths } from "../../src/state.ts";
 import { Taskboard } from "../../src/taskboard.ts";
 import {
@@ -72,9 +83,27 @@ import {
   type InitializationRenderState,
   type StatusRenderOptions,
 } from "./widget.ts";
+import {
+  AgentMonitorModel,
+  renderAgentMonitor,
+  type MonitorAgent,
+} from "./agent-monitor.ts";
+import {
+  ResearchEditor,
+  type ResearchEditorMode,
+  type ResearchNavigationAction,
+} from "./research-editor.ts";
+import {
+  PiTraceFileTailer,
+  type MonitorTraceEvent,
+} from "./trace-view.ts";
 
 const WIDGET_KEY = "autoresearch";
+const MONITOR_WIDGET_KEY = "autoresearch-agents";
 export const MIN_PI_VERSION = "0.75.0";
+type PiEditorFactory = NonNullable<
+  ReturnType<ExtensionContext["ui"]["getEditorComponent"]>
+>;
 
 export interface AutoresearchCommandOptions {
   /** Injectable for compatibility regression tests; production uses Pi's runtime version. */
@@ -88,6 +117,14 @@ interface RunHandle {
   stateDir: string;
   running: Promise<void>;
   recentActivity: string[];
+  monitor: AgentMonitorModel;
+  traceTailers: Map<string, PiTraceFileTailer>;
+  traceEvents: Map<string, MonitorTraceEvent[]>;
+  monitorTimer?: NodeJS.Timeout;
+  renderTimer?: NodeJS.Timeout;
+  restoreEditor?: () => void;
+  editorMode: ResearchEditorMode;
+  maxVerifyAttempts: number;
 }
 
 /** Registers /autoresearch and its run, steering, inspection, and config controls. */
@@ -117,24 +154,26 @@ export function registerAutoresearchCommand(
     ctx: ExtensionContext,
     plainLines: string[],
     themedLines: (width: number, theme: Theme) => string[],
+    placement: "aboveEditor" | "belowEditor" = "belowEditor",
+    key = WIDGET_KEY,
   ): void {
     if (!ctx.hasUI) return;
-    const placement = { placement: "belowEditor" as const };
+    const widgetPlacement = { placement };
     // Pi added ctx.mode after the custom widget API. Treat an absent mode from
     // older supported Pi releases as interactive; only RPC requires the
     // serializable string-array fallback.
     if (ctx.mode !== "rpc") {
       ctx.ui.setWidget(
-        WIDGET_KEY,
+        key,
         (_tui, theme) => ({
           render: (width: number) => themedLines(width, theme),
           invalidate() {},
         }),
-        placement,
+        widgetPlacement,
       );
       return;
     }
-    ctx.ui.setWidget(WIDGET_KEY, plainLines, placement);
+    ctx.ui.setWidget(key, plainLines, widgetPlacement);
   }
 
   function setResearchDashboard(
@@ -166,6 +205,8 @@ export function registerAutoresearchCommand(
 
   function updateWidget(ctx: ExtensionContext) {
     if (!ctx.hasUI || !active) return;
+    refreshAgentMonitor(active, false);
+    setAgentMonitorWidget(ctx, active.monitor);
     setResearchDashboard(
       ctx,
       active.challengeName,
@@ -174,12 +215,98 @@ export function registerAutoresearchCommand(
         recentActivity: active.recentActivity,
         operatorSteering: operatorSteeringForUi(active.stateDir),
         running: true,
+        navigator: monitorNavigator(active),
       },
     );
   }
 
-  function makeRunner(runnerKind: "mock" | "subprocess", stateDir: string): AgentRunner {
-    return runnerKind === "subprocess" ? new PiSubprocessRunner(loadConfig(stateDir).roles) : new MockAgentRunner();
+  function setAgentMonitorWidget(
+    ctx: ExtensionContext,
+    monitor: AgentMonitorModel,
+  ): void {
+    const height = monitor.mode === "focus" ? 10 : 8;
+    setPersistentWidget(
+      ctx,
+      renderAgentMonitor(monitor, 100, { height }),
+      (width) => renderAgentMonitor(monitor, width, { height }),
+      "aboveEditor",
+      MONITOR_WIDGET_KEY,
+    );
+  }
+
+  function installResearchEditor(
+    ctx: ExtensionContext,
+    handle: RunHandle,
+    render: () => void,
+  ): boolean {
+    if (
+      !ctx.hasUI ||
+      ctx.mode === "rpc" ||
+      typeof ctx.ui.setEditorComponent !== "function" ||
+      typeof ctx.ui.getEditorComponent !== "function"
+    ) {
+      handle.editorMode = "type";
+      handle.monitor.setNavigationActive(false);
+      return false;
+    }
+    const previous = ctx.ui.getEditorComponent();
+    const factory: PiEditorFactory = (tui, theme, keybindings) =>
+      new ResearchEditor(tui, theme, keybindings, {
+        onAction: (action) => {
+          applyResearchNavigation(handle, action);
+          render();
+        },
+        onModeChange: (mode) => {
+          handle.editorMode = mode;
+          handle.monitor.setNavigationActive(mode === "nav");
+          render();
+        },
+      });
+    ctx.ui.setEditorComponent(factory);
+    let restored = false;
+    handle.restoreEditor = () => {
+      if (restored) return;
+      restored = true;
+      if (ctx.ui.getEditorComponent() === factory) {
+        ctx.ui.setEditorComponent(previous);
+      }
+    };
+    return true;
+  }
+
+  function disposeResearchUi(
+    _ctx: ExtensionContext,
+    handle: RunHandle,
+  ): void {
+    if (handle.monitorTimer) clearInterval(handle.monitorTimer);
+    if (handle.renderTimer) clearTimeout(handle.renderTimer);
+    handle.monitorTimer = undefined;
+    handle.renderTimer = undefined;
+    handle.monitor.setNavigationActive(false);
+    handle.restoreEditor?.();
+    handle.restoreEditor = undefined;
+  }
+
+  function makeRunner(
+    runnerKind: "mock" | "subprocess",
+    stateDir: string,
+    observer?: AgentActivityObserver,
+  ): AgentRunner {
+    const runner =
+      runnerKind === "subprocess"
+        ? new PiSubprocessRunner(loadConfig(stateDir).roles)
+        : new MockAgentRunner();
+    if (!observer) return runner;
+    return {
+      run: (task) =>
+        runner.run({
+          ...task,
+          activityObserver: combineActivityObservers(
+            task.activityObserver,
+            observer,
+          ),
+        }),
+    };
   }
 
   function surfaceEvent(ctx: ExtensionContext, ev: OrchestratorEvent) {
@@ -246,26 +373,34 @@ export function registerAutoresearchCommand(
         preflightConfig,
       );
       if (guided && !checkpointMatches) {
-        const initialRoles = activeProfileRoles(preflightConfig) as ConfigurableRole[];
-        await runConfigPanel(
+        const onboardingDraft = structuredClone(preflightConfig);
+        const initialRoles = activeProfileRoles(
+          onboardingDraft,
+        ) as ConfigurableRole[];
+        const profileReview = await runConfigPanel(
           ctx,
-          preflightConfig,
+          onboardingDraft,
           initialRoles,
           "first-run agent profiles",
           true,
+          true,
         );
+        if (profileReview !== "continue") return;
         if (
-          preflightConfig.metaHarness.enabled &&
+          onboardingDraft.metaHarness.enabled &&
           !initialRoles.includes("metaharness")
         ) {
-          await runConfigPanel(
+          const metaReview = await runConfigPanel(
             ctx,
-            preflightConfig,
+            onboardingDraft,
             ["metaharness"],
             "optional meta-harness profile",
             true,
+            true,
           );
+          if (metaReview !== "continue") return;
         }
+        preflightConfig = onboardingDraft;
         excludeAutoresearchStateFromGit(repoRoot);
         fs.mkdirSync(stateDir, { recursive: true });
         saveConfig(stateDir, preflightConfig);
@@ -481,7 +616,12 @@ export function registerAutoresearchCommand(
     if (config.runner === "mock" && config.maxLoops === null) config.maxLoops = 8;
     const state = loadState(stateDir)!;
     const controller = new AbortController();
-    const runner = makeRunner(config.runner, stateDir);
+    let runHandle: RunHandle | undefined;
+    const runner = makeRunner(config.runner, stateDir, (_event) => {
+      if (runHandle && active === runHandle) {
+        scheduleResearchRender(ctx, runHandle, () => updateWidget(ctx));
+      }
+    });
     const ports = {
       runner,
       adapter: new YukonCliAdapter({
@@ -516,15 +656,30 @@ export function registerAutoresearchCommand(
 
     // Install the handle before starting so synchronous phase events are not
     // lost from the live activity feed.
-    const runHandle: RunHandle = {
+    runHandle = {
       controller,
       orchestrator,
       challengeName: state.challenge.name,
       stateDir,
       running: Promise.resolve(),
       recentActivity: readRecentActivity(stateDir),
+      monitor: new AgentMonitorModel(),
+      traceTailers: new Map(),
+      traceEvents: new Map(),
+      editorMode: "nav",
+      maxVerifyAttempts: config.maxVerifyAttempts,
     };
     active = runHandle;
+    refreshAgentMonitor(runHandle, false);
+    runHandle.monitor.setNavigationActive(true);
+    installResearchEditor(ctx, runHandle, () => updateWidget(ctx));
+    if (ctx.hasUI) {
+      setAgentMonitorWidget(ctx, runHandle.monitor);
+      runHandle.monitorTimer = setInterval(() => {
+        if (active === runHandle) updateWidget(ctx);
+      }, 250);
+      runHandle.monitorTimer.unref();
+    }
 
     // Fire-and-forget: the loop must not block pi's turn. Mock agents make no
     // LLM calls so they never contend with the interactive session.
@@ -539,8 +694,11 @@ export function registerAutoresearchCommand(
       })
       .finally(() => {
         if (active === runHandle) {
+          disposeResearchUi(ctx, runHandle);
+          refreshAgentMonitor(runHandle, true);
           const finalReport = orchestrator.status();
           if (ctx.hasUI) {
+            setAgentMonitorWidget(ctx, runHandle.monitor);
             setResearchDashboard(
               ctx,
               state.challenge.name,
@@ -549,6 +707,7 @@ export function registerAutoresearchCommand(
                 recentActivity: runHandle.recentActivity,
                 operatorSteering: operatorSteeringForUi(stateDir),
                 running: false,
+                navigator: monitorNavigator(runHandle),
               },
             );
             ctx.ui.setStatus(
@@ -871,7 +1030,8 @@ export function registerAutoresearchCommand(
     roles: ConfigurableRole[],
     title: string,
     describeRoles: boolean,
-  ): Promise<void> {
+    onboardingActions = false,
+  ): Promise<"close" | "continue" | "cancel"> {
     // Loop: the panel closes for input/select dialogs (they can't stack on
     // ui.custom) and reopens at the same nav position afterwards.
     let nav: NavState = { pane: "left", left: 0, right: 0 };
@@ -882,9 +1042,16 @@ export function registerAutoresearchCommand(
             roles,
             title,
             describeRoles,
+            onboardingActions,
           }),
       );
-      if (result.type === "close") break;
+      if (
+        result.type === "close" ||
+        result.type === "continue" ||
+        result.type === "cancel"
+      ) {
+        return result.type;
+      }
       nav = result.nav;
       switch (result.type) {
         case "editModel": {
@@ -1040,14 +1207,28 @@ export function registerAutoresearchCommand(
             : "autoresearch: setup ready — /autoresearch to start",
         );
       } else if (state && ctx.hasUI) {
+        const restoredStatus = statusFromState(stateDir, state);
+        const restoredMonitor = new AgentMonitorModel(
+          loadMonitorAgents(
+            stateDir,
+            state.loop,
+            loadConfig(stateDir).maxVerifyAttempts,
+            new Map(),
+            new Map(),
+            true,
+            restoredStatus.ideas,
+          ),
+        );
+        setAgentMonitorWidget(ctx, restoredMonitor);
         setResearchDashboard(
           ctx,
           state.challenge.name,
-          statusFromState(stateDir, state),
+          restoredStatus,
           {
             recentActivity: readRecentActivity(stateDir),
             operatorSteering: operatorSteeringForUi(stateDir),
             running: false,
+            navigator: navigatorFromMonitor(restoredMonitor, "nav"),
           },
         );
         ctx.ui.setStatus(
@@ -1059,6 +1240,234 @@ export function registerAutoresearchCommand(
       }
     },
   };
+}
+
+function refreshAgentMonitor(
+  handle: RunHandle,
+  markRunningInterrupted: boolean,
+): void {
+  const report = handle.orchestrator.status();
+  handle.monitor.updateAgents(
+    loadMonitorAgents(
+      handle.stateDir,
+      report.loop,
+      handle.maxVerifyAttempts,
+      handle.traceTailers,
+      handle.traceEvents,
+      markRunningInterrupted,
+      report.ideas,
+    ),
+  );
+}
+
+function loadMonitorAgents(
+  stateDir: string,
+  currentLoop: number,
+  maxVerifyAttempts: number,
+  traceTailers: Map<string, PiTraceFileTailer>,
+  traceEvents: Map<string, MonitorTraceEvent[]>,
+  markRunningInterrupted: boolean,
+  ideas: StatusReport["ideas"] = [],
+): MonitorAgent[] {
+  let summaries: AgentInvocationSummary[];
+  try {
+    summaries = loadAgentInvocations(stateDir, {
+      markRunningInterrupted,
+    });
+  } catch {
+    summaries = [];
+  }
+  const current = summaries.filter(
+    (summary) =>
+      summary.loop === currentLoop || summary.status === "running",
+  );
+  const visible =
+    current.length > 0
+      ? current
+      : [...summaries]
+          .sort((left, right) => right.updatedAt.localeCompare(left.updatedAt))
+          .slice(0, 20);
+
+  return visible.map((summary) => {
+    let trace = traceEvents.get(summary.invocationId) ?? [];
+    if (summary.tracePath) {
+      let tailer = traceTailers.get(summary.invocationId);
+      if (!tailer || tailer.filePath !== summary.tracePath) {
+        tailer = new PiTraceFileTailer(
+          summary.tracePath,
+          summary.invocationId,
+        );
+        traceTailers.set(summary.invocationId, tailer);
+        trace = [];
+      }
+      try {
+        const poll = tailer.poll();
+        trace = poll.reloaded
+          ? [...poll.events]
+          : [...trace, ...poll.events];
+      } catch {
+        // Trace display is advisory; the durable raw trace remains available.
+      }
+    }
+    const boundedTrace = trace.slice(-2_000);
+    traceEvents.set(summary.invocationId, boundedTrace);
+    const agent = monitorAgentFromSummary(
+      summary,
+      boundedTrace,
+      maxVerifyAttempts,
+    );
+    const idea = summary.candidateId
+      ? ideas.find((candidate) => candidate.id === summary.candidateId)
+      : undefined;
+    if (!idea) return agent;
+    return {
+      ...agent,
+      stage: idea.status,
+      ...(idea.status === "implementing" || idea.status === "verifying"
+        ? {
+            attempt: idea.verifyAttempts + 1,
+            maxAttempts: idea.maxVerifyAttempts ?? maxVerifyAttempts,
+          }
+        : {}),
+    };
+  });
+}
+
+function monitorAgentFromSummary(
+  summary: AgentInvocationSummary,
+  trace: readonly MonitorTraceEvent[],
+  maxAttempts: number,
+): MonitorAgent {
+  const startedAt = Date.parse(summary.startedAt);
+  const endedAt = Date.parse(summary.completedAt ?? summary.updatedAt);
+  const durationMs =
+    Number.isFinite(startedAt) && Number.isFinite(endedAt)
+      ? Math.max(0, endedAt - startedAt)
+      : undefined;
+  return {
+    invocationId: summary.invocationId,
+    role: summary.role,
+    status: summary.status,
+    ...(summary.activity ? { activity: summary.activity } : {}),
+    stage: summary.kind,
+    ...(summary.candidateId ? { candidateId: summary.candidateId } : {}),
+    invocationGroup:
+      summary.candidateId ?? `${summary.role}:${summary.kind}`,
+    ...(summary.attempt === undefined ? {} : { attempt: summary.attempt }),
+    ...(summary.attempt === undefined ? {} : { maxAttempts }),
+    startedAt: summary.startedAt,
+    updatedAt: summary.updatedAt,
+    ...(summary.usage.tokens
+      ? {
+          tokens: summary.usage.tokens.total,
+          tokensComplete: summary.usage.tokens.complete,
+        }
+      : {}),
+    ...(durationMs === undefined ? {} : { durationMs }),
+    trace,
+  };
+}
+
+function monitorNavigator(
+  handle: RunHandle,
+): NonNullable<StatusRenderOptions["navigator"]> | undefined {
+  return navigatorFromMonitor(handle.monitor, handle.editorMode);
+}
+
+function navigatorFromMonitor(
+  monitor: AgentMonitorModel,
+  inputMode: ResearchEditorMode,
+): NonNullable<StatusRenderOptions["navigator"]> | undefined {
+  const selected = monitor.selectedAgent;
+  if (!selected) return undefined;
+  const agents = monitor.orderedAgents;
+  const index = agents.findIndex(
+    (agent) => agent.invocationId === selected.invocationId,
+  );
+  const label = selected.candidateId
+    ? `${selected.role} ${selected.candidateId}`
+    : `${selected.role} ${compactInvocationId(selected.invocationId)}`;
+  return {
+    position: Math.max(1, index + 1),
+    total: agents.length,
+    label,
+    state: selected.stage ?? selected.status,
+    monitorMode: monitor.mode,
+    inputMode,
+  };
+}
+
+function applyResearchNavigation(
+  handle: RunHandle,
+  action: ResearchNavigationAction,
+): void {
+  switch (action.type) {
+    case "select":
+      handle.monitor.selectBy(action.direction);
+      break;
+    case "focus":
+      handle.monitor.enterFocus();
+      break;
+    case "overview":
+      if (handle.monitor.mode === "focus") {
+        handle.monitor.exitFocus();
+      } else {
+        handle.monitor.selectFirstLive();
+      }
+      break;
+    case "switchInvocation":
+      handle.monitor.switchInvocation(action.direction);
+      break;
+    case "scroll":
+      if (handle.monitor.mode === "focus") {
+        handle.monitor.pageTrace(action.direction, 6);
+      } else {
+        handle.monitor.selectBy(action.direction * 6);
+      }
+      break;
+    case "selectBoundary":
+      if (handle.monitor.mode === "focus") {
+        if (action.boundary === "first") handle.monitor.traceHome();
+        else handle.monitor.traceEnd();
+      } else if (action.boundary === "first") {
+        handle.monitor.selectFirst();
+      } else {
+        handle.monitor.selectLast();
+      }
+      break;
+  }
+}
+
+function scheduleResearchRender(
+  _ctx: ExtensionContext,
+  handle: RunHandle,
+  render: () => void,
+): void {
+  if (handle.renderTimer) return;
+  handle.renderTimer = setTimeout(() => {
+    handle.renderTimer = undefined;
+    render();
+  }, 100);
+  handle.renderTimer.unref();
+}
+
+function combineActivityObservers(
+  first: AgentActivityObserver | undefined,
+  second: AgentActivityObserver,
+): AgentActivityObserver {
+  return (event: AgentActivityEvent) => {
+    try {
+      first?.(event);
+    } finally {
+      second(event);
+    }
+  };
+}
+
+function compactInvocationId(invocationId: string): string {
+  return invocationId.length <= 18
+    ? invocationId
+    : `${invocationId.slice(0, 15)}…`;
 }
 
 function statusFromState(
@@ -1088,6 +1497,7 @@ function statusFromState(
     })),
     taskboardOpen: new Taskboard(stateDir).openCount(),
     lastAdvisorNotes: state.history[state.history.length - 1]?.advisorNotes ?? [],
+    runOverview: loadRunOverviewStatus(stateDir, state.loop),
     ...(state.challenge.localEvaluation
       ? { localEvaluation: state.challenge.localEvaluation }
       : {}),

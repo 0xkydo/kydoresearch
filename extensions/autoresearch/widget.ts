@@ -13,6 +13,14 @@ export interface StatusRenderOptions {
   recentActivity?: string[];
   operatorSteering?: OperatorSteeringSnapshot | null;
   running?: boolean;
+  navigator?: {
+    position: number;
+    total: number;
+    label: string;
+    state: string;
+    monitorMode: "overview" | "focus";
+    inputMode: "nav" | "type";
+  };
 }
 
 export interface StatusSemanticModel {
@@ -199,6 +207,15 @@ export function renderStatusLines(
     `│  score  ${view.localScore} local · ${view.submittedScore} submitted · ${view.directionLabel}`,
     `│  ${churchLine}`,
   ];
+  if (report.runOverview) {
+    const tokenPrefix = report.runOverview.tokenUsageComplete ? "" : "≥";
+    lines.push(
+      `│  run  ${report.runOverview.experimentsRun} experiments · ` +
+        `${report.runOverview.remoteAccepted} remote accepted · ` +
+        `${report.runOverview.otherSubmissions} others · ` +
+        `${tokenPrefix}${formatCompactNumber(report.runOverview.loopTokens)} loop tokens`,
+    );
+  }
   if (report.localEvaluation) {
     lines.push("├─ Local evaluation");
     lines.push(...renderLocalEvaluation(report.localEvaluation));
@@ -277,288 +294,67 @@ export function renderStatusDashboardLines(
 ): string[] {
   const view = buildStatusSemanticModel(challengeName, report);
   const viewport = Math.max(32, width);
-  const lines: string[] = [
-    dashboardRule(theme, `AUTORESEARCH  ${view.challengeName}`, viewport, true),
-  ];
   const running = options.running === true;
   const runLabel =
     report.phase === "done"
-      ? styled(theme, "success", true, "✓ COMPLETE")
+      ? "COMPLETE"
       : report.phase === "paused"
-        ? styled(theme, "warning", true, "! PAUSED")
+        ? "PAUSED"
         : running
-          ? styled(theme, "accent", true, "● LIVE")
-          : styled(theme, "warning", true, "○ IDLE");
+          ? "LIVE"
+          : "IDLE";
+  const title =
+    `AUTORESEARCH ${view.challengeName} · ${runLabel} · LOOP ${report.loop} · ` +
+    view.phaseLabel.toUpperCase();
+  const lines: string[] = [dashboardRule(theme, title, viewport, true)];
+
+  const navigator = options.navigator;
+  const navigatorText = navigator
+    ? `${navigator.position}/${navigator.total}  ▸ ${navigator.label} · ${navigator.state} · ` +
+      `${navigator.monitorMode.toUpperCase()} · ${navigator.inputMode.toUpperCase()}`
+    : "No agent activity yet";
   lines.push(
     dashboardLine(
-      `${runLabel}  ${styled(theme, "text", true, `LOOP ${report.loop}`)}  ` +
-        `${styled(theme, phaseColor(report.phase), true, view.phaseLabel.toUpperCase())}`,
-      viewport,
-    ),
-  );
-  lines.push(
-    dashboardLine(
-      `${dashboardLabel(theme, "OBJECTIVE")}  ` +
-        `${styled(theme, "accent", true, view.localScore)} local  ` +
-        `${styled(theme, "success", true, view.submittedScore)} submitted  ` +
-        `${styled(theme, "muted", false, view.directionLabel)}`,
+      `${dashboardLabel(theme, "AGENT")}  ${styled(
+        theme,
+        navigator ? "text" : "muted",
+        navigator !== undefined,
+        navigatorText,
+      )}`,
       viewport,
     ),
   );
 
-  const evaluation = report.localEvaluation
-    ? report.localEvaluation.fidelity === "full"
-      ? styled(theme, "success", true, "✓ FULL LOCAL")
-      : styled(theme, "warning", true, "△ REDUCED LOCAL")
-    : styled(theme, "muted", false, "evaluation unknown");
-  const plateau =
-    report.churchTriggerThreshold > 0
-      ? `${report.dryLoopStreak}/${report.churchTriggerThreshold} plateau`
-      : "church off";
-  const recovery = report.recovery
-    ? styled(
-        theme,
-        "error",
-        true,
-        `recovery ${report.recovery.consecutiveFailures}×`,
-      )
-    : styled(theme, "success", false, "recovery clear");
+  const overview = report.runOverview;
+  const tokenPrefix = overview && !overview.tokenUsageComplete ? "≥" : "";
+  const tokens = overview
+    ? `${tokenPrefix}${formatCompactNumber(overview.loopTokens)}`
+    : "—";
   lines.push(
     dashboardLine(
-      `${dashboardLabel(theme, "HEALTH")}  ${evaluation}  ·  ` +
-        `${styled(
-          theme,
-          report.dryLoopStreak > 0 ? "warning" : "muted",
-          report.dryLoopStreak > 0,
-          plateau,
-        )}  ·  advisor ${report.lastAdvisorNotes.length}  ·  tasks ${report.taskboardOpen}  ·  ${recovery}`,
+      `${dashboardLabel(theme, "RUN")}  ` +
+        `Experiments ${overview?.experimentsRun ?? "—"} · ` +
+        `Remote accepted ${overview?.remoteAccepted ?? "—"} · ` +
+        `Others ${overview?.otherSubmissions ?? "—"} · ` +
+        `Loop tokens ${tokens}`,
       viewport,
     ),
   );
 
-  const steering = options.operatorSteering
-    ? styled(
-        theme,
-        "accent",
-        true,
-        oneLine(options.operatorSteering.text, Math.max(24, viewport - 17)),
-      )
-    : styled(
+  const controls = running
+    ? "↑↓ agent · Enter focus · Esc overview · Tab composer · /autoresearch stop"
+    : "Run /autoresearch to resume · /autoresearch inspect <candidate>";
+  lines.push(
+    dashboardLine(
+      `${dashboardLabel(theme, "KEYS")}  ${styled(
         theme,
         "muted",
         false,
-        "No operator direction · /autoresearch steer <direction>",
-      );
-  lines.push(
-    dashboardLine(`${dashboardLabel(theme, "DIRECTION")}  ${steering}`, viewport),
-  );
-
-  lines.push(
-    dashboardRule(
-      theme,
-      `CANDIDATES  ${renderCandidateCounts(report)}`,
+        controls,
+      )}`,
       viewport,
     ),
   );
-  if (report.ideas.length === 0) {
-    lines.push(
-      dashboardLine(
-        styled(
-          theme,
-          "muted",
-          false,
-          report.phase === "loop.proposing"
-            ? "Professor is forming the next portfolio."
-            : "No candidate work is currently materialized.",
-        ),
-        viewport,
-      ),
-    );
-  } else {
-    for (const idea of report.ideas) {
-      const attempt =
-        idea.status === "implementing" || idea.status === "verifying"
-          ? ` ${idea.verifyAttempts + 1}/${idea.maxVerifyAttempts ?? "?"}`
-          : "";
-      const score =
-        idea.localScore !== undefined
-          ? `  score ${idea.localScore}${scoreDelta(
-              idea.localScore,
-              idea.comparisonScore,
-              report.scoreDirection,
-            )}`
-          : "";
-      const lineage =
-        viewport >= 96 && idea.parentCandidateId
-          ? `  ← ${idea.parentCandidateId}`
-          : "";
-      const titleBudget = Math.max(
-        18,
-        viewport - visibleWidth(`${idea.id} ${idea.status}${attempt}${score}${lineage}`) - 10,
-      );
-      const status = `${candidateIcon(idea.status)} ${candidateStatusLabel(idea.status)}${attempt}`;
-      lines.push(
-        dashboardLine(
-          `${styled(theme, candidateColor(idea.status), true, status)}  ` +
-            `${styled(theme, "text", true, idea.id)}  ` +
-            `${styled(
-              theme,
-              isActiveCandidate(idea.status) ? "text" : "muted",
-              isActiveCandidate(idea.status),
-              oneLine(idea.title, titleBudget),
-            )}` +
-            `${styled(
-              theme,
-              idea.localScore !== undefined ? scoreColor(
-                idea.localScore,
-                idea.comparisonScore,
-                report.scoreDirection,
-              ) : "muted",
-              idea.status === "done-improved",
-              score + lineage,
-            )}`,
-          viewport,
-        ),
-      );
-      if (idea.lastVerifyError) {
-        lines.push(
-          dashboardLine(
-            `  ${styled(
-              theme,
-              "error",
-              true,
-              `! ${oneLine(idea.lastVerifyError, Math.max(20, viewport - 7))}`,
-            )}`,
-            viewport,
-          ),
-        );
-      }
-    }
-  }
-  const liveIdea = report.ideas.find((idea) => isActiveCandidate(idea.status));
-  if (liveIdea) {
-    const evidencePath =
-      liveIdea.status === "implementing"
-        ? `.autoresearch/runs/${liveIdea.id}/agent/`
-        : `.autoresearch/runs/${liveIdea.id}/logs/${
-            liveIdea.status === "verifying" ? "verify.log" : "benchmark.log"
-          }`;
-    lines.push(
-      dashboardLine(
-        `${dashboardLabel(theme, "EVIDENCE")}  ${styled(
-          theme,
-          "muted",
-          false,
-          evidencePath,
-        )}`,
-        viewport,
-      ),
-    );
-  }
-
-  if (report.recovery) {
-    lines.push(
-      dashboardLine(
-        `${dashboardLabel(theme, "RECOVERY")}  ` +
-          `${styled(
-            theme,
-            "error",
-            true,
-            `${report.recovery.scope} · ${oneLine(
-              report.recovery.message,
-              Math.max(20, viewport - 30),
-            )}`,
-          )}`,
-        viewport,
-      ),
-    );
-  }
-  const advisor = report.lastAdvisorNotes.at(-1);
-  if (advisor) {
-    lines.push(
-      dashboardLine(
-        `${dashboardLabel(theme, "ADVISOR")}  ${styled(
-          theme,
-          advisor.toLowerCase().includes("[blocker]") ? "error" : "warning",
-          true,
-          oneLine(advisor, Math.max(20, viewport - 15)),
-        )}`,
-        viewport,
-      ),
-    );
-  }
-  if (report.metaHarness) {
-    const activeCandidate = report.metaHarness.activeCandidateId
-      ? ` · evaluating ${report.metaHarness.activeCandidateId}`
-      : "";
-    lines.push(
-      dashboardLine(
-        `${dashboardLabel(theme, "META")}  ${styled(
-          theme,
-          "accent",
-          true,
-          `${report.metaHarness.phase} · gen ${report.metaHarness.generation} · champion ${report.metaHarness.championCandidateId}${activeCandidate}`,
-        )}`,
-        viewport,
-      ),
-    );
-  }
-
-  lines.push(dashboardRule(theme, "LIVE ACTIVITY", viewport));
-  const activity = (options.recentActivity ?? []).filter(Boolean).slice(0, 3);
-  if (activity.length === 0) {
-    lines.push(
-      dashboardLine(styled(theme, "muted", false, "· Waiting for the next durable event."), viewport),
-    );
-  } else {
-    for (const entry of activity) {
-      lines.push(
-        dashboardLine(
-          `${styled(theme, "accent", true, "·")} ${styled(
-            theme,
-            "muted",
-            false,
-            oneLine(entry, Math.max(20, viewport - 5)),
-          )}`,
-          viewport,
-        ),
-      );
-    }
-  }
-
-  lines.push(dashboardRule(theme, "CONTROLS", viewport));
-  if (viewport >= 92) {
-    lines.push(
-      dashboardLine(
-        `${dashboardAction(theme, "STEER", "/autoresearch steer <direction>")}   ` +
-          `${dashboardAction(theme, "INSPECT", "/autoresearch inspect <candidate>")}   ` +
-          `${dashboardAction(
-            theme,
-            running ? "PAUSE" : "RESUME",
-            running ? "/autoresearch stop" : "/autoresearch",
-          )}`,
-        viewport,
-      ),
-    );
-  } else {
-    lines.push(
-      dashboardLine(
-        dashboardAction(theme, "STEER", "/autoresearch steer <direction>"),
-        viewport,
-      ),
-    );
-    lines.push(
-      dashboardLine(
-        `${dashboardAction(theme, "INSPECT", "/autoresearch inspect <candidate>")}   ` +
-          `${dashboardAction(
-            theme,
-            running ? "PAUSE" : "RESUME",
-            running ? "/autoresearch stop" : "/autoresearch",
-          )}`,
-        viewport,
-      ),
-    );
-  }
   lines.push(
     truncateToWidth(
       theme.fg("borderMuted", `╰${"─".repeat(Math.max(0, viewport - 1))}`),
@@ -977,6 +773,14 @@ function formatNumber(value: number): string {
   return Number.isInteger(value) ? String(value) : String(Number(value.toPrecision(6)));
 }
 
+function formatCompactNumber(value: number): string {
+  if (value < 1_000) return formatNumber(value);
+  if (value < 1_000_000) {
+    return `${formatNumber(value / 1_000)}k`;
+  }
+  return `${formatNumber(value / 1_000_000)}m`;
+}
+
 function oneLine(value: string, maxLength: number): string {
   const compact = value
     .replace(/\u001B(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001B\\))/g, "")
@@ -993,7 +797,7 @@ function dashboardRule(
   top = false,
 ): string {
   const start = theme.fg("borderMuted", top ? "╭─ " : "├─ ");
-  const label = theme.fg(top ? "accent" : "muted", theme.bold(` ${title} `));
+  const label = theme.fg(top ? "accent" : "muted", theme.bold(`${title} `));
   const tailWidth = Math.max(0, width - visibleWidth(start + label));
   return truncateToWidth(
     start + label + theme.fg("borderMuted", "─".repeat(tailWidth)),
@@ -1002,7 +806,7 @@ function dashboardRule(
 }
 
 function dashboardLine(content: string, width: number): string {
-  return truncateToWidth(`│  ${content}`, width);
+  return truncateToWidth(`│ ${content}`, width);
 }
 
 function dashboardLabel(theme: Theme, text: string): string {

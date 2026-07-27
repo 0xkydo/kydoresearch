@@ -42,20 +42,25 @@ describe("UI semantic contract matrix", () => {
     );
 
     for (const fact of [
-      semantic.challengeName,
-      semantic.phaseLabel.toUpperCase(),
       semantic.localScore,
       semantic.submittedScore,
       semantic.directionLabel,
       ...semantic.candidateIds,
     ]) {
       expect(plain, `plain projection missing ${fact}`).toContain(fact);
+    }
+    for (const fact of [
+      semantic.challengeName,
+      semantic.phaseLabel.toUpperCase(),
+    ]) {
+      expect(plain, `plain projection missing ${fact}`).toContain(fact);
       expect(styled, `styled projection missing ${fact}`).toContain(fact);
     }
     expect(plain).toContain("/autoresearch steer <direction>");
-    expect(styled).toContain("/autoresearch steer <direction>");
     expect(plain).toContain("/autoresearch inspect <candidate>");
     expect(styled).toContain("/autoresearch inspect <candidate>");
+    expect(styled).not.toContain("CANDIDATES  ");
+    expect(styled).not.toContain("LIVE ACTIVITY");
   });
 
   it("sanitizes Unicode, multiline, long-path, ANSI, OSC, and control-character input", () => {
@@ -69,10 +74,13 @@ describe("UI semantic contract matrix", () => {
         lastVerifyError: "/very/long/".repeat(30) + "\u0001failure",
       }],
     });
-    const plain = renderStatusLines("\u001b]0;owned\u0007 demo", report).join("\n");
+    const challengeName =
+      "\u001b]0;owned\u0007 multiline\nタイトル \u001b[31mred\u001b[0m " +
+      "\u001b]52;c;secret\u0007 \u0000";
+    const plain = renderStatusLines(challengeName, report).join("\n");
     const styled = stripTerminalStyles(
       renderStatusDashboardLines(
-        "\u001b]0;owned\u0007 demo",
+        challengeName,
         report,
         80,
         testTheme(),

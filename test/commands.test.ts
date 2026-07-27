@@ -202,6 +202,87 @@ describe("autoresearch persistent dashboard", () => {
       fs.rmSync(repoRoot, { recursive: true, force: true });
     }
   });
+
+  it("installs the Agent Monitor above the Composer and restores the prior editor", async () => {
+    const challenge = makeTmpChallenge();
+    const stateDir = path.join(challenge.repoRoot, STATE_DIR_NAME);
+    const state = newLoopState({
+      name: "monitor-challenge",
+      cli: "./bin/mockchal",
+      direction: "-",
+      setupCommand: "./setup.sh",
+      verifyCommand: "./verify.sh",
+      benchCommand: "./benchmark.sh",
+      submitNeedsModel: false,
+      editablePaths: ["src"],
+      scorePath: "score.json",
+    });
+    state.phase = "ready";
+    saveState(stateDir, state);
+    fs.writeFileSync(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({ version: 1, runner: "mock", maxLoops: 0 }),
+    );
+
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: {
+          handler: (
+            args: string,
+            ctx: ExtensionCommandContext,
+          ) => Promise<void> | void;
+        },
+      ) => {
+        handler = options.handler;
+      },
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const setWidget = vi.fn();
+    const previousEditor = vi.fn();
+    let currentEditor: unknown = previousEditor;
+    const setEditorComponent = vi.fn((factory: unknown) => {
+      currentEditor = factory;
+    });
+    const ctx = {
+      cwd: challenge.repoRoot,
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        notify: vi.fn(),
+        setWidget,
+        setStatus: vi.fn(),
+        getEditorComponent: vi.fn(() => currentEditor),
+        setEditorComponent,
+      },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!("run", ctx);
+      await vi.waitFor(() => {
+        expect(setEditorComponent).toHaveBeenLastCalledWith(previousEditor);
+      });
+      expect(setEditorComponent.mock.calls[0]?.[0]).toEqual(
+        expect.any(Function),
+      );
+      expect(setWidget).toHaveBeenCalledWith(
+        "autoresearch-agents",
+        expect.any(Function),
+        { placement: "aboveEditor" },
+      );
+      expect(setWidget).toHaveBeenCalledWith(
+        "autoresearch",
+        expect.any(Function),
+        { placement: "belowEditor" },
+      );
+    } finally {
+      challenge.cleanup();
+    }
+  });
 });
 
 describe("/autoresearch telemetry", () => {
@@ -458,6 +539,54 @@ describe("/autoresearch config", () => {
 });
 
 describe("/autoresearch guided first run", () => {
+  it("requires Continue and leaves no onboarding state after Cancel", async () => {
+    const challenge = makeTmpChallenge();
+    let handler:
+      | ((args: string, ctx: ExtensionCommandContext) => Promise<void> | void)
+      | undefined;
+    const pi = {
+      registerCommand: (
+        _name: string,
+        options: {
+          handler: (
+            args: string,
+            ctx: ExtensionCommandContext,
+          ) => Promise<void> | void;
+        },
+      ) => {
+        handler = options.handler;
+      },
+      sendMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+    registerAutoresearchCommand(pi);
+
+    const confirm = vi.fn();
+    const ctx = {
+      cwd: challenge.repoRoot,
+      hasUI: true,
+      mode: "tui",
+      ui: {
+        custom: vi.fn().mockResolvedValue({
+          type: "cancel",
+          nav: { pane: "actions", left: 0, right: 0, action: 1 },
+        }),
+        confirm,
+        notify: vi.fn(),
+      },
+    } as unknown as ExtensionCommandContext;
+
+    try {
+      await handler!("run", ctx);
+      const stateDir = path.join(challenge.repoRoot, STATE_DIR_NAME);
+      expect(confirm).not.toHaveBeenCalled();
+      expect(fs.existsSync(path.join(stateDir, "config.json"))).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, "onboarding.json"))).toBe(false);
+      expect(fs.existsSync(path.join(stateDir, "state.json"))).toBe(false);
+    } finally {
+      challenge.cleanup();
+    }
+  });
+
   it("reviews profiles before the setup plan and cancellation runs no setup command", async () => {
     const challenge = makeTmpChallenge();
     let handler:
@@ -479,7 +608,10 @@ describe("/autoresearch guided first run", () => {
     } as unknown as ExtensionAPI;
     registerAutoresearchCommand(pi);
 
-    const custom = vi.fn().mockResolvedValue({ type: "close" });
+    const custom = vi.fn().mockResolvedValue({
+      type: "continue",
+      nav: { pane: "actions", left: 0, right: 0, action: 0 },
+    });
     const confirm = vi.fn().mockResolvedValue(false);
     const ctx = {
       cwd: challenge.repoRoot,
@@ -561,7 +693,10 @@ describe("/autoresearch guided first run", () => {
       hasUI: true,
       mode: "interactive",
       ui: {
-        custom: vi.fn().mockResolvedValue({ type: "close" }),
+        custom: vi.fn().mockResolvedValue({
+          type: "continue",
+          nav: { pane: "actions", left: 0, right: 0, action: 0 },
+        }),
         confirm,
         notify,
         setWidget: vi.fn(),
@@ -637,7 +772,10 @@ describe("/autoresearch guided first run", () => {
     } as unknown as ExtensionAPI;
     registerAutoresearchCommand(pi);
 
-    const custom = vi.fn().mockResolvedValue({ type: "close" });
+    const custom = vi.fn().mockResolvedValue({
+      type: "continue",
+      nav: { pane: "actions", left: 0, right: 0, action: 0 },
+    });
     const notify = vi.fn();
     const ctx = {
       cwd: challenge.repoRoot,
