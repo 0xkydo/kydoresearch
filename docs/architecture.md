@@ -18,7 +18,7 @@ challenge verifier remains outside both editable surfaces.
 ```text
 interactive Pi process
   └─ extensions/autoresearch/
-       ├─ commands, tools, config UI, widget
+       ├─ commands, tools, config UI, Agent Monitor, ResearchEditor
        ├─ agents/<role>/SOUL.md      stable role behavior
        └─ prompts/<role>.md          dynamic task-prompt compatibility layer
             │
@@ -53,13 +53,16 @@ extensions/autoresearch/
   index.ts              extension entry point and session-start restoration
   commands.ts           /autoresearch run|status|steer|inspect|telemetry|config|stop
   config-ui.ts          role and harness configuration
+  agent-monitor.ts      pure Overview/Focus selection and compact rendering
+  trace-view.ts         semantic Pi events and incremental JSONL trace tailing
+  research-editor.ts    NAV/TYPE keyboard arbitration over Pi's normal editor
   onboarding.ts         active-role descriptions, validation, setup preview,
                         and versioned first-run checkpoint
   notes-tool.ts         knowledge-base and note access
   taskboard-tool.ts     shared persisted task board
   widget.ts             persistent below-editor control deck with responsive,
-                        theme-aware initialization, objective, health,
-                        steering, candidate, failure, activity, and control views
+                        theme-aware Activity Navigator, Run Overview, and
+                        Controls rows
   inspect.ts            in-Pi candidate hypothesis and evidence inspection
   agents/
     setup/SOUL.md
@@ -71,6 +74,8 @@ extensions/autoresearch/
   prompts/*.md          dynamic role/task compatibility templates
   prompts/tasks/*.md    task-specific suffixes and override names
 src/
+  agent-activity.ts     durable invocation identity, append-only lifecycle
+                        records, recovery folding, and token aggregation
   orchestrator.ts       durable loop state machine and archive integration
   experiments.ts        versioned proposal, task, result, and metric contracts
   archive.ts            atomic candidate artifacts, snapshots, diffs, sealing,
@@ -238,6 +243,13 @@ paths, score direction, retry budgets, and evidence locations. MLX Fast
 additionally requires exact public model attribution. This control-plane
 validation adds no challenge-specific hardware policy to the core.
 
+Profile review has an onboarding-only **Action Row** with visible **Continue**
+and **Cancel** controls. Enter activates the selected action. Escape and
+Ctrl-C return an explicit cancellation result from every review pane. Only
+Continue advances; edits are made against a draft and cancellation discards
+that draft. The later `/autoresearch config` panel retains its ordinary close
+behavior.
+
 `initChallenge` performs these operations in order:
 
 1. Read `benchmark.json` (including shell-string or argv commands), validate
@@ -295,14 +307,12 @@ with full local evaluation or `ready-with-limitations` with explicit fidelity
 gaps. Interactive users then choose whether to start research immediately or
 remain durably at phase `ready`.
 
-The research deck keeps operator-critical context in one stable hierarchy:
-run/idle state, phase and loop, objective and direction, evaluation fidelity,
-plateau and recovery health, active steering, candidate attempts and failures,
-Advisor concern, recent durable events, and direct commands. Theme accent,
-success, warning, error, muted text, and bold weight carry semantics in both
-light and dark Pi themes. The plain renderer remains the notification/RPC
-fallback. Session start restores the same deck from durable state even when no
-worker process is active.
+The research UI separates live agent work from durable run counters: the Agent
+Monitor owns invocation activity, while the compact Control Deck owns
+navigation, run totals, and controls. Theme accent, success, warning, error,
+muted text, and bold weight carry semantics in both light and dark Pi themes.
+The plain renderer remains the notification/RPC fallback. Session start
+restores the durable deck even when no worker process is active.
 
 The Setup role may use lightweight, non-mutating host probes when the setup log
 and repository instructions are insufficient. It never reruns setup, executes
@@ -324,6 +334,63 @@ Initialization never submits.
 MLX Fast identity is based on the resolved `mlxfast` CLI, including spaced or
 hyphenated manifest names. Its Orchestrator requires an explicit
 `submitModelName`, preventing submission under an `unknown` attribution.
+
+## Interactive UI and trace projection
+
+The running TUI has three named vertical zones:
+
+1. **Agent Monitor** — a compact widget above the editor.
+2. **Composer** — Pi's input editor.
+3. **Control Deck** — the compact widget below the editor.
+
+The Agent Monitor is a single frame with one-cell interior padding and no
+blank lines between agent rows. It has two views. **Overview** shows a bounded
+window of all invocation summaries. **Focus** uses the same frame for one
+invocation's semantic trace history. Selection is held by stable invocation
+ID, and row order freezes while keyboard navigation is active so live status
+updates cannot move the target under the cursor. New invocations append to
+that frozen order.
+
+`ResearchEditor` wraps Pi's `CustomEditor` with two input modes. `NAV` sends
+Up/Down to selection, Enter to Focus, Escape to Overview, Left/Right to
+related invocation attempts, Page Up/Page Down to trace scrolling, and
+Home/End to the relevant boundary. Tab enters `TYPE`; a printable key also
+enters `TYPE` and is delegated immediately so its first character is not
+lost. In `TYPE`, Pi retains its normal editing, autocomplete, and submission
+behavior. Tab returns to `NAV` when autocomplete is closed, and Escape from
+an empty Composer returns to Overview. Command lifecycle code saves the
+previous editor factory and restores it exactly once when the research run
+stops, completes, or fails.
+
+The Control Deck has three compact rows rather than duplicating agent cards:
+
+- **Activity Navigator** projects the selected invocation, position, current
+  stage, monitor view, and editor mode.
+- **Run Overview** projects durable stage, unique sealed experiment count,
+  server-confirmed harness accept count, other remote submission count, and
+  current inner-loop token total.
+- **Controls** advertises the active keys and stop/inspection actions.
+
+Agent truth is independent of either renderer. Before spawning a child,
+`PiSubprocessRunner` appends a `started` record to
+`.autoresearch/agent-invocations.ndjson`; compact activity, cumulative usage,
+and terminal records follow. Records have stable invocation and event IDs plus
+monotonic per-invocation sequence numbers. Recovery ignores duplicate event
+IDs and malformed or partial trailing lines. Usage accounts separately for
+input, output, cache-read, and cache-write tokens and carries an explicit
+completeness flag. Run Overview prefixes incomplete totals with `≥` and only
+aggregates roles attributed to the current inner loop.
+
+Trace presentation follows the incremental-tail pattern used by OMP's agent
+hub, while remaining an independent implementation. `PiTraceFileTailer`
+remembers a byte offset, parses complete JSONL lines only, and retains a
+partial trailing line for the next poll. It samples already-read bytes and
+checks file identity, length, and modification time; replacement, truncation,
+or prior-byte mutation causes a safe full reload. Known Pi events become
+compact assistant, thought, tool, result, error, and system entries rather
+than raw JSON. Follow-bottom is the default; manual scrolling disables it
+until End returns to the live tail. Trace polling is advisory—the persisted
+raw per-invocation `events.ndjson` remains authoritative.
 
 ## Experiment lifecycle
 
@@ -521,7 +588,9 @@ Memory ownership is intentionally split:
 - `ledger.ndjson` is the append-only compact search index;
 - `knowledge-base.md` is a human-readable navigation layer, not the sole
   memory store;
-- `journal.ndjson` is the operational transition log.
+- `journal.ndjson` is the operational transition log;
+- `agent-invocations.ndjson` is the append-only invocation and token-usage
+  index used by the Agent Monitor and Run Overview;
 - `telemetry.ndjson` is the local-only completed-flow timing stream.
 
 Telemetry spans cover initialization, professor, PhD, correctness, benchmark,
@@ -538,6 +607,7 @@ The main filesystem layout is:
   state.json
   config.json
   journal.ndjson
+  agent-invocations.ndjson
   telemetry.ndjson
   knowledge-base.md
   operator-steering.json

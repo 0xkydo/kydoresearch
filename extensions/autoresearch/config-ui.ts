@@ -181,9 +181,10 @@ export function applyConfigSetting(
 }
 
 export interface NavState {
-  pane: "left" | "right";
+  pane: "left" | "right" | "actions";
   left: number;
   right: number;
+  action?: 0 | 1;
 }
 
 /**
@@ -194,6 +195,8 @@ export interface NavState {
  */
 export type ConfigPanelResult =
   | { type: "close" }
+  | { type: "continue"; nav: NavState }
+  | { type: "cancel"; nav: NavState }
   | { type: "editModel"; role: ConfigurableRole; nav: NavState }
   | { type: "editSoul"; role: ConfigurableRole; nav: NavState }
   | { type: "editPrompt"; role: ConfigurableRole; nav: NavState }
@@ -214,6 +217,8 @@ export interface ConfigPanelOptions {
   roles?: readonly ConfigurableRole[];
   title?: string;
   describeRoles?: boolean;
+  /** Require an explicit Continue or Cancel choice instead of an implicit close. */
+  onboardingActions?: boolean;
 }
 
 export class ConfigPanel {
@@ -319,7 +324,14 @@ export class ConfigPanel {
   }
 
   handleInput(data: string): void {
-    if (matchesKey(data, "ctrl+c")) return this.done({ type: "close" });
+    if (matchesKey(data, "ctrl+c")) {
+      return this.options.onboardingActions
+        ? this.done({ type: "cancel", nav: this.nav })
+        : this.done({ type: "close" });
+    }
+    if (this.options.onboardingActions && matchesKey(data, "escape")) {
+      return this.done({ type: "cancel", nav: this.nav });
+    }
     if (this.nav.pane === "left") {
       const count = this.leftItems().length;
       if (matchesKey(data, "escape")) return this.done({ type: "close" });
@@ -333,17 +345,48 @@ export class ConfigPanel {
         this.nav.pane = "right";
         this.nav.right = 0;
       }
-    } else {
+    } else if (this.nav.pane === "right") {
       const rows = this.rows();
       if (matchesKey(data, "escape") || matchesKey(data, "left")) {
         this.nav.pane = "left";
       } else if (matchesKey(data, "up")) {
-        this.nav.right = (this.nav.right + rows.length - 1) % rows.length;
+        if (this.options.onboardingActions && this.nav.right === 0) {
+          this.nav.pane = "left";
+        } else {
+          this.nav.right = (this.nav.right + rows.length - 1) % rows.length;
+        }
       } else if (matchesKey(data, "down")) {
-        this.nav.right = (this.nav.right + 1) % rows.length;
+        if (
+          this.options.onboardingActions &&
+          this.nav.right === rows.length - 1
+        ) {
+          this.nav.pane = "actions";
+          this.nav.action ??= 0;
+        } else {
+          this.nav.right = (this.nav.right + 1) % rows.length;
+        }
+      } else if (matchesKey(data, "tab") && this.options.onboardingActions) {
+        this.nav.pane = "actions";
+        this.nav.action ??= 0;
       } else if (matchesKey(data, "enter") || matchesKey(data, "space")) {
         const row = rows[this.nav.right];
         if (row) this.activate(row);
+      }
+    } else {
+      if (matchesKey(data, "left")) {
+        this.nav.action = this.nav.action === 1 ? 0 : 1;
+      } else if (matchesKey(data, "right")) {
+        this.nav.action = this.nav.action === 0 ? 1 : 0;
+      } else if (matchesKey(data, "up")) {
+        this.nav.pane = "right";
+        this.nav.right = Math.max(0, this.rows().length - 1);
+      } else if (matchesKey(data, "tab")) {
+        this.nav.pane = "left";
+      } else if (matchesKey(data, "enter") || matchesKey(data, "space")) {
+        return this.done({
+          type: this.nav.action === 1 ? "cancel" : "continue",
+          nav: this.nav,
+        });
       }
     }
     this.tui.requestRender();
@@ -439,13 +482,41 @@ export class ConfigPanel {
     }
 
     lines.push("");
+    if (this.options.onboardingActions) {
+      const action = this.nav.action ?? 0;
+      const continueButton = this.renderActionButton(
+        "Continue",
+        this.nav.pane === "actions" && action === 0,
+      );
+      const cancelButton = this.renderActionButton(
+        "Cancel",
+        this.nav.pane === "actions" && action === 1,
+      );
+      lines.push(
+        truncateToWidth(`  ${continueButton}  ${cancelButton}`, width),
+      );
+      lines.push("");
+    }
     const hint =
-      this.nav.pane === "left"
-        ? "↑↓ select · enter/→ open · esc close"
-        : "↑↓ select · enter edit/cycle · ←/esc back";
+      this.nav.pane === "actions"
+        ? "←→ choose · enter confirm · ↑ fields · esc cancel"
+        : this.nav.pane === "left"
+        ? this.options.onboardingActions
+          ? "↑↓ select · enter/→ open · esc cancel"
+          : "↑↓ select · enter/→ open · esc close"
+        : this.options.onboardingActions
+          ? "↑↓ select · enter edit/cycle · tab actions · ← back · esc cancel"
+          : "↑↓ select · enter edit/cycle · ←/esc back";
     lines.push(truncateToWidth("  " + th.fg("dim", hint), width));
     lines.push("");
     return lines;
+  }
+
+  private renderActionButton(label: string, selected: boolean): string {
+    const text = `[ ${label} ]`;
+    return selected
+      ? this.theme.fg("accent", this.theme.bold(`▸ ${text}`))
+      : this.theme.fg("muted", `  ${text}`);
   }
 
   invalidate(): void {}

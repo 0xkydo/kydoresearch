@@ -222,6 +222,13 @@ describe("autoresearch status rendering", () => {
       ],
       taskboardOpen: 2,
       lastAdvisorNotes: ["[concern] Keep the verifier fixed."],
+      runOverview: {
+        experimentsRun: 17,
+        remoteAccepted: 3,
+        otherSubmissions: 48,
+        loopTokens: 198_000,
+        tokenUsageComplete: false,
+      },
       localEvaluation: {
         fidelity: "reduced",
         decision: "Use the documented local regression mode.",
@@ -241,24 +248,37 @@ describe("autoresearch status rendering", () => {
         "benchmark queue advanced",
         "L004-I1 · verifier attempt 2 started",
       ],
+      navigator: {
+        position: 1,
+        total: 4,
+        label: "phd L004-I1",
+        state: "implement",
+        monitorMode: "overview",
+        inputMode: "nav",
+      },
     });
     const rendered = stripAnsi(lines.join("\n"));
 
-    expect(lines.length).toBeGreaterThan(10);
+    expect(lines).toHaveLength(5);
     expect(lines.every((line) => visibleWidth(line) <= 120)).toBe(true);
     expect(lines.join("\n")).toContain("\u001b[1m");
-    expect(lines.join("\n")).toContain("\u001b[31m");
-    expect(lines.join("\n")).toContain("\u001b[33m");
-    expect(rendered).toContain("● LIVE");
-    expect(rendered).toContain("OBJECTIVE");
-    expect(rendered).toContain("△ REDUCED LOCAL");
-    expect(rendered).toContain("DIRECTION");
-    expect(rendered).toContain("Prioritize cache locality");
+    expect(rendered).toContain(
+      "AUTORESEARCH demo · LIVE · LOOP 4 · RESEARCHING CANDIDATES",
+    );
+    expect(rendered).toContain("AGENT");
+    expect(rendered).toContain("1/4  ▸ phd L004-I1 · implement · OVERVIEW · NAV");
+    expect(rendered).toContain("RUN");
+    expect(rendered).toContain("Experiments 17");
+    expect(rendered).toContain("Remote accepted 3");
+    expect(rendered).toContain("Others 48");
+    expect(rendered).toContain("Loop tokens ≥198k");
+    expect(rendered).toContain("KEYS");
+    expect(rendered).toContain("Enter focus");
+    expect(rendered).toContain("Tab composer");
+    expect(rendered).not.toContain("├─ CANDIDATES");
+    expect(rendered).not.toContain("LIVE ACTIVITY");
+    expect(rendered).not.toContain("OBJECTIVE");
     expect(rendered).toContain("L004-I1");
-    expect(rendered).toContain("cache key was undefined");
-    expect(rendered).toContain(".autoresearch/runs/L004-I1/logs/verify.log");
-    expect(rendered).toContain("LIVE ACTIVITY");
-    expect(rendered).toContain("/autoresearch steer <direction>");
     expect(rendered).not.toContain("widget truncated");
   });
 });

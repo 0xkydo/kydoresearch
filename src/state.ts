@@ -105,6 +105,7 @@ export function statePaths(stateDir: string) {
     taskboard: path.join(stateDir, "taskboard.json"),
     leaderboard: path.join(stateDir, "leaderboard.json"),
     ledger: path.join(stateDir, "ledger.ndjson"),
+    agentInvocations: path.join(stateDir, "agent-invocations.ndjson"),
     loopsDir: path.join(stateDir, "loops"),
     runsDir: path.join(stateDir, "runs"),
     resolvedAgentsDir: path.join(stateDir, "resolved-agents"),

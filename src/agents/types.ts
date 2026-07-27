@@ -15,6 +15,71 @@ export type TaskKind =
   | "advise" // advisor: review loop diff against WATCHDOG rules
   | "evolve-harness"; // metaharness: propose one immutable outer-loop profile
 
+export interface AgentInvocationIdentity {
+  invocationId: string;
+  role: Role;
+  kind: TaskKind;
+  loop?: number;
+  candidateId?: string;
+  attempt?: number;
+  /** Absolute path to the invocation's raw JSONL trace, always under stateDir. */
+  tracePath?: string;
+}
+
+export interface AgentTokenUsage {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+  /** Sum of the four token categories above. */
+  total: number;
+  /** False when at least one contributing turn omitted a token category. */
+  complete: boolean;
+}
+
+export interface AgentUsage {
+  cost: number;
+  turns: number;
+  /** Detailed token accounting. Older AgentRunner implementations may omit it. */
+  tokens?: AgentTokenUsage;
+}
+
+export type AgentActivityStatus =
+  | "running"
+  | "waiting"
+  | "complete"
+  | "failed"
+  | "interrupted";
+
+export type AgentActivityEvent =
+  | {
+      type: "started";
+      invocation: AgentInvocationIdentity;
+      timestamp: string;
+    }
+  | {
+      type: "activity";
+      invocationId: string;
+      activity: string;
+      timestamp: string;
+    }
+  | {
+      type: "usage";
+      invocationId: string;
+      usage: AgentUsage;
+      timestamp: string;
+    }
+  | {
+      type: "terminal";
+      invocationId: string;
+      status: Extract<AgentActivityStatus, "complete" | "failed" | "interrupted">;
+      usage: AgentUsage;
+      error?: string;
+      timestamp: string;
+    };
+
+export type AgentActivityObserver = (event: AgentActivityEvent) => void;
+
 export interface AgentTask {
   role: Role;
   kind: TaskKind;
@@ -28,6 +93,10 @@ export interface AgentTask {
   tools?: string[];
   /** Optional role settings supplied by an active, validated harness profile. */
   roleOverride?: Partial<RoleSpec>;
+  /** Stable identity supplied by the harness. The runner creates one for legacy callers. */
+  invocation?: AgentInvocationIdentity;
+  /** Optional live feed. Durable activity is written before this callback runs. */
+  activityObserver?: AgentActivityObserver;
   signal?: AbortSignal;
 }
 
@@ -38,7 +107,7 @@ export interface AgentResult {
   /** Parsed structured payload when the task kind demands one (e.g. proposed ideas). */
   structured?: Record<string, unknown>;
   filesWritten: string[];
-  usage?: { cost: number; turns: number };
+  usage?: AgentUsage;
   error?: string;
 }
 

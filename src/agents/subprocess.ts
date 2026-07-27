@@ -2,8 +2,21 @@ import { spawn } from "node:child_process";
 import * as fs from "node:fs";
 import * as path from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  createAgentActivityRecorder,
+  emptyAgentTokenUsage,
+  resolveAgentInvocationIdentity,
+  resolveAgentTracePath,
+} from "../agent-activity.ts";
 import type { RolesConfig, RoleSpec } from "../config.ts";
-import type { AgentResult, AgentRunner, AgentTask, TaskKind } from "./types.ts";
+import type {
+  AgentResult,
+  AgentRunner,
+  AgentTask,
+  AgentTokenUsage,
+  AgentUsage,
+  TaskKind,
+} from "./types.ts";
 
 const BUNDLED_PROMPTS_DIR = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
@@ -76,12 +89,34 @@ export class PiSubprocessRunner implements AgentRunner {
     }
 
     let traceFile: number | undefined;
+    let traceAgentDir: string | undefined;
+    let traceEventsPath: string | undefined;
     try {
       const trace = prepareTrace(task, soulPath, prompt);
       traceFile = trace?.file;
+      traceAgentDir = trace?.agentDir;
+      traceEventsPath = trace?.eventsPath;
       if (trace?.soulPath) soulPath = trace.soulPath;
     } catch (error) {
       return Promise.resolve(emptyFailedResult(`Failed to prepare pi trace: ${errorMessage(error)}`));
+    }
+
+    let activityRecorder: ReturnType<typeof createAgentActivityRecorder>;
+    try {
+      const identity = resolveAgentInvocationIdentity(task, traceEventsPath);
+      if (traceAgentDir) writeInvocationSnapshot(traceAgentDir, task, identity);
+      activityRecorder = createAgentActivityRecorder(
+        task.stateDir,
+        identity,
+        task.activityObserver,
+      );
+      // This durable start precedes spawn, the first externally visible child action.
+      activityRecorder.start();
+    } catch (error) {
+      if (traceFile !== undefined) fs.closeSync(traceFile);
+      return Promise.resolve(
+        emptyFailedResult(`Failed to record pi invocation: ${errorMessage(error)}`),
+      );
     }
 
     const args = [
@@ -117,6 +152,7 @@ export class PiSubprocessRunner implements AgentRunner {
       let agentError: string | undefined;
       let cost = 0;
       let turns = 0;
+      const tokens = emptyAgentTokenUsage(true);
       let settled = false;
       let terminationError: string | undefined;
       let timeoutHandle: NodeJS.Timeout | undefined;
@@ -126,7 +162,7 @@ export class PiSubprocessRunner implements AgentRunner {
         ok: false,
         output: assistantText.join(""),
         filesWritten: [...filesWritten].sort(),
-        usage: { cost, turns },
+        usage: currentUsage(cost, turns, tokens),
         error,
       });
 
@@ -144,7 +180,13 @@ export class PiSubprocessRunner implements AgentRunner {
           fs.closeSync(traceFile);
           traceFile = undefined;
         }
-        resolve(failedResult(`Failed to start pi: ${errorMessage(error)}`));
+        const result = failedResult(`Failed to start pi: ${errorMessage(error)}`);
+        try {
+          activityRecorder.terminal("failed", result.usage!, result.error);
+        } catch (recordError) {
+          result.error += `; Failed to record terminal agent activity: ${errorMessage(recordError)}`;
+        }
+        resolve(result);
         return;
       }
 
@@ -189,6 +231,25 @@ export class PiSubprocessRunner implements AgentRunner {
         if (settled) return;
         settled = true;
         cleanup();
+        const status =
+          result.ok
+            ? "complete"
+            : terminationError !== undefined
+              ? "interrupted"
+              : "failed";
+        try {
+          activityRecorder.terminal(
+            status,
+            result.usage ?? currentUsage(cost, turns, tokens),
+            result.error,
+          );
+        } catch (error) {
+          result = {
+            ...result,
+            ok: false,
+            error: `${result.error ? `${result.error}; ` : ""}Failed to record terminal agent activity: ${errorMessage(error)}`,
+          };
+        }
         resolve(result);
       };
 
@@ -205,6 +266,15 @@ export class PiSubprocessRunner implements AgentRunner {
 
         if (!isRecord(event)) return;
         recordWrittenToolPath(event, task.cwd, filesWritten);
+        const activity = activityFromPiEvent(event);
+        if (activity) {
+          try {
+            activityRecorder.activity(activity);
+          } catch (error) {
+            terminate(`Failed to record agent activity: ${errorMessage(error)}`);
+            return;
+          }
+        }
         if (event.type !== "message_end" || !isRecord(event.message)) return;
         const message = event.message;
         if (message.role !== "assistant") return;
@@ -216,9 +286,19 @@ export class PiSubprocessRunner implements AgentRunner {
         if (typeof message.stopReason === "string") stopReason = message.stopReason;
         if (typeof message.errorMessage === "string") agentError = message.errorMessage;
 
-        if (isRecord(message.usage) && isRecord(message.usage.cost)) {
-          const eventCost = message.usage.cost.total;
-          if (typeof eventCost === "number" && Number.isFinite(eventCost)) cost += eventCost;
+        if (isRecord(message.usage)) {
+          const eventCost = isRecord(message.usage.cost)
+            ? message.usage.cost.total
+            : undefined;
+          if (finiteNonNegative(eventCost)) cost += eventCost;
+          accumulateTokenUsage(tokens, message.usage);
+        } else {
+          tokens.complete = false;
+        }
+        try {
+          activityRecorder.usage(currentUsage(cost, turns, tokens));
+        } catch (error) {
+          terminate(`Failed to record agent usage: ${errorMessage(error)}`);
         }
       };
 
@@ -242,7 +322,11 @@ export class PiSubprocessRunner implements AgentRunner {
       });
 
       proc.on("close", (code) => {
-        if (stdoutBuffer.trim()) processLine(stdoutBuffer);
+        if (stdoutBuffer.trim()) {
+          const finalLine = stdoutBuffer;
+          stdoutBuffer = "";
+          processLine(finalLine);
+        }
 
         if (terminationError) {
           finish(failedResult(terminationError));
@@ -276,7 +360,7 @@ export class PiSubprocessRunner implements AgentRunner {
           output: assistantText.join(""),
           ...(structured.value ? { structured: structured.value } : {}),
           filesWritten: [...filesWritten].sort(),
-          usage: { cost, turns },
+          usage: currentUsage(cost, turns, tokens),
         });
       });
 
@@ -318,12 +402,100 @@ function recordWrittenToolPath(
   );
 }
 
+function activityFromPiEvent(event: Record<string, unknown>): string | undefined {
+  if (event.type === "tool_execution_start" && typeof event.toolName === "string") {
+    const detail = isRecord(event.args) ? conciseToolArgs(event.args) : "";
+    return detail ? `${event.toolName} ${detail}` : event.toolName;
+  }
+  if (event.type === "tool_execution_end" && typeof event.toolName === "string") {
+    return `${event.toolName} ${event.isError === true ? "failed" : "finished"}`;
+  }
+  if (event.type === "message_end" && isRecord(event.message)) {
+    if (event.message.role !== "assistant") return undefined;
+    const text = extractAssistantText(event.message.content).replace(/\s+/g, " ").trim();
+    if (text) return text;
+    if (typeof event.message.stopReason === "string") {
+      return `assistant ${event.message.stopReason}`;
+    }
+  }
+  return undefined;
+}
+
+function conciseToolArgs(args: Record<string, unknown>): string {
+  for (const key of ["path", "filePath", "command", "cmd", "query", "pattern"]) {
+    const value = args[key];
+    if (typeof value === "string" && value.trim()) {
+      const compact = value.replace(/\s+/g, " ").trim();
+      return compact.length > 160 ? `${compact.slice(0, 157)}...` : compact;
+    }
+  }
+  return "";
+}
+
+function accumulateTokenUsage(
+  aggregate: AgentTokenUsage,
+  usage: Record<string, unknown>,
+): void {
+  const input = tokenField(usage, "input", "inputTokens", "input_tokens");
+  const output = tokenField(usage, "output", "outputTokens", "output_tokens");
+  const cacheRead = tokenField(
+    usage,
+    "cacheRead",
+    "cacheReadTokens",
+    "cache_read_tokens",
+  );
+  const cacheWrite = tokenField(
+    usage,
+    "cacheWrite",
+    "cacheWriteTokens",
+    "cache_write_tokens",
+  );
+  const values = [input, output, cacheRead, cacheWrite];
+  if (values.some((value) => value === undefined)) aggregate.complete = false;
+  aggregate.input += input ?? 0;
+  aggregate.output += output ?? 0;
+  aggregate.cacheRead += cacheRead ?? 0;
+  aggregate.cacheWrite += cacheWrite ?? 0;
+  aggregate.total =
+    aggregate.input +
+    aggregate.output +
+    aggregate.cacheRead +
+    aggregate.cacheWrite;
+}
+
+function tokenField(
+  usage: Record<string, unknown>,
+  ...keys: string[]
+): number | undefined {
+  for (const key of keys) {
+    const value = usage[key];
+    if (finiteNonNegative(value)) return value;
+  }
+  return undefined;
+}
+
+function currentUsage(
+  cost: number,
+  turns: number,
+  tokens: AgentTokenUsage,
+): AgentUsage {
+  return {
+    cost,
+    turns,
+    tokens: { ...tokens },
+  };
+}
+
+function finiteNonNegative(value: unknown): value is number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0;
+}
+
 function emptyFailedResult(error: string): AgentResult {
   return {
     ok: false,
     output: "",
     filesWritten: [],
-    usage: { cost: 0, turns: 0 },
+    usage: { cost: 0, turns: 0, tokens: emptyAgentTokenUsage(false) },
     error,
   };
 }
@@ -402,10 +574,17 @@ function prepareTrace(
   task: AgentTask,
   sourceSoulPath: string,
   renderedPrompt: string,
-): { file: number; soulPath: string } | undefined {
+): {
+  file: number;
+  soulPath: string;
+  agentDir: string;
+  eventsPath: string;
+} | undefined {
   const traceDir = optionalInputPath(task.input, "traceDir");
   const explicitTracePath =
-    optionalInputPath(task.input, "tracePath") ?? optionalInputPath(task.input, "runTracePath");
+    optionalInputPath(task.input, "tracePath") ??
+    optionalInputPath(task.input, "runTracePath") ??
+    task.invocation?.tracePath;
   if (traceDir === undefined && explicitTracePath === undefined) return undefined;
 
   const eventsPath =
@@ -422,11 +601,25 @@ function prepareTrace(
     fs.copyFileSync(sourceSoulPath, soulSnapshotPath);
   }
   fs.writeFileSync(path.join(agentDir, "context.md"), renderedPrompt);
+  return {
+    file: fs.openSync(eventsPath, "a"),
+    soulPath: soulSnapshotPath,
+    agentDir,
+    eventsPath,
+  };
+}
+
+function writeInvocationSnapshot(
+  agentDir: string,
+  task: AgentTask,
+  invocation: ReturnType<typeof resolveAgentInvocationIdentity>,
+): void {
   fs.writeFileSync(
     path.join(agentDir, "invocation.json"),
     `${JSON.stringify(
       {
         schemaVersion: 1,
+        invocation,
         role: task.role,
         kind: task.kind,
         cwd: task.cwd,
@@ -440,10 +633,6 @@ function prepareTrace(
       2,
     )}\n`,
   );
-  return {
-    file: fs.openSync(eventsPath, "a"),
-    soulPath: soulSnapshotPath,
-  };
 }
 
 function optionalInputPath(input: Record<string, unknown>, key: string): string | undefined {
@@ -456,19 +645,7 @@ function optionalInputPath(input: Record<string, unknown>, key: string): string 
 }
 
 function resolveTracePath(configuredPath: string, stateDir: string): string {
-  const stateRoot = path.resolve(stateDir);
-  const resolved = path.isAbsolute(configuredPath)
-    ? path.resolve(configuredPath)
-    : path.resolve(stateRoot, configuredPath);
-  const relative = path.relative(stateRoot, resolved);
-  if (
-    relative === ".." ||
-    relative.startsWith(`..${path.sep}`) ||
-    path.isAbsolute(relative)
-  ) {
-    throw new Error("trace path escapes the autoresearch state directory");
-  }
-  return resolved;
+  return resolveAgentTracePath(configuredPath, stateDir);
 }
 
 /**

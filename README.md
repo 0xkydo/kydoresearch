@@ -133,7 +133,10 @@ from the same review. The complete advanced panel is also available later:
 /autoresearch config
 ```
 
-Completing first-run profile review persists the effective configuration.
+The first-run review ends with a visible **Continue** / **Cancel** action row.
+Arrow keys select an action and Enter confirms it. Escape and Ctrl-C mean
+Cancel; they never silently accept the draft. Only **Continue** advances and
+persists the effective configuration. Cancelling discards the review draft.
 Later `/autoresearch config` edits save only when a setting actually changes,
 so closing an untouched panel does not create `.autoresearch/config.json`.
 Active subprocess profiles are checked against Pi's available models and
@@ -188,8 +191,32 @@ challenge data and submit an improvement automatically.
 
 ### 5. Operate and resume
 
-The persistent initialization control deck appears below Pi's editor as soon as
-confirmation closes. Validation, dependency setup, Setup analysis, baseline
+The interactive layout gives every stable area a name:
+
+```text
+Agent Monitor   above the Composer; Overview or focused agent trace
+Composer        Pi's normal input editor
+Control Deck    below the Composer; Activity Navigator, Run Overview, Controls
+```
+
+The **Agent Monitor** is one compact frame with flat, tightly spaced rows.
+Overview shows all known agent invocations and their current work. Focus
+reuses the same frame for the selected invocation's semantic trace history;
+it does not expose raw JSON as the primary view. The **Activity Navigator** is
+the selected-agent row in the Control Deck. It makes the monitor keyboard
+interactive without typing another slash command.
+
+While the editor shows `NAV`, use Up/Down to select an agent, Enter to enter
+Focus, and Escape to return to Overview. In Focus, Left/Right switches between
+attempts for the same candidate or role invocation, Page Up/Page Down scrolls
+the trace, and Home/End jumps to the first/last trace entry. Tab enters `TYPE`
+mode in the Composer. Typing a printable character also enters `TYPE` and
+preserves that first character. Tab returns to `NAV` when autocomplete is not
+open; Escape returns from an empty Composer. The extension restores the
+previous Pi editor component when the run stops, completes, or crashes.
+
+The persistent initialization Control Deck appears below the Composer as soon
+as confirmation closes. Validation, dependency setup, Setup analysis, baseline
 measurement, and archival appear as a checklist whose entries move through
 pending, running, retrying, passed, or failed. It uses Pi's width-aware custom-component path rather
 than the ten-line-capped plain widget path, so runtime evidence is not replaced
@@ -201,16 +228,19 @@ screen with a stable category, explanation, corrective action, evidence path,
 and retry behavior. This presentation is restored from
 `.autoresearch/loops/init/status.json`.
 
-After initialization, the same always-present control deck keeps the run/idle
-state, loop and phase, local and submitted objectives, evaluation fidelity,
-plateau/recovery health, current operator direction, candidate status and
-attempts, failures, Advisor concern, live events, and steering/inspection
-commands visible. Active work uses the Pi accent, improvements and full local
-evaluation use success color, retries and reduced fidelity use warning color,
-and failures or blockers use error color. Primary state, objective values,
-candidate IDs, active work, and commands are bold. The deck remains visible
-when a run pauses or completes and is restored from durable state after Pi
-restarts.
+After initialization, the same compact Control Deck has three rows:
+
+- **Activity Navigator:** selected invocation, position, stage, Overview/Focus,
+  and `NAV`/`TYPE` state.
+- **Run Overview:** durable stage plus lifetime sealed experiment count,
+  server-confirmed harness accepts, submissions from others, and tokens spent
+  by inner-loop agents in the current loop.
+- **Controls:** the available navigation keys and stop/inspection actions.
+
+Token totals include input, output, cache-read, and cache-write tokens. A `≥`
+prefix marks incomplete provider usage rather than presenting a partial total
+as exact. The deck remains visible when a run pauses or completes and is
+restored from durable state after Pi restarts.
 
 Use `/autoresearch steer <direction>` to influence the next Professor
 portfolio, for example:
@@ -599,6 +629,7 @@ All runtime data lives in `.autoresearch/` inside the challenge repository:
   state.json                authoritative loop state and resume checkpoints
   config.json               runner, role, limit, timeout, and advisor settings
   journal.ndjson            append-only operational transitions
+  agent-invocations.ndjson  append-only agent lifecycle, activity, and usage
   telemetry.ndjson          local-only completed flow timings and outcomes
   ledger.ndjson             compact index of completed candidate experiments
   knowledge-base.md         human-readable research navigation
@@ -624,6 +655,11 @@ path. The harness never intentionally includes it in a submission.
 truth. `ledger.ndjson` is the professor's compact search index. `runs/`
 contains the evidence behind every ledger entry. A sealed run is immutable,
 and resume repairs a sealed candidate whose ledger entry was interrupted.
+`agent-invocations.ndjson` gives each role attempt a stable identity and
+records start, compact activity, cumulative usage, and terminal status.
+Restart recovery folds duplicate-safe complete records and treats a trailing
+partial append as incomplete rather than corrupting prior history. Its token
+usage feeds the current-loop total in Run Overview.
 
 The useful files in a candidate run are:
 

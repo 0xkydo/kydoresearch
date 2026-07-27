@@ -2,6 +2,7 @@ import * as fs from "node:fs";
 import * as os from "node:os";
 import * as path from "node:path";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { loadAgentInvocations } from "../src/agent-activity.ts";
 import { PiSubprocessRunner } from "../src/agents/subprocess.ts";
 import type { AgentTask } from "../src/agents/types.ts";
 import { DEFAULT_CONFIG } from "../src/config.ts";
@@ -79,7 +80,18 @@ for (const event of events) process.stdout.write(JSON.stringify(event) + "\\n");
         '```json\n{"ideas":[{"title":"A","spec":"Try A"}]}\n```',
       structured: { ideas: [{ title: "A", spec: "Try A" }] },
       filesWritten: [],
-      usage: { cost: 0.375, turns: 2 },
+      usage: {
+        cost: 0.375,
+        turns: 2,
+        tokens: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+          complete: false,
+        },
+      },
     });
 
     expect(JSON.parse(fs.readFileSync(recordPath, "utf8"))).toEqual({
@@ -773,14 +785,22 @@ process.stdout.write(${JSON.stringify(rawEvent)});
 process.stdout.write("{ definitely not json }\\n");
 `);
 
-    await expect(
-      new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(makeTask(tmpDir)),
-    ).resolves.toMatchObject({
+    const result = await new PiSubprocessRunner(
+      structuredClone(DEFAULT_CONFIG.roles),
+    ).run(makeTask(tmpDir));
+
+    expect(result).toMatchObject({
       ok: false,
       output: "",
       filesWritten: [],
       error: expect.stringMatching(/invalid JSON event/i),
     });
+    expect(loadAgentInvocations(path.join(tmpDir, ".autoresearch"))).toEqual([
+      expect.objectContaining({
+        status: "failed",
+        activity: expect.stringMatching(/invalid JSON event/i),
+      }),
+    ]);
   });
 
   it("returns a failed result with captured output when pi exits nonzero", async () => {
@@ -799,9 +819,157 @@ process.exitCode = 7;
       ok: false,
       output: "Partial answer",
       filesWritten: [],
-      usage: { cost: 0, turns: 1 },
+      usage: {
+        cost: 0,
+        turns: 1,
+        tokens: {
+          input: 0,
+          output: 0,
+          cacheRead: 0,
+          cacheWrite: 0,
+          total: 0,
+          complete: false,
+        },
+      },
       error: "pi exited with code 7: provider unavailable",
     });
+  });
+
+  it("streams durable semantic activity and detailed cumulative token usage", async () => {
+    const observed: Array<{ type: string; [key: string]: unknown }> = [];
+    const first = JSON.stringify({
+      type: "tool_execution_start",
+      toolName: "read",
+      args: { path: "src/cache.ts" },
+    });
+    const second = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "Checking the cache key." }],
+        usage: {
+          input: 10,
+          output: 4,
+          cacheRead: 20,
+          cacheWrite: 2,
+          cost: { total: 0.1 },
+        },
+      },
+    });
+    const third = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "The fallback needs the same key." }],
+        usage: {
+          input: 5,
+          output: 3,
+          cacheRead: 8,
+          cost: { total: 0.05 },
+        },
+      },
+    });
+    writeFakePi(`
+process.stdout.write(${JSON.stringify(`${first}\n${second.slice(0, 40)}`)});
+setTimeout(() => {
+  process.stdout.write(${JSON.stringify(`${second.slice(40)}\n${third}`)});
+}, 20);
+`);
+
+    const result = await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(
+      makeTask(tmpDir, {
+        invocation: {
+          invocationId: "professor-loop-2",
+          role: "professor",
+          kind: "propose",
+          loop: 2,
+        },
+        activityObserver: (event) => observed.push(event),
+      }),
+    );
+
+    expect(result).toMatchObject({
+      ok: true,
+      usage: {
+        cost: expect.any(Number),
+        turns: 2,
+        tokens: {
+          input: 15,
+          output: 7,
+          cacheRead: 28,
+          cacheWrite: 2,
+          total: 52,
+          complete: false,
+        },
+      },
+    });
+    expect(result.usage?.cost).toBeCloseTo(0.15);
+    expect(observed.map((event) => event.type)).toEqual([
+      "started",
+      "activity",
+      "activity",
+      "usage",
+      "activity",
+      "usage",
+      "terminal",
+    ]);
+    expect(observed[1]).toMatchObject({ activity: "read src/cache.ts" });
+    expect(observed.at(-1)).toMatchObject({
+      type: "terminal",
+      status: "complete",
+      usage: result.usage,
+    });
+
+    const durable = fs
+      .readFileSync(path.join(tmpDir, ".autoresearch", "agent-invocations.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string; invocationId: string });
+    expect(durable.map((event) => event.type)).toEqual(observed.map((event) => event.type));
+    expect(durable.every((event) => event.invocationId === "professor-loop-2")).toBe(true);
+  });
+
+  it("processes a final complete JSON line without a newline exactly once", async () => {
+    const event = JSON.stringify({
+      type: "message_end",
+      message: {
+        role: "assistant",
+        content: [{ type: "text", text: "done" }],
+        usage: {
+          input: 7,
+          output: 2,
+          cacheRead: 1,
+          cacheWrite: 0,
+          cost: { total: 0.02 },
+        },
+      },
+    });
+    writeFakePi(`
+process.stdout.write(${JSON.stringify(event)});
+`);
+
+    const result = await new PiSubprocessRunner(structuredClone(DEFAULT_CONFIG.roles)).run(
+      makeTask(tmpDir),
+    );
+
+    expect(result.usage).toEqual({
+      cost: 0.02,
+      turns: 1,
+      tokens: {
+        input: 7,
+        output: 2,
+        cacheRead: 1,
+        cacheWrite: 0,
+        total: 10,
+        complete: true,
+      },
+    });
+    const records = fs
+      .readFileSync(path.join(tmpDir, ".autoresearch", "agent-invocations.ndjson"), "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line) as { type: string });
+    expect(records.filter((record) => record.type === "usage")).toHaveLength(1);
   });
 
   it("terminates a hung pi process after the configured timeout", async () => {
@@ -825,6 +993,12 @@ setInterval(() => {}, 1000);
       filesWritten: [],
       error: "pi subprocess timed out after 1000ms",
     });
+    expect(loadAgentInvocations(path.join(tmpDir, ".autoresearch"))).toEqual([
+      expect.objectContaining({
+        status: "interrupted",
+        activity: "pi subprocess timed out after 1000ms",
+      }),
+    ]);
     expect(fs.existsSync(pidPath)).toBe(true);
     expect(processIsRunning(Number(fs.readFileSync(pidPath, "utf8")))).toBe(false);
   });
@@ -850,6 +1024,11 @@ fs.writeFileSync(process.env.FAKE_PI_RECORD, "invoked");
       error: "pi subprocess aborted before start",
     });
     expect(fs.existsSync(invokedPath)).toBe(false);
+    expect(
+      fs.existsSync(
+        path.join(tmpDir, ".autoresearch", "agent-invocations.ndjson"),
+      ),
+    ).toBe(false);
   });
 
   it("terminates pi and resolves a failed result when aborted during a run", async () => {
@@ -876,6 +1055,12 @@ setInterval(() => {}, 1000);
       filesWritten: [],
       error: "pi subprocess aborted",
     });
+    expect(loadAgentInvocations(path.join(tmpDir, ".autoresearch"))).toEqual([
+      expect.objectContaining({
+        status: "interrupted",
+        activity: "pi subprocess aborted",
+      }),
+    ]);
     expect(processIsRunning(Number(fs.readFileSync(pidPath, "utf8")))).toBe(false);
   });
 

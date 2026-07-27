@@ -15,7 +15,7 @@ afterEach(() => {
 });
 
 describe("real Pi PTY visible-screen smoke", () => {
-  it("shows mixed candidate state, reduced fidelity, and pause/resume action", async () => {
+  it("shows the compact paused control deck and resume action", async () => {
     const challenge = makeTmpChallenge();
     cleanupCallbacks.push(challenge.cleanup);
     const stateDir = path.join(challenge.repoRoot, ".autoresearch");
@@ -68,9 +68,11 @@ describe("real Pi PTY visible-screen smoke", () => {
     expect(screen).toContain("AUTORESEARCH");
     expect(screen).toContain("pty-fixture");
     expect(screen).toContain("PAUSED");
-    expect(screen).toContain("REDUCED LOCAL");
-    expect(screen).toContain("L004-I1");
-    expect(screen).toContain("L004-I2");
+    expect(screen).toContain("AGENT");
+    expect(screen).toContain("RUN");
+    expect(screen).toContain("Experiments");
+    expect(screen).not.toContain("Candidate");
+    expect(screen).not.toContain("Live Activity");
     expect(screen).toMatch(/RESUME|\/autoresearch/);
     expect(writeScreenArtifact("mixed-candidates", screen)).toMatch(
       /mixed-candidates\.svg$/,
@@ -121,7 +123,7 @@ describe("real Pi PTY visible-screen smoke", () => {
 
     const screen = await runPiPty(challenge.repoRoot, [
       { afterMs: 3_000, data: "/autoresearch\r" },
-      { afterMs: 1_200, data: "\u001b" },
+      { afterMs: 1_200, data: "\t\t\r" },
       { afterMs: 400, data: "\r" },
       { afterMs: 3_200, data: "" },
     ]);

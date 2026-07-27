@@ -1,6 +1,7 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
 import type { AgentRunner, ProposedIdea } from "./agents/types.ts";
+import { loadInnerLoopAgentUsage } from "./agent-activity.ts";
 import type { AdvisorNote } from "./advisor.ts";
 import { filterByThreshold, loadWatchdog } from "./advisor.ts";
 import {
@@ -109,6 +110,17 @@ export interface StatusReport {
     nextRetryAt?: string;
   };
   metaHarness?: MetaHarnessStatus;
+  /** Durable dashboard counters. Optional for legacy/custom status providers. */
+  runOverview?: RunOverviewStatus;
+}
+
+export interface RunOverviewStatus {
+  experimentsRun: number;
+  remoteAccepted: number;
+  otherSubmissions: number;
+  loopTokens: number;
+  tokenUsageComplete: boolean;
+  leaderboardUpdatedAt?: string;
 }
 
 export class Orchestrator {
@@ -162,6 +174,7 @@ export class Orchestrator {
       })),
       taskboardOpen: this.taskboard.openCount(),
       lastAdvisorNotes: lastSummary?.advisorNotes ?? [],
+      runOverview: loadRunOverviewStatus(this.stateDir, this.state.loop),
       ...(this.state.challenge.localEvaluation
         ? { localEvaluation: this.state.challenge.localEvaluation }
         : {}),
@@ -2075,6 +2088,66 @@ export class Orchestrator {
     appendJournal(this.paths.journal, { message });
     this.ports.emit({ type: "log", message });
   }
+}
+
+/**
+ * Rebuilds operator-facing counters from durable evidence so the dashboard is
+ * identical before and after a Pi restart.
+ */
+export function loadRunOverviewStatus(
+  stateDir: string,
+  loop: number,
+): RunOverviewStatus {
+  let ledger: ReturnType<typeof readLedger> = [];
+  try {
+    ledger = readLedger(stateDir);
+  } catch {
+    // Archive reads remain strict in orchestration paths. Status rendering is
+    // advisory and must not take down the TUI when evidence is damaged.
+  }
+
+  let loopUsage: ReturnType<typeof loadInnerLoopAgentUsage> | undefined;
+  try {
+    loopUsage = loadInnerLoopAgentUsage(stateDir, loop);
+  } catch {
+    // Treat unavailable usage as incomplete instead of failing the dashboard.
+  }
+
+  let entries: LeaderboardEntry[] = [];
+  let leaderboardUpdatedAt: string | undefined;
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(statePaths(stateDir).leaderboard, "utf8"),
+    ) as {
+      fetchedAt?: unknown;
+      entries?: unknown;
+    };
+    if (Array.isArray(parsed.entries)) {
+      entries = parsed.entries.filter(isLeaderboardEntry);
+    }
+    if (typeof parsed.fetchedAt === "string") {
+      leaderboardUpdatedAt = parsed.fetchedAt;
+    }
+  } catch {
+    // An absent or interrupted cache is represented by zero remote entries.
+  }
+
+  const experimentsRun = new Set(ledger.map((entry) => entry.candidateId)).size;
+  const remoteAccepted = new Set(
+    ledger
+      .filter((entry) => entry.terminalStatus === "done-improved")
+      .map((entry) => entry.candidateId),
+  ).size;
+  const remoteSubmissionCount = new Set(entries.map((entry) => entry.id)).size;
+
+  return {
+    experimentsRun,
+    remoteAccepted,
+    otherSubmissions: Math.max(0, remoteSubmissionCount - remoteAccepted),
+    loopTokens: loopUsage?.tokens.total ?? 0,
+    tokenUsageComplete: loopUsage?.tokens.complete ?? false,
+    ...(leaderboardUpdatedAt ? { leaderboardUpdatedAt } : {}),
+  };
 }
 
 function firstLine(value: string): string {

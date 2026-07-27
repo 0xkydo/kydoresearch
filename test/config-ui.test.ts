@@ -61,6 +61,7 @@ describe("ConfigPanel", () => {
         roles: ["setup"],
         title: "first-run agent profiles",
         describeRoles: true,
+        onboardingActions: true,
       },
     );
 
@@ -69,5 +70,25 @@ describe("ConfigPanel", () => {
     expect(rendered).toContain("first-time initialization");
     expect(rendered).toContain("never optimizes candidates");
     expect(rendered).toContain("tools             read, write, edit, bash");
+    expect(rendered).toContain("[ Continue ]");
+    expect(rendered).toContain("[ Cancel ]");
+    expect(rendered).toContain("tab actions");
+  });
+
+  it("does not show onboarding actions in the ordinary config panel", () => {
+    const panel = new ConfigPanel(
+      structuredClone(DEFAULT_CONFIG),
+      { pane: "left", left: 0, right: 0 },
+      { requestRender: () => {} } as unknown as TUI,
+      {
+        fg: (_color: string, text: string) => text,
+        bold: (text: string) => text,
+      } as unknown as Theme,
+      () => {},
+    );
+
+    const rendered = panel.render(120).join("\n");
+    expect(rendered).not.toContain("[ Continue ]");
+    expect(rendered).not.toContain("[ Cancel ]");
   });
 });
