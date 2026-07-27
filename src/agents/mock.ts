@@ -1,6 +1,18 @@
 import * as fs from "node:fs";
 import * as path from "node:path";
-import type { AgentResult, AgentRunner, AgentTask, ProposedIdea } from "./types.ts";
+import {
+  createAgentActivityRecorder,
+  emptyAgentUsage,
+  resolveAgentInvocationIdentity,
+  resolveAgentTracePath,
+} from "../agent-activity.ts";
+import type {
+  AgentResult,
+  AgentRunner,
+  AgentTask,
+  ProposedIdea,
+  TaskKind,
+} from "./types.ts";
 import {
   loadMockScenario,
   mockScenarioEdit,
@@ -14,13 +26,79 @@ import {
   scriptedProposals,
 } from "./mock-scripts.ts";
 
+export interface MockAgentRunnerOptions {
+  /**
+   * Demo-only pause after publishing the running activity. Tests keep the
+   * default of zero; the interactive mock launcher derives a short pause from
+   * mockLoopDelayMs so the Agent Monitor can render the live state.
+   */
+  activityDelayMs?: number;
+}
+
 /**
  * Deterministic scripted agents. No LLM calls. The mock PhD makes REAL file
  * edits in its (worktree) cwd and the real verify/bench scripts judge them —
  * the mock only replaces the thinking, not the data flow.
  */
 export class MockAgentRunner implements AgentRunner {
+  constructor(private readonly options: MockAgentRunnerOptions = {}) {}
+
   async run(task: AgentTask): Promise<AgentResult> {
+    if (task.signal?.aborted) {
+      return mockFailure("mock agent aborted before start");
+    }
+
+    const tracePath = prepareMockTrace(task);
+    const identity = resolveAgentInvocationIdentity(task, tracePath);
+    const recorder = createAgentActivityRecorder(
+      task.stateDir,
+      identity,
+      task.activityObserver,
+    );
+    recorder.start();
+    recorder.activity(mockActivity(task));
+    appendMockTrace(tracePath, {
+      type: "agent_start",
+      timestamp: new Date().toISOString(),
+    });
+
+    const delayMs = Math.max(0, this.options.activityDelayMs ?? 0);
+    if (!(await waitForMockActivity(delayMs, task.signal))) {
+      const result = mockFailure("mock agent aborted");
+      appendMockTrace(tracePath, {
+        type: "agent_end",
+        timestamp: new Date().toISOString(),
+      });
+      recorder.terminal("interrupted", emptyAgentUsage(), result.error);
+      return result;
+    }
+
+    try {
+      const result = this.runScript(task);
+      appendMockTrace(tracePath, mockAssistantEvent(task, result));
+      appendMockTrace(tracePath, {
+        type: "agent_end",
+        timestamp: new Date().toISOString(),
+      });
+      recorder.terminal(
+        result.ok ? "complete" : "failed",
+        result.usage ?? emptyAgentUsage(),
+        result.error,
+      );
+      return result;
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      appendMockTrace(tracePath, mockAssistantEvent(task, mockFailure(message)));
+      appendMockTrace(tracePath, {
+        type: "agent_end",
+        timestamp: new Date().toISOString(),
+      });
+      recorder.terminal("failed", emptyAgentUsage(), message);
+      throw error;
+    }
+  }
+
+  private runScript(task: AgentTask): AgentResult {
     switch (task.kind) {
       case "init.explore":
         return this.initExplore(task);
@@ -254,6 +332,114 @@ export class MockAgentRunner implements AgentRunner {
   private scenario(task: AgentTask) {
     return loadMockScenario(path.dirname(task.stateDir));
   }
+}
+
+function prepareMockTrace(task: AgentTask): string | undefined {
+  const configured =
+    optionalInputPath(task.input, "tracePath") ??
+    optionalInputPath(task.input, "runTracePath") ??
+    task.invocation?.tracePath;
+  const traceDir = optionalInputPath(task.input, "traceDir");
+  if (configured === undefined && traceDir === undefined) return undefined;
+
+  const tracePath = resolveAgentTracePath(
+    configured ?? path.join(traceDir!, "events.ndjson"),
+    task.stateDir,
+  );
+  fs.mkdirSync(path.dirname(tracePath), { recursive: true });
+  return tracePath;
+}
+
+function appendMockTrace(
+  tracePath: string | undefined,
+  event: Record<string, unknown>,
+): void {
+  if (tracePath === undefined) return;
+  fs.appendFileSync(tracePath, `${JSON.stringify(event)}\n`);
+}
+
+function mockAssistantEvent(
+  task: AgentTask,
+  result: AgentResult,
+): Record<string, unknown> {
+  return {
+    type: "message_end",
+    message: {
+      role: "assistant",
+      timestamp: Date.now(),
+      content: [
+        {
+          type: "thinking",
+          thinking: `Following the deterministic mock playlist for ${task.role}/${task.kind}.`,
+        },
+        {
+          type: "text",
+          text: result.error ?? result.output,
+        },
+      ],
+    },
+  };
+}
+
+function mockActivity(task: AgentTask): string {
+  const activities: Record<TaskKind, string> = {
+    "init.explore": "reviewing repository and setup evidence",
+    "init.review": "reviewing failed baseline evidence",
+    "init.decide": "selecting a documented local mode",
+    propose: "forming evidence-backed experiment proposals",
+    implement: "editing the candidate worktree",
+    "write-note": "writing the candidate postmortem",
+    church: "reflecting on the dry-loop plateau",
+    "god-conversation": "reflecting on the dry-loop plateau",
+    advise: "checking watchdog conditions",
+    "evolve-harness": "drafting a candidate harness profile",
+  };
+  return activities[task.kind];
+}
+
+function optionalInputPath(
+  input: Record<string, unknown>,
+  key: string,
+): string | undefined {
+  const value = input[key];
+  if (value === undefined) return undefined;
+  if (typeof value !== "string" || value.trim() === "") {
+    throw new Error(`task input ${key} must be a non-empty path string`);
+  }
+  return value.trim();
+}
+
+function waitForMockActivity(
+  delayMs: number,
+  signal: AbortSignal | undefined,
+): Promise<boolean> {
+  if (signal?.aborted) return Promise.resolve(false);
+  if (delayMs === 0) return Promise.resolve(true);
+
+  return new Promise((resolve) => {
+    let settled = false;
+    let timer: NodeJS.Timeout | undefined;
+    const finish = (completed: boolean): void => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      signal?.removeEventListener("abort", onAbort);
+      resolve(completed);
+    };
+    const onAbort = (): void => finish(false);
+    timer = setTimeout(() => finish(true), delayMs);
+    signal?.addEventListener("abort", onAbort, { once: true });
+    if (signal?.aborted) onAbort();
+  });
+}
+
+function mockFailure(error: string): AgentResult {
+  return {
+    ok: false,
+    output: "",
+    filesWritten: [],
+    error,
+  };
 }
 
 /** Evaluate a WATCHDOG condition like "dryLoopStreak >= 2" or "ideaFailed" against a diff object. */

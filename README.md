@@ -725,6 +725,8 @@ the extension from the worktree where the launcher lives. Use
 Keep the default `"runner": "mock"`; no configured role model or remote API is
 called. Setting `max loops` to `6` and `mock loop delay` to `1200` ms in the
 first-run review makes the complete scripted flow easy to watch. The examples
+publish each scripted role call to the Agent Monitor, including a short
+synthetic semantic trace, without spawning a process or calling a model. They
 still use real Git worktrees, shell commands, verification, scoring, archives,
 Advisor rules, church reflection, notes, and a local mock challenge CLI.
 
