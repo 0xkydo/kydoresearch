@@ -314,6 +314,14 @@
       "category": "cross-cutting"
     },
     {
+      "id": "crosscut.mock-agent",
+      "file": "test/mock-agent.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["full"],
+      "category": "cross-cutting"
+    },
+    {
       "id": "crosscut.architecture",
       "file": "test/architecture.test.ts",
       "phases": [],
