@@ -94,7 +94,10 @@ first-run settings are:
 
 The first confirmation performs initialization and establishes the baseline.
 Choose **Start Research** on the readiness screen to run the playlist. No
-configured role model is called while the runner is `mock`.
+configured role model is called while the runner is `mock`. Each deterministic
+Setup, Professor, PhD, Advisor, and God role call appears as its own Agent
+Monitor invocation with a small synthetic trace. These are visual stand-ins
+for subprocess agents; no child Pi process is spawned.
 
 Useful commands while it runs:
 

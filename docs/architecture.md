@@ -193,7 +193,10 @@ examples may instead declare a validated repository-local
 `mock-scenario.json`; it supplies only canned proposals, candidate file values,
 knowledge text, and church dialogue. The manifest-backed verifier, benchmark,
 score direction, integrity audit, selection, and local challenge CLI remain
-outside that playlist.
+outside that playlist. `MockAgentRunner` records the same durable invocation
+lifecycle consumed by the Agent Monitor and writes a minimal synthetic semantic
+trace for each scripted role call. It does not spawn a process, load a role
+model, or claim real token usage.
 
 `runner: "subprocess"` uses `PiSubprocessRunner`. For every invocation it:
 

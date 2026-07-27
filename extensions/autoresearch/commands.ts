@@ -292,10 +292,13 @@ export function registerAutoresearchCommand(
     stateDir: string,
     observer?: AgentActivityObserver,
   ): AgentRunner {
+    const config = loadConfig(stateDir);
     const runner =
       runnerKind === "subprocess"
-        ? new PiSubprocessRunner(loadConfig(stateDir).roles)
-        : new MockAgentRunner();
+        ? new PiSubprocessRunner(config.roles)
+        : new MockAgentRunner({
+            activityDelayMs: Math.min(config.mockLoopDelayMs, 350),
+          });
     if (!observer) return runner;
     return {
       run: (task) =>
