@@ -16,6 +16,14 @@ Pi-independent Orchestrator and deterministic ChallengeAdapter. The fixed
 challenge verifier remains outside both editable surfaces.
 
 ```text
+pi-kydo (optional catastrophic-failure supervisor)
+  ├─ durable stream tail + process lifecycle
+  ├─ read-only/sessionless Pi incident analyst
+  ├─ sealed incident report + bounded evidence
+  ├─ scoped Codex repair (GPT-5.6 Sol / high)
+  └─ restart + durable phase auto-resume
+       │
+       ▼
 interactive Pi process
   └─ extensions/autoresearch/
        ├─ commands, tools, config UI, Agent Monitor, ResearchEditor
@@ -74,6 +82,11 @@ extensions/autoresearch/
   prompts/*.md          dynamic role/task compatibility templates
   prompts/tasks/*.md    task-specific suffixes and override names
 src/
+  oncall/
+    supervisor.ts         process owner, durable stream tail, incident gates,
+                          repair dispatch, restart backoff, and crash circuit
+    prompt.ts             narrow operational diagnosis and repair contracts
+    types.ts              typed incident, supervisor, and repair records
   agent-activity.ts     durable invocation identity, append-only lifecycle
                         records, recovery folding, and token aggregation
   orchestrator.ts       durable loop state machine and archive integration
@@ -100,12 +113,62 @@ src/
   telemetry.ts          local-only span recording and aggregate reporting
   taskboard.ts          atomic shared task persistence
   exec.ts               bounded, streaming process port
+bin/
+  pi-kydo.js            Node executable that forwards ordinary Pi arguments
 ```
 
 `Orchestrator` still depends on `AgentRunner`, `ChallengeAdapter`, `ExecPort`,
 and an event callback. Switching between `MockAgentRunner` and
 `PiSubprocessRunner` remains a configuration choice, not a second
 orchestration implementation.
+
+## Catastrophic-failure supervisor
+
+`pi-kydo` is an optional process above interactive Pi. It does not replace the
+Orchestrator's operation retries or durable loop recovery. Keeping the layer
+outside Pi is what lets it observe an unexpected Pi exit and create a
+replacement process.
+
+Interactive Pi keeps its stdout TTY. The supervisor forwards Pi's stderr while
+capturing a bounded tail, and incrementally tails `state.json`,
+`journal.ndjson`, `agent-invocations.ndjson`, main logs, and candidate
+evaluation logs. These inputs form `.autoresearch/oncall/process-stream.ndjson`
+and the bounded evidence window given to the analyst. Raw challenge and
+candidate logs remain authoritative.
+
+The analyst is a fresh `pi --mode json -p --no-session` process with ambient
+extensions, skills, prompt templates, context files, and tools disabled. It
+shares the operator's normal Pi credential resolution but receives only the
+bounded stream window. Its typed contract separates:
+
+- catastrophic process exit, exhausted recovery circuit, confirmed stall,
+  provider outage, runtime corruption, or infrastructure failure;
+- ordinary candidate, verification, benchmark, score, retry, Advisor, and
+  church outcomes that remain owned by the inner loop.
+
+A deterministic process exit while durable work is active, a paused state
+with a recovery record, or an active phase beyond the configured progress
+deadline can intervene immediately. Other findings require two consecutive
+matching `high`-confidence catastrophic assessments. Invalid analyst output
+cannot trigger a semantic intervention. This intentionally biases toward not
+interfering with healthy research.
+
+Each incident directory contains `report.json`, `report.md`, `evidence.log`,
+the Codex JSONL trace, its last message, and `repair.json`. The repair turn is
+ephemeral Codex with `gpt-5.6-sol`, high reasoning, `workspace-write`, and
+non-interactive approval policy. Its prompt permits local progress-restoring
+edits in the challenge checkout and installed runtime, while prohibiting
+scientific-policy changes, real submission/sync, commits, paid-model tests,
+and unrelated cleanup. Those prompt and workspace boundaries are not an
+operating-system sandbox.
+
+The supervisor persists the incident before repair, suppresses a duplicate
+repair for the same incident signature, applies exponential restart delay,
+and stops after the configured crash-loop limit. A replacement Pi receives a
+one-shot `KYDO_ONCALL_RESTART` marker. On `session_start`, the extension
+restores the dashboard and calls the ordinary start path only for an existing
+non-terminal durable state. Initialization, a ready checkpoint, and a
+completed run are never synthesized or bypassed.
 
 ## Testing architecture
 

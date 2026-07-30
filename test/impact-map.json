@@ -30,6 +30,7 @@
     "full"
   ],
   "productionRoots": [
+    "bin/",
     "src/",
     "extensions/"
   ],
@@ -282,6 +283,14 @@
       "category": "adjacent-boundary"
     },
     {
+      "id": "integration.oncall-supervisor",
+      "file": "test/oncall-supervisor.test.ts",
+      "phases": [],
+      "segments": [],
+      "tiers": ["integration", "full"],
+      "category": "cross-cutting"
+    },
+    {
       "id": "integration.extension-loading",
       "file": "test/integration/pi-extension/loading.test.ts",
       "phases": ["ui"],
@@ -460,6 +469,13 @@
       "phases": ["professor", "phd", "finalization"],
       "tiers": ["phase-contract", "phase-flow"],
       "reason": "Shared candidate evidence and lineage boundary",
+      "escalateToFull": true
+    },
+    {
+      "patterns": ["bin/pi-kydo.js", "src/oncall/**"],
+      "phases": [],
+      "tiers": ["integration", "full"],
+      "reason": "Outer catastrophic-failure diagnosis, repair dispatch, and restart lifecycle",
       "escalateToFull": true
     },
     {

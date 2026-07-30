@@ -12,6 +12,7 @@ interface PackageManifest {
   pi?: { extensions?: string[] };
   peerDependencies?: Record<string, string>;
   peerDependenciesMeta?: Record<string, { optional?: boolean }>;
+  bin?: Record<string, string>;
 }
 
 describe("pi package contract", () => {
@@ -35,6 +36,14 @@ describe("pi package contract", () => {
       expect(path.relative(repoRoot, resolved)).not.toMatch(/^\.\.(?:[/\\]|$)/);
       expect(fs.statSync(resolved).isFile()).toBe(true);
     }
+  });
+
+  it("ships the executable catastrophic-failure supervisor", () => {
+    expect(manifest.bin).toEqual({ "pi-kydo": "./bin/pi-kydo.js" });
+    const executable = path.join(repoRoot, "bin", "pi-kydo.js");
+    expect(fs.statSync(executable).isFile()).toBe(true);
+    expect(fs.readFileSync(executable, "utf8")).toMatch(/^#!\/usr\/bin\/env node/);
+    expect(fs.statSync(executable).mode & 0o111).not.toBe(0);
   });
 
   it("declares pi-provided runtime modules as optional wildcard peers", () => {

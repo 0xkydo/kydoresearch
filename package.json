@@ -9,12 +9,16 @@
   ],
   "type": "module",
   "license": "MIT",
+  "bin": {
+    "pi-kydo": "./bin/pi-kydo.js"
+  },
   "pi": {
     "extensions": [
       "./extensions/autoresearch/index.ts"
     ]
   },
   "scripts": {
+    "build:oncall": "node scripts/build-oncall.mjs",
     "mock": "bash scripts/mock-demo.sh",
     "test": "vitest --run",
     "test:kernel": "node scripts/test-impact.ts --mode related --kernel",

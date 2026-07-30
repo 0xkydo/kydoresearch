@@ -15,9 +15,14 @@ import { registerTaskboardTool } from "./taskboard-tool.ts";
 export default function (pi: ExtensionAPI) {
   registerTaskboardTool(pi);
   registerNotesTool(pi);
-  const { restoreWidget } = registerAutoresearchCommand(pi);
+  const { restoreWidget, resumeAfterSupervisorRestart } =
+    registerAutoresearchCommand(pi);
 
   pi.on("session_start", async (_event, ctx) => {
     restoreWidget(ctx);
+    if (process.env.KYDO_ONCALL_RESTART) {
+      delete process.env.KYDO_ONCALL_RESTART;
+      await resumeAfterSupervisorRestart(ctx);
+    }
   });
 }
