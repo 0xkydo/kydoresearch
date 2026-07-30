@@ -63,4 +63,18 @@ describe("README contract", () => {
     expect(readme).toContain(".autoresearch/loops/init/status.json");
     expect(readme).toContain("pending, running, retrying, passed, or failed");
   });
+
+  it("documents the optional catastrophic-failure supervisor and its limits", () => {
+    for (const phrase of [
+      "pi-kydo",
+      ".autoresearch/oncall/incidents/",
+      "two matching high-confidence",
+      "gpt-5.6-sol",
+      "--max-restarts",
+      "--no-repair",
+      "not a security sandbox",
+    ]) {
+      expect(readme).toContain(phrase);
+    }
+  });
 });

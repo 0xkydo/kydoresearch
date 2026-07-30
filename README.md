@@ -105,6 +105,60 @@ pi list
 The installation is global and only needs to be done once. To update installed
 Pi packages later, run `pi update --extensions`.
 
+### Optional: launch with an on-call supervisor
+
+`pi-kydo` is the package's supervised executable. It starts the same
+interactive Pi extension, so first-run review and `/autoresearch config` work
+unchanged, while an outer process watches Pi's stderr, exit status, and the
+durable `.autoresearch/` event and evaluation logs.
+
+If your Pi package installation does not expose npm executables on `PATH`,
+install or link this package's command once:
+
+```bash
+npm install -g git+https://github.com/0xkydo/kydoresearch.git
+pi-kydo --help
+```
+
+Then run it from the challenge checkout instead of `pi`:
+
+```bash
+cd /path/to/challenge
+pi-kydo
+```
+
+Unknown launcher options are forwarded to interactive Pi. Use `--` when the
+separation should be explicit:
+
+```bash
+pi-kydo --scan-interval-ms 30000 -- --model openai-codex/gpt-5.6-sol
+```
+
+The supervisor starts fresh, sessionless Pi analyst turns only when the
+durable process stream changes. That analyst has no tools and can only return
+a typed diagnosis. Normal candidate failures, worse scores, dry loops,
+in-budget retries, Advisor notes, and church are explicitly outside its
+authority. A semantic finding requires two matching high-confidence
+catastrophic assessments. Process death, an opened durable recovery circuit,
+or a configured no-progress deadline is a deterministic catastrophic signal.
+
+For a catastrophe, the supervisor seals a report, exact bounded evidence, and
+agent traces under `.autoresearch/oncall/incidents/`. It then dispatches an
+ephemeral Codex repair turn using `gpt-5.6-sol` with high reasoning,
+`workspace-write`, and no interactive approvals. The repair prompt permits
+only the smallest progress-restoring change, prohibits submission/sync and
+scientific-policy changes, and includes both the challenge checkout and the
+installed kydoresearch runtime when they differ. After the repair turn
+finishes, Pi restarts and the extension resumes the existing durable
+AutoResearch phase automatically.
+
+This is an unattended code-editing path, not a security sandbox. Use a
+disposable clone or OS-level containment, review the incident archive, and
+set provider spending limits. Repeated identical incidents do not dispatch
+duplicate repairs, restart delay grows exponentially, and `--max-restarts`
+opens the outer crash-loop circuit. Press Ctrl-C to stop intentionally. Use
+`--no-repair` to retain diagnosis and restart behavior without Codex edits.
+
 ### 2. Open a clean challenge checkout
 
 ```bash
@@ -380,6 +434,11 @@ research references behind the design.
 | `/autoresearch telemetry` | Aggregate local flow timings by count, total, average, maximum, and failures. |
 | `/autoresearch config` | Edit runner, role models, souls, prompts, thresholds, timeouts, advisor behavior, and submission model. |
 | `/autoresearch stop` | Abort active work safely and persist a resumable paused state. |
+
+The outer `pi-kydo` executable is intentionally not another slash command. It
+must own the interactive Pi process in order to restart it after a fatal exit.
+Run `pi-kydo --help` for analyst model, scan/stall threshold, restart backoff,
+restart circuit, executable path, and Pi passthrough options.
 
 The extension also registers two tools for interactive and subprocess agents:
 
@@ -773,6 +832,14 @@ the role's tool policy, and retains the raw JSONL event stream.
   outside the declared surface or another integrity mismatch.
 - **The run is paused after a restart:** run `/autoresearch status`, inspect
   the saved state and logs, then use `/autoresearch` to resume.
+- **The on-call supervisor intervened:** inspect the newest directory under
+  `.autoresearch/oncall/incidents/`. `report.md` is the diagnosis,
+  `evidence.log` is the bounded process window, `codex.ndjson` is the repair
+  trace, and `repair.json` is the structured outcome.
+- **The on-call restart circuit opened:** the configured number of
+  catastrophic restarts was exhausted. Repeated identical incidents are not
+  sent to Codex twice; fix the remaining external or local blocker, then start
+  `pi-kydo` again.
 - **Meta-harness pauses for verifier drift:** inspect
   `.autoresearch/metaharness/verifier.json` and the journal. The error and
   `metaharness.verifier-drift` event identify the changed declared-contract or

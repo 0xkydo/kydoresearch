@@ -203,6 +203,48 @@ describe("autoresearch persistent dashboard", () => {
     }
   });
 
+  it("resumes an existing durable phase after an on-call process restart", async () => {
+    const challenge = makeTmpChallenge();
+    const stateDir = path.join(challenge.repoRoot, STATE_DIR_NAME);
+    const state = newLoopState({
+      name: "supervised-resume",
+      cli: "./bin/mockchal",
+      direction: "-",
+      setupCommand: "./setup.sh",
+      verifyCommand: "./verify.sh",
+      benchCommand: "./benchmark.sh",
+      submitNeedsModel: false,
+      editablePaths: ["src"],
+      scorePath: "score.json",
+    });
+    state.phase = "paused";
+    state.resumePhase = "loop.syncing";
+    saveState(stateDir, state);
+    fs.writeFileSync(
+      path.join(stateDir, "config.json"),
+      JSON.stringify({ version: 1, runner: "mock", maxLoops: 0 }),
+    );
+    const pi = {
+      registerCommand: vi.fn(),
+      sendMessage: vi.fn(),
+    } as unknown as ExtensionAPI;
+    const { resumeAfterSupervisorRestart } = registerAutoresearchCommand(pi);
+    const notify = vi.fn();
+    const ctx = {
+      cwd: challenge.repoRoot,
+      hasUI: false,
+      mode: "print",
+      ui: { notify },
+    } as unknown as ExtensionContext;
+
+    try {
+      await resumeAfterSupervisorRestart(ctx);
+      expect(loadState(stateDir)?.phase).toBe("done");
+    } finally {
+      challenge.cleanup();
+    }
+  });
+
   it("installs the Agent Monitor above the Composer and restores the prior editor", async () => {
     const challenge = makeTmpChallenge();
     const stateDir = path.join(challenge.repoRoot, STATE_DIR_NAME);

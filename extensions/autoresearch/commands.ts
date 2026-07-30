@@ -131,7 +131,10 @@ interface RunHandle {
 export function registerAutoresearchCommand(
   pi: ExtensionAPI,
   options: AutoresearchCommandOptions = {},
-): { restoreWidget: (ctx: ExtensionContext) => void } {
+): {
+  restoreWidget: (ctx: ExtensionContext) => void;
+  resumeAfterSupervisorRestart: (ctx: ExtensionContext) => Promise<void>;
+} {
   let active: RunHandle | null = null;
   const piVersion = options.piVersion ?? PI_VERSION;
 
@@ -1241,6 +1244,26 @@ export function registerAutoresearchCommand(
             : `autoresearch: ${state.phase} (loop ${state.loop}) — /autoresearch to resume`,
         );
       }
+    },
+    resumeAfterSupervisorRestart: async (ctx: ExtensionContext) => {
+      const stateDir = path.join(ctx.cwd, STATE_DIR_NAME);
+      const state = loadState(stateDir);
+      if (
+        !state ||
+        state.phase === "done" ||
+        state.phase === "ready" ||
+        active
+      ) {
+        return;
+      }
+      notify(
+        ctx,
+        `on-call supervisor restored Pi; resuming durable phase ${state.phase}`,
+      );
+      // startRun's existing-state path uses only the common ExtensionContext
+      // surface. Session-start contexts intentionally omit user-only session
+      // mutation methods, none of which are touched during durable resume.
+      await startRun(ctx as ExtensionCommandContext);
     },
   };
 }

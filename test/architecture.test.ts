@@ -184,6 +184,21 @@ describe("architecture documentation contract", () => {
     }
   });
 
+  it("keeps catastrophic recovery outside scientific search control", () => {
+    for (const detail of [
+      "pi-kydo",
+      "Catastrophic-failure supervisor",
+      "two consecutive",
+      "Invalid analyst output",
+      "`gpt-5.6-sol`",
+      "`workspace-write`",
+      "KYDO_ONCALL_RESTART",
+      "scientific-policy changes",
+    ]) {
+      expect(architecture).toContain(detail);
+    }
+  });
+
   it("uses runner-only GitHub contexts at step scope", () => {
     expect(testWorkflow).not.toMatch(
       /^ {4}env:\n(?: {6}.+\n)* {6}[A-Z_]+:.*\$\{\{\s*runner\./m,
