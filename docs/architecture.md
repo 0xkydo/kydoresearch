@@ -411,11 +411,12 @@ The running TUI has three named vertical zones:
 
 The Agent Monitor is a single frame with one-cell interior padding and no
 blank lines between agent rows. It has two views. **Overview** shows a bounded
-window of all invocation summaries. **Focus** uses the same frame for one
-invocation's semantic trace history. Selection is held by stable invocation
-ID, and row order freezes while keyboard navigation is active so live status
-updates cannot move the target under the cursor. New invocations append to
-that frozen order.
+window of active invocation summaries (running, queued, or waiting); terminal
+invocations are retained in durable evidence but omitted from the display.
+**Focus** uses the same frame for one active invocation's semantic trace
+history. Selection is held by stable invocation ID, and row order freezes
+while keyboard navigation is active so live status updates cannot move the
+target under the cursor. New invocations append to that frozen order.
 
 `ResearchEditor` wraps Pi's `CustomEditor` with two input modes. `NAV` sends
 Up/Down to selection, Enter to Focus, Escape to Overview, Left/Right to

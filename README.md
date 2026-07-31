@@ -254,11 +254,12 @@ Control Deck    below the Composer; Activity Navigator, Run Overview, Controls
 ```
 
 The **Agent Monitor** is one compact frame with flat, tightly spaced rows.
-Overview shows all known agent invocations and their current work. Focus
-reuses the same frame for the selected invocation's semantic trace history;
-it does not expose raw JSON as the primary view. The **Activity Navigator** is
-the selected-agent row in the Control Deck. It makes the monitor keyboard
-interactive without typing another slash command.
+Overview shows only active agent invocations: running, queued, or waiting work.
+Terminal invocations disappear instead of remaining as historical rows. Focus
+reuses the same frame for the selected active invocation's semantic trace
+history; it does not expose raw JSON as the primary view. The **Activity
+Navigator** is the selected-agent row in the Control Deck. It makes the monitor
+keyboard interactive without typing another slash command.
 
 While the editor shows `NAV`, use Up/Down to select an agent, Enter to enter
 Focus, and Escape to return to Overview. In Focus, Left/Right switches between

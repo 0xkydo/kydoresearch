@@ -10,7 +10,7 @@ import type { MonitorTraceEvent } from "../extensions/autoresearch/trace-view.ts
 describe("AgentMonitorModel", () => {
   it("preserves selection by invocation ID and freezes row order during navigation", () => {
     const model = new AgentMonitorModel([
-      agent("old", "complete", 1),
+      agent("old", "waiting", 1),
       agent("live", "running", 2),
     ]);
     expect(model.snapshot().orderedInvocationIds).toEqual(["live", "old"]);
@@ -19,7 +19,7 @@ describe("AgentMonitorModel", () => {
 
     model.updateAgents([
       agent("old", "running", 20),
-      agent("live", "complete", 2),
+      agent("live", "waiting", 2),
       agent("new", "running", 30),
     ]);
 
@@ -33,7 +33,7 @@ describe("AgentMonitorModel", () => {
 
   it("supports overview/focus transitions and adjacent invocations in one family", () => {
     const model = new AgentMonitorModel([
-      agent("phd-1", "complete", 1, { candidateId: "candidate-a" }),
+      agent("phd-1", "waiting", 1, { candidateId: "candidate-a" }),
       agent("phd-2", "running", 2, { candidateId: "candidate-a" }),
       agent("phd-other", "running", 3, { candidateId: "candidate-b" }),
     ]);
@@ -72,12 +72,41 @@ describe("AgentMonitorModel", () => {
 
   it("falls back to another live invocation when the selected ID disappears", () => {
     const model = new AgentMonitorModel([
-      agent("first", "complete", 1),
+      agent("first", "waiting", 1),
       agent("second", "running", 2),
     ]);
     model.selectInvocation("first");
     model.updateAgents([agent("second", "running", 3)]);
     expect(model.selectedInvocationId).toBe("second");
+  });
+
+  it("shows only active invocations and removes them when they become terminal", () => {
+    const model = new AgentMonitorModel([
+      agent("running", "running", 5),
+      agent("waiting", "waiting", 4),
+      agent("queued", "queued", 3),
+      agent("complete", "complete", 2),
+      agent("failed", "failed", 1),
+      agent("interrupted", "interrupted", 0),
+    ]);
+
+    expect(model.snapshot().orderedInvocationIds).toEqual([
+      "running",
+      "waiting",
+      "queued",
+    ]);
+
+    model.selectInvocation("waiting");
+    model.enterFocus();
+    model.updateAgents([
+      agent("running", "complete", 6),
+      agent("waiting", "failed", 6),
+      agent("queued", "interrupted", 6),
+    ]);
+
+    expect(model.orderedAgents).toEqual([]);
+    expect(model.selectedInvocationId).toBeUndefined();
+    expect(model.mode).toBe("overview");
   });
 });
 
@@ -144,7 +173,7 @@ describe("renderAgentMonitor", () => {
   it("renders an empty monitor without changing frame density", () => {
     const lines = renderAgentMonitor(new AgentMonitorModel(), 36, { height: 4 });
     expect(lines).toHaveLength(4);
-    expect(lines.join("\n")).toContain("No agent activity yet");
+    expect(lines.join("\n")).toContain("No active agents");
     expect(lines.every((line) => visibleWidth(line) === 36)).toBe(true);
   });
 });

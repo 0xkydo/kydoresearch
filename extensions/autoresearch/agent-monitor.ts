@@ -98,7 +98,13 @@ export class AgentMonitorModel {
   updateAgents(agents: readonly MonitorAgent[]): void {
     const next = new Map<string, MonitorAgent>();
     for (const agent of agents) {
-      if (!agent.invocationId.trim() || next.has(agent.invocationId)) continue;
+      if (
+        !agent.invocationId.trim() ||
+        next.has(agent.invocationId) ||
+        !isActive(agent.status)
+      ) {
+        continue;
+      }
       next.set(agent.invocationId, agent);
     }
 
@@ -282,7 +288,7 @@ function renderOverview(
     interior,
   );
   if (entries.length === 0) {
-    lines.push(contentLine("No agent activity yet", width));
+    lines.push(contentLine("No active agents", width));
   } else {
     for (const entry of entries) {
       if ("omitted" in entry) {
@@ -474,6 +480,11 @@ function statusRank(status: string): number {
 function isLive(status: string): boolean {
   return ["running", "starting", "retrying", "implementing", "verifying", "benchmarking"]
     .includes(status.toLowerCase());
+}
+
+function isActive(status: string): boolean {
+  const normalized = status.toLowerCase();
+  return isLive(normalized) || normalized === "waiting" || normalized === "queued";
 }
 
 function timeValue(value: number | string | undefined): number {
