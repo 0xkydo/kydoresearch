@@ -232,6 +232,8 @@ describe("autoresearch status rendering", () => {
       runOverview: {
         experimentsRun: 17,
         remoteAccepted: 3,
+        remotePending: 2,
+        remoteRejected: 1,
         otherSubmissions: 48,
         loopTokens: 198_000,
         tokenUsageComplete: false,
@@ -276,7 +278,7 @@ describe("autoresearch status rendering", () => {
     expect(rendered).toContain("1/4  ▸ phd L004-I1 · implement · OVERVIEW · NAV");
     expect(rendered).toContain("RUN");
     expect(rendered).toContain("Experiments 17");
-    expect(rendered).toContain("Remote accepted 3");
+    expect(rendered).toContain("Remote 3 accepted / 2 pending / 1 rejected");
     expect(rendered).toContain("Others 48");
     expect(rendered).toContain("Loop tokens ≥198k");
     expect(rendered).toContain("KEYS");

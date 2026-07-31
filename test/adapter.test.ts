@@ -212,7 +212,7 @@ describe("YukonCliAdapter against mockchal", () => {
     const submissionId = "019fba1d-d5eb-7633-b93f-f713966c02a7";
     const exec: ExecPort = async (_cmd, args) => {
       const command = args[1] ?? "";
-      if (command.includes(" submit ") || command.endsWith(" submit")) {
+      if (/\bsubmit\b/.test(command.replaceAll('"', ""))) {
         return {
           stdout: [
             "Submission queued",

@@ -337,7 +337,20 @@ export function registerAutoresearchCommand(
         );
         break;
       case "submitted":
-        notify(ctx, `submitted ${ev.ideaId} (score ${ev.score})${ev.submissionId ? ` as ${ev.submissionId}` : ""}`);
+        notify(
+          ctx,
+          `${ev.status === "pending" ? "submission queued" : "submitted"} ${ev.ideaId} ` +
+            `(score ${ev.score})${ev.submissionId ? ` as ${ev.submissionId}` : ""}`,
+        );
+        break;
+      case "submission-result":
+        notify(
+          ctx,
+          `remote submission ${ev.status}: ${ev.candidateId}` +
+            `${ev.submissionId ? ` (${ev.submissionId})` : ""}` +
+            `${ev.officialScore === undefined ? "" : ` · official score ${ev.officialScore}`}`,
+          ev.status === "rejected" ? "warning" : "info",
+        );
         break;
       case "church":
         notify(ctx, `the Professor went to church after loop ${ev.loop} — see ${ev.noteFile}`, "warning");
@@ -1586,7 +1599,9 @@ function activityFromEvent(event: OrchestratorEvent): string {
     case "church":
       return `church reflection saved · ${event.noteFile}`;
     case "submitted":
-      return `${event.ideaId} · submitted score ${event.score}`;
+      return `${event.ideaId} · ${event.status === "pending" ? "submission queued" : "submitted"} score ${event.score}`;
+    case "submission-result":
+      return `${event.candidateId} · remote ${event.status}`;
     case "log":
       return event.message;
   }
