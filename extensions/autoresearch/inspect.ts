@@ -46,7 +46,7 @@ export function renderCandidateInspection(
   const lines = [
     `${candidateId} · ${title}`,
     `Status: ${status} · parent: ${parent}` +
-      (idea ? ` · verify attempts completed: ${idea.verifyAttempts}` : ""),
+      (idea ? ` · verification attempts completed: ${idea.verifyAttempts}` : ""),
   ];
 
   if (proposal) {

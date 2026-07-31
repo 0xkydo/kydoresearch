@@ -163,6 +163,7 @@ describe("autoresearch status rendering", () => {
         "L004-I3 · benched: local score 8.5",
         "benchmark queue advanced",
       ],
+      oncallSupervised: false,
     });
     const rendered = lines.join("\n");
 
@@ -177,7 +178,13 @@ describe("autoresearch status rendering", () => {
     expect(rendered).toContain("L004-I3 · BENCHING · parent L002-I2 · score 8.5 (1.5 better)");
     expect(rendered).toContain("Recent activity");
     expect(rendered).toContain("L004-I3 · benched: local score 8.5");
+    expect(rendered).toContain("on-call inactive · launch with pi-kydo");
     expect(rendered).toContain("/autoresearch inspect <candidate>");
+
+    const supervised = renderStatusLines("demo", report, {
+      oncallSupervised: true,
+    }).join("\n");
+    expect(supervised).toContain("on-call supervisor active");
   });
 
   it("renders an uncapped, colored control deck below the editor", () => {

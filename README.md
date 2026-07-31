@@ -378,7 +378,7 @@ research loop
   archive every terminal candidate and write a result-aware postmortem
   best meaningful improvement → apply to main → re-verify → re-bench → submit
   advisor reviews the loop; a configured blocker pauses it
-  repeated dry loops → Professor goes to church and reflects with God → next loop
+  repeated evaluated dry loops → Professor goes to church and reflects with God → next loop
 ```
 
 Pi subprocess sessions are deliberately fresh and ephemeral. Durable
@@ -532,8 +532,8 @@ fields; loading deep-merges it with these defaults.
       "tools": ["read", "write", "edit", "bash"]
     }
   },
-  "churchTriggerThreshold": 3, // consecutive dry loops before church; 0 disables
-  "maxVerifyAttempts": 3,
+  "churchTriggerThreshold": 3, // consecutive evaluated dry loops before church; 0 disables
+  "maxVerifyAttempts": 3, // implementation/verification cycles after agent infrastructure retries
   "maxIdeasPerLoop": 5,
   "maxLoops": null, // null means unlimited
   "minImprovement": 0.005, // 0.5% relative improvement in the manifest direction
@@ -562,7 +562,7 @@ fields; loading deep-merges it with these defaults.
     "evaluationLoops": 1,
     "maxGenerations": null,
     "maxWallTimeMs": null,
-    "maxRecoveryAttempts": 5,
+    "maxRecoveryAttempts": 5, // total fatal inner-loop attempts, including the first
     "retryBaseDelayMs": 1000,
     "retryMaxDelayMs": 60000,
     "maxConsecutiveProposalFailures": 3,
@@ -619,8 +619,10 @@ policy; the harness writes their returned Markdown.
   you need a hard research budget.
 - `minImprovement` is a relative threshold interpreted in the manifest's score
   direction.
-- `maxVerifyAttempts` applies per candidate. Verification exhaustion fails
-  only that candidate.
+- `maxVerifyAttempts` applies per candidate after the PhD subprocess is
+  available. An exhausted provider-level PhD call fails before verification;
+  deterministic verifier failures may start another implementation/verification
+  cycle up to this limit.
 - Execution timeouts are milliseconds. Increase them only after inspecting the
   corresponding streamed log.
 - `submitModelName` is used for challenge CLIs, such as MLX Fast, that require
@@ -632,8 +634,9 @@ policy; the harness writes their returned Markdown.
   loops before promotion or rollback.
 - `maxGenerations`, `maxWallTimeMs`, and the ordinary `maxLoops` are
   independent campaign budgets. Null means unlimited.
-- `maxRecoveryAttempts`, `retryBaseDelayMs`, and `retryMaxDelayMs` bound
-  exponential recovery from fatal inner-loop failures.
+- `maxRecoveryAttempts` is a total-attempt count including the first failed
+  inner-loop execution. Together with `retryBaseDelayMs` and
+  `retryMaxDelayMs`, it bounds exponential recovery from fatal failures.
 - `maxConsecutiveProposalFailures` opens the proposal circuit breaker;
   `proposalCooldownLoops` controls how long the last-known-good champion runs
   before another outer proposal.
@@ -667,7 +670,7 @@ bounded exponential backoff and honor `/autoresearch stop` immediately.
 | Failure | Automatic fallback |
 |---|---|
 | Setup or baseline command | Setup retries once. After a first baseline failure, Setup reviews the completed benchmark log and score artifact before the remaining command attempt. The durable Setup result resumes without repeating successful setup/discovery work. |
-| Professor/setup/PhD model call | Retry twice. A PhD provider failure consumes a verify attempt only after its model retries are exhausted. |
+| Professor/setup/PhD model call | Retry twice. An exhausted PhD provider call fails the candidate before deterministic verification; it is not replayed as another verifier cycle. |
 | Leaderboard sync/fetch | Retry once, then continue from `.autoresearch/leaderboard.json`; research is not blocked. |
 | Correctness or benchmark command | Retry once. An idea that still fails is isolated; other ideas continue. |
 | Best candidate fails on main | Mark only that candidate failed and try the next qualifying candidate. If all finalists fail, restore the pre-finalization main checkout snapshot. |
@@ -675,6 +678,13 @@ bounded exponential backoff and honor `/autoresearch stop` immediately.
 | Notes, Advisor, or church | Retry twice, log the failure, and continue. A failed church visit preserves the dry-loop streak so it is attempted again later. |
 | Worktree cleanup | Seal and index every terminal candidate, persist cleanup intent, retry once, and try it again at the next checkpoint. |
 | Unexpected loop-level failure | Resume the same saved phase with a 1–15 minute backoff. After 12 consecutive failures, pause with a visible recovery reason instead of spinning or spending indefinitely. |
+
+A loop advances `dryLoopStreak` only when at least one candidate reached the
+deterministic verifier and no candidate improved the objective. A loop where
+every candidate stopped at provider, worktree, implementation, or integrity
+setup remains operational evidence, but it does not manufacture a scientific
+plateau or trigger church. Meta-harness evaluation windows likewise skip such
+loops and retain the same pinned profile for the next evaluable loop.
 
 Successful idea work is checkpointed throughout. An unfinished loop does not
 count toward `maxLoops`, so a transient failure on the final configured loop
@@ -736,7 +746,7 @@ The useful files in a candidate run are:
 | `parent.json` | Explicit parent candidate, base revision, and archived parent source. |
 | `source/` | The exact editable files that were evaluated. |
 | `diff.patch` | What changed relative to the declared parent candidate. |
-| `metrics.json` | Score, comparison score, commands, timing, and terminal outcome. |
+| `metrics.json` | Score, comparison score, commands, timing, whether deterministic evaluation started, and terminal outcome. |
 | `integrity.json` | Whether anything outside the allowed editable surface changed. |
 | `logs/` | Candidate-specific verifier and benchmark output. |
 | `postmortem.md` | What the experiment taught the research program. |
@@ -840,6 +850,9 @@ the role's tool policy, and retains the raw JSONL event stream.
   outside the declared surface or another integrity mismatch.
 - **The run is paused after a restart:** run `/autoresearch status`, inspect
   the saved state and logs, then use `/autoresearch` to resume.
+- **Status says `on-call inactive`:** the extension was launched through
+  ordinary `pi`. Start the challenge with `pi-kydo` when you want the optional
+  outer process to diagnose catastrophic pauses and own restart behavior.
 - **The on-call supervisor intervened:** inspect the newest directory under
   `.autoresearch/oncall/incidents/`. `report.md` is the diagnosis,
   `evidence.log` is the bounded process window, `codex.ndjson` is the repair

@@ -283,6 +283,14 @@
       "category": "adjacent-boundary"
     },
     {
+      "id": "integration.provider-policy",
+      "file": "test/provider-policy.test.ts",
+      "phases": ["ui"],
+      "segments": [],
+      "tiers": ["integration"],
+      "category": "adjacent-boundary"
+    },
+    {
       "id": "integration.oncall-supervisor",
       "file": "test/oncall-supervisor.test.ts",
       "phases": [],
@@ -459,7 +467,7 @@
       "reason": "Frozen meta-harness evaluator and profile contract"
     },
     {
-      "patterns": ["extensions/autoresearch/widget.ts", "extensions/autoresearch/config-ui.ts", "extensions/autoresearch/commands.ts", "extensions/autoresearch/index.ts", "extensions/autoresearch/inspect.ts", "extensions/autoresearch/agent-monitor.ts", "extensions/autoresearch/research-editor.ts", "extensions/autoresearch/trace-view.ts", "extensions/autoresearch/*-tool.ts"],
+      "patterns": ["extensions/autoresearch/widget.ts", "extensions/autoresearch/config-ui.ts", "extensions/autoresearch/commands.ts", "extensions/autoresearch/index.ts", "extensions/autoresearch/inspect.ts", "extensions/autoresearch/agent-monitor.ts", "extensions/autoresearch/provider-policy.ts", "extensions/autoresearch/research-editor.ts", "extensions/autoresearch/trace-view.ts", "extensions/autoresearch/*-tool.ts"],
       "phases": ["ui"],
       "tiers": ["kernel", "phase-contract", "phase-flow", "integration", "pty"],
       "reason": "Interactive Pi control-plane semantics"

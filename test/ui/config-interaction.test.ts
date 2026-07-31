@@ -73,6 +73,10 @@ describe("config component interaction", () => {
       ok: false,
       changed: false,
     });
+    expect(applyConfigSetting(config, "metaMaxRecoveryAttempts", "0")).toMatchObject({
+      ok: false,
+      changed: false,
+    });
   });
 
   it("requires an explicit onboarding action to continue", () => {

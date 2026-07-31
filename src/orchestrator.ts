@@ -256,12 +256,14 @@ export class Orchestrator {
     const loop = this.state.loop > this.state.history.length
       ? this.state.loop
       : this.state.loop + 1;
-    return this.telemetry.measure(
+    const summary = await this.telemetry.measure(
       "loop.total",
       { loop, scope: "loop" },
       () => this.runLoopInner(),
       () => (this.aborted() ? "aborted" : "ok"),
     );
+    if (summary !== null) this.clearRecovery();
+    return summary;
   }
 
   private async runLoopInner(): Promise<LoopSummary | null> {
@@ -351,16 +353,19 @@ export class Orchestrator {
     if (!summary || (resumePhase !== "loop.end" && !resumeAtChurch)) {
       this.transition("loop.end");
       if (this.aborted()) return this.abortLoop();
+      const summarizedIdeas = this.state.ideas.map((idea) => ({
+        id: idea.id,
+        title: idea.title,
+        status: idea.status,
+        localScore: idea.localScore,
+        evaluated: (idea.verifyRecords?.length ?? 0) > 0,
+      }));
       summary = {
         loop: this.state.loop,
         improved,
         bestScoreAfter: this.state.bestScore,
-        ideas: this.state.ideas.map((idea) => ({
-          id: idea.id,
-          title: idea.title,
-          status: idea.status,
-          localScore: idea.localScore,
-        })),
+        evaluatedCandidates: summarizedIdeas.filter((idea) => idea.evaluated).length,
+        ideas: summarizedIdeas,
       };
 
       let advisorNotes: AdvisorNote[] = [];
@@ -372,7 +377,11 @@ export class Orchestrator {
       }
       if (this.aborted()) return this.abortLoop();
       summary.advisorNotes = advisorNotes.map((note) => `[${note.severity}] ${note.text}`);
-      this.state.dryLoopStreak = improved ? 0 : this.state.dryLoopStreak + 1;
+      this.state.dryLoopStreak = nextDryLoopStreak(
+        this.state.dryLoopStreak,
+        improved,
+        summary.evaluatedCandidates ?? summary.ideas.length,
+      );
       this.state.pendingSummary = summary;
       this.persist();
     }
@@ -733,9 +742,15 @@ export class Orchestrator {
         if (!impl.ok) {
           if (this.aborted()) return;
           idea.lastVerifyError = impl.error ?? impl.output;
-          idea.verifyAttempts += 1;
+          idea.status = "failed";
           this.persist();
-          continue;
+          this.emitIdea(
+            idea,
+            `implementation failed before verification after ` +
+              `${this.config.resilience.agentMaxAttempts} agent attempt(s); ` +
+              "evidence will be archived before cleanup",
+          );
+          return;
         }
         idea.implementationSummary = impl.output;
         this.persist();
@@ -762,9 +777,13 @@ export class Orchestrator {
           idea.lastVerifyError =
             "Candidate integrity check failed before evaluation:\n" +
             integrityArtifact.unexpectedFiles.map((entry) => `- ${entry}`).join("\n");
-          idea.verifyAttempts = this.config.maxVerifyAttempts;
+          idea.status = "failed";
           this.persist();
-          break;
+          this.emitIdea(
+            idea,
+            "integrity failed before verification; evidence will be archived before cleanup",
+          );
+          return;
         }
 
         idea.status = "verifying";
@@ -811,7 +830,8 @@ export class Orchestrator {
         this.persist();
         this.emitIdea(
           idea,
-          `failed after ${idea.verifyAttempts} verify attempt(s); evidence will be archived before cleanup`,
+          `failed after ${idea.verifyAttempts} verification attempt(s); ` +
+            "evidence will be archived before cleanup",
         );
         return;
       }
@@ -1526,6 +1546,7 @@ export class Orchestrator {
       comparisonScore: idea.comparisonScore ?? this.state.bestScore,
       ...(idea.localScore === undefined ? {} : { score: idea.localScore }),
       improved: terminalStatus === "done-improved",
+      evaluationStarted: (idea.verifyRecords?.length ?? 0) > 0,
       verify: idea.verifyRecords ?? [],
       ...(idea.benchmarkRecord ? { benchmark: idea.benchmarkRecord } : {}),
       ...(idea.lastVerifyError ? { failure: idea.lastVerifyError } : {}),
@@ -1584,9 +1605,16 @@ export class Orchestrator {
     if (!this.config.advisor.enabled) return [];
     const watchdog = loadWatchdog(this.repoRoot, this.config.advisor.watchdogFile);
     const prev = this.state.history[this.state.history.length - 1];
+    const evaluatedCandidates = summary.evaluatedCandidates ?? summary.ideas.length;
     const stateDiff = {
-      dryLoopStreak: summary.improved ? 0 : this.state.dryLoopStreak + 1,
+      dryLoopStreak: nextDryLoopStreak(
+        this.state.dryLoopStreak,
+        summary.improved,
+        evaluatedCandidates,
+      ),
       improved: summary.improved,
+      evaluatedCandidates,
+      operationalOnly: !summary.improved && evaluatedCandidates === 0,
       submitted: summary.ideas.some((i) => i.status === "done-improved"),
       ideaFailed: summary.ideas.some((i) => i.status === "failed"),
       scoreDelta:
@@ -2179,6 +2207,15 @@ function firstLine(value: string): string {
 
 function errorMessage(error: unknown): string {
   return error instanceof Error ? error.message : String(error);
+}
+
+function nextDryLoopStreak(
+  current: number,
+  improved: boolean,
+  evaluatedCandidates: number,
+): number {
+  if (improved) return 0;
+  return evaluatedCandidates > 0 ? current + 1 : current;
 }
 
 function retryValueDetail(value: unknown): string {

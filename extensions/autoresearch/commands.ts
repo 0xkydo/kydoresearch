@@ -185,11 +185,15 @@ export function registerAutoresearchCommand(
     report: StatusReport,
     options: StatusRenderOptions,
   ): void {
+    const runtimeOptions = {
+      ...options,
+      oncallSupervised: process.env.KYDO_ONCALL_SUPERVISED === "1",
+    };
     setPersistentWidget(
       ctx,
-      renderStatusLines(challengeName, report, options),
+      renderStatusLines(challengeName, report, runtimeOptions),
       (width, theme) =>
-        renderStatusDashboardLines(challengeName, report, width, theme, options),
+        renderStatusDashboardLines(challengeName, report, width, theme, runtimeOptions),
     );
   }
 
@@ -750,11 +754,13 @@ export function registerAutoresearchCommand(
           recentActivity: active.recentActivity,
           operatorSteering: operatorSteeringForUi(stateDir),
           running: true,
+          oncallSupervised: process.env.KYDO_ONCALL_SUPERVISED === "1",
         })
       : renderStatusLines(state.challenge.name, statusFromState(stateDir, state), {
           recentActivity: readRecentActivity(stateDir),
           operatorSteering: operatorSteeringForUi(stateDir),
           running: false,
+          oncallSupervised: process.env.KYDO_ONCALL_SUPERVISED === "1",
         });
     notify(ctx, lines.join("\n"));
   }
@@ -901,7 +907,10 @@ export function registerAutoresearchCommand(
     const prompts: Record<EditableSettingField, [title: string, current: string]> = {
       maxIdeasPerLoop: ["Max ideas the professor may propose per loop:", String(config.maxIdeasPerLoop)],
       churchTriggerThreshold: ["Dry loops before church (0 disables):", String(config.churchTriggerThreshold)],
-      maxVerifyAttempts: ["Verify attempts per idea before giving up:", String(config.maxVerifyAttempts)],
+      maxVerifyAttempts: [
+        "Implementation/verification cycles after model-task retries:",
+        String(config.maxVerifyAttempts),
+      ],
       maxLoops: ["Max loops (empty = unlimited):", config.maxLoops === null ? "" : String(config.maxLoops)],
       minImprovement: ["Relative epsilon for meaningful improvement:", String(config.minImprovement)],
       mockLoopDelayMs: ["Pause after each mock loop in milliseconds (0 disables):", String(config.mockLoopDelayMs)],
@@ -960,7 +969,7 @@ export function registerAutoresearchCommand(
           : String(config.metaHarness.maxWallTimeMs),
       ],
       metaMaxRecoveryAttempts: [
-        "Fatal inner-loop recovery attempts before fail-stop:",
+        "Total fatal inner-loop attempts before fail-stop (including the first):",
         String(config.metaHarness.maxRecoveryAttempts),
       ],
       watchdogFile: ["Advisor watchdog file (repo-relative):", config.advisor.watchdogFile],

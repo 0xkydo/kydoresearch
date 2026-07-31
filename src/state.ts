@@ -16,7 +16,7 @@ export interface Idea {
   /** Immutable PhD task contract (relative to stateDir). */
   taskFile?: string;
   status: IdeaStatus;
-  verifyAttempts: number; // 0..maxVerifyAttempts
+  verifyAttempts: number; // completed deterministic verification attempts
   lastVerifyError?: string;
   localScore?: number;
   /** Score this candidate was required to beat when it was proposed. */
@@ -37,7 +37,16 @@ export interface LoopSummary {
   loop: number;
   improved: boolean;
   bestScoreAfter: number | null;
-  ideas: { id: string; title: string; status: IdeaStatus; localScore?: number }[];
+  /** Candidates that reached the deterministic verifier at least once. */
+  evaluatedCandidates?: number;
+  ideas: {
+    id: string;
+    title: string;
+    status: IdeaStatus;
+    localScore?: number;
+    /** Missing on legacy v1 summaries; new summaries always persist it. */
+    evaluated?: boolean;
+  }[];
   churchNote?: string; // notes file path
   /** Legacy v1 snapshots used this field name. */
   godConversation?: string;

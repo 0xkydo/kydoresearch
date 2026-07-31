@@ -19,7 +19,7 @@ export type IdeaStatus =
   | "implementing"
   | "verifying"
   | "benching"
-  | "failed" // verify failed maxVerifyAttempts times
+  | "failed" // pipeline failed before or during deterministic evaluation
   | "done-no-improvement"
   | "done-superseded" // improved locally but another idea won the loop
   | "done-improved"; // loop winner, applied + submitted

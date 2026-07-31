@@ -155,7 +155,7 @@ export function applyConfigSetting(
       } else valid = false;
       break;
     case "metaMaxRecoveryAttempts":
-      if (Number.isInteger(numeric) && numeric >= 0) {
+      if (Number.isInteger(numeric) && numeric > 0) {
         config.metaHarness.maxRecoveryAttempts = numeric;
       } else valid = false;
       break;
@@ -265,7 +265,7 @@ export class ConfigPanel {
       },
       { id: "maxIdeasPerLoop", label: "max ideas/loop", value: String(c.maxIdeasPerLoop), kind: "edit" },
       { id: "churchTriggerThreshold", label: "church threshold", value: c.churchTriggerThreshold === 0 ? "off" : String(c.churchTriggerThreshold), kind: "edit" },
-      { id: "maxVerifyAttempts", label: "verify attempts", value: String(c.maxVerifyAttempts), kind: "edit" },
+      { id: "maxVerifyAttempts", label: "verify cycles", value: String(c.maxVerifyAttempts), kind: "edit" },
       { id: "maxLoops", label: "max loops", value: c.maxLoops === null ? "unlimited" : String(c.maxLoops), kind: "edit" },
       { id: "minImprovement", label: "min improvement", value: String(c.minImprovement), kind: "edit" },
       { id: "mockLoopDelayMs", label: "mock loop delay", value: `${c.mockLoopDelayMs} ms`, kind: "edit" },

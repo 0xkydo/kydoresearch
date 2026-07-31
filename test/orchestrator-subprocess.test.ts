@@ -87,7 +87,7 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
 
     const records = readRecords(recordPath);
     expect(records.filter((record) => record.event === "crash" && record.idea === "L001-I1"))
-      .toHaveLength(6); // 2 research attempts × 3 transient agent attempts
+      .toHaveLength(3); // one implementation operation × 3 infrastructure attempts
     expect(records).toContainEqual(
       expect.objectContaining({ event: "end", idea: "L001-I2" }),
     );

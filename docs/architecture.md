@@ -517,9 +517,12 @@ Core invariants:
 `resilience` uses total-attempt counts rather than ambiguous retry counts:
 `agentMaxAttempts: 3`, `commandMaxAttempts: 2`, and
 `submitMaxAttempts: 5`. Operation retries back off from 2 seconds to at most
-one minute. These bounds apply independently, so a failed PhD subprocess gets
-three infrastructure attempts before one of the idea's
-`maxVerifyAttempts` research cycles is consumed.
+one minute. These bounds apply independently. A PhD subprocess gets three
+infrastructure attempts. If all three fail, the candidate stops before
+deterministic verification; the harness does not multiply that provider
+outage across the idea's `maxVerifyAttempts` research cycles. A completed PhD
+implementation followed by verifier failure may start the next research
+cycle.
 
 Failures are split by blast radius:
 
@@ -537,6 +540,14 @@ Failures are split by blast radius:
   attempts raises to `runUntilDone`, which persists `recovery`, waits with a
   1–15 minute exponential backoff, and resumes the same phase. Twelve
   consecutive failed resumptions open the circuit breaker and pause the run.
+
+Scientific plateau bookkeeping is evidence-gated. A new loop summary records
+which candidates reached the deterministic verifier. Only a non-improving loop
+with at least one such candidate increments `dryLoopStreak`; provider,
+worktree, implementation, and pre-verification integrity failures remain
+operational outcomes. Meta-harness evaluation windows skip operational-only
+loops instead of charging them to the pinned profile's objective or success
+rate.
 
 Submission has an additional ambiguity guard. Before every submit attempt, the
 adapter reads the user's remote submissions and matches the measured score. If
@@ -768,15 +779,15 @@ when its loop number is ahead of `history.length`.
 When pausing, `resumePhase` records the active phase before top-level `phase`
 becomes `paused`. Resume retries sync/proposal, continues idea work, finishes
 finalization, or completes loop-end bookkeeping without incrementing the loop
-number. Existing version-1 states may omit lineage/archive fields; the
-orchestrator reconstructs a canonical candidate run where possible and creates
-a baseline snapshot on first use.
+number. Existing version-1 states may omit lineage/archive and evaluation
+fields; the orchestrator reconstructs a canonical candidate run where possible
+and creates a baseline snapshot on first use.
 
 `pendingSummary` checkpoints Advisor results and dry-streak bookkeeping before
 church or final history commit. This prevents an interrupted church visit from
 double-counting a dry loop. Legacy snapshots whose saved phase is `god` resume
-at church. Aborted model, verify, and benchmark operations are not charged as
-failed verify attempts.
+at church. Aborted model, verification, and benchmark operations are not
+charged as failed verification attempts.
 God's stable role and conversational behavior are unchanged.
 
 A `done-improved` idea with its persisted submission record remains the local
@@ -797,13 +808,20 @@ reconciled inner loop. Resume reconstructs progress from durable inner
 `history`, so a loop completed immediately before interruption is counted
 exactly once.
 
-Fatal inner-loop failures use bounded exponential backoff. If retry exhaustion
-occurs before professor output or candidates are materialized, a new profile
-may be rejected and rolled back to the champion. After immutable inner
-artifacts exist, the campaign pauses instead of mixing profiles inside one
-experiment. Repeated outer-proposer failures open a cooldown circuit breaker;
+Fatal inner-loop failures use bounded exponential backoff with total-attempt
+semantics, including the first failed execution. If retry exhaustion occurs
+before professor output or candidates are materialized, a new profile may be
+rejected and rolled back to the champion. After immutable inner artifacts
+exist, the campaign pauses instead of mixing profiles inside one experiment.
+Repeated outer-proposer failures open a cooldown circuit breaker;
 champion-driven inner research continues during cooldown. Evaluator drift
 always fail-stops.
+
+A successful direct `runLoop()` clears prior systemic recovery state,
+including when an Advisor intentionally pauses after the completed loop.
+Meta-harness fail-stop replaces any older inner recovery record with the
+current error and exact exhausted-attempt count so status and the optional
+on-call supervisor diagnose the same incident.
 
 ## Challenge command boundary
 

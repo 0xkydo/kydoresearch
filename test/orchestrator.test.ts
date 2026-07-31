@@ -139,6 +139,82 @@ describe("Orchestrator scenario matrix", () => {
     ]);
   });
 
+  it("does not count provider-only implementation failures as a scientific dry loop", async () => {
+    const baseRunner = new MockAgentRunner();
+    let implementationCalls = 0;
+    const runner: AgentRunner = {
+      async run(task) {
+        if (task.kind === "implement") {
+          implementationCalls += 1;
+          return {
+            ok: false,
+            output: "",
+            error: "provider authentication unavailable",
+            filesWritten: [],
+          };
+        }
+        return baseRunner.run(task);
+      },
+    };
+    const h = await makeHarness(
+      repoRoot,
+      {
+        churchTriggerThreshold: 1,
+        advisor: { enabled: false, watchdogFile: "WATCHDOG.md" },
+      },
+      runner,
+    );
+
+    const summary = await h.makeOrchestrator().runLoop();
+    const state = loadState(h.stateDir)!;
+
+    expect(summary).toMatchObject({
+      improved: false,
+      evaluatedCandidates: 0,
+      ideas: [
+        { status: "failed", evaluated: false },
+        { status: "failed", evaluated: false },
+      ],
+    });
+    expect(implementationCalls).toBe(
+      summary!.ideas.length * h.config.resilience.agentMaxAttempts,
+    );
+    expect(state.dryLoopStreak).toBe(0);
+    expect(state.history[0]).toMatchObject({ evaluatedCandidates: 0 });
+    expect(fs.existsSync(path.join(h.stateDir, "notes", "church-001.md"))).toBe(false);
+    expect(
+      h.events.some(
+        (event) =>
+          event.type === "idea" &&
+          event.message.includes("implementation failed before verification"),
+      ),
+    ).toBe(true);
+    for (const idea of summary!.ideas) {
+      const metrics = JSON.parse(
+        fs.readFileSync(candidateRunPaths(h.stateDir, idea.id).metrics, "utf8"),
+      ) as { evaluationStarted?: boolean; verify: unknown[] };
+      expect(metrics).toMatchObject({ evaluationStarted: false, verify: [] });
+    }
+  });
+
+  it("clears stale systemic recovery after a successful direct loop", async () => {
+    const h = await makeHarness(repoRoot, {
+      advisor: { enabled: false, watchdogFile: "WATCHDOG.md" },
+    });
+    const stale = loadState(h.stateDir)!;
+    stale.recovery = {
+      scope: "loop.proposing",
+      message: "old provider incident",
+      consecutiveFailures: 3,
+      failedAt: "2026-01-01T00:00:00.000Z",
+    };
+    saveState(h.stateDir, stale);
+
+    await h.makeOrchestrator().runLoop();
+
+    expect(loadState(h.stateDir)!.recovery).toBeUndefined();
+  });
+
   it("persists cleanup intent before removal and drains deferred cleanup", async () => {
     let stateDir = "";
     let failPrune = true;
@@ -572,10 +648,20 @@ EOF
     );
     const h = await makeHarness(repoRoot, { maxLoops: 10 });
     const orchestrator = h.makeOrchestrator();
-    await orchestrator.runUntilDone();
+    await orchestrator.runLoop();
+    const stale = loadState(h.stateDir)!;
+    stale.recovery = {
+      scope: "loop.proposing",
+      message: "resolved provider incident",
+      consecutiveFailures: 2,
+      failedAt: "2026-01-01T00:00:00.000Z",
+    };
+    saveState(h.stateDir, stale);
+    await h.makeOrchestrator().runUntilDone();
     const state = loadState(h.stateDir)!;
     expect(state.phase).toBe("paused"); // blocker on loop 2's submission stopped the run
     expect(state.loop).toBe(2);
+    expect(state.recovery).toBeUndefined();
   });
 
   it("maxLoops terminates the run as done", async () => {

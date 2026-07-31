@@ -13,6 +13,7 @@ export interface StatusRenderOptions {
   recentActivity?: string[];
   operatorSteering?: OperatorSteeringSnapshot | null;
   running?: boolean;
+  oncallSupervised?: boolean;
   navigator?: {
     position: number;
     total: number;
@@ -272,6 +273,11 @@ export function renderStatusLines(
   lines.push(
     `│  advisor ${report.lastAdvisorNotes.length} note(s) · taskboard ${report.taskboardOpen} open`,
   );
+  lines.push(
+    options.oncallSupervised === true
+      ? "│  on-call supervisor active"
+      : "│  on-call inactive · launch with pi-kydo for diagnosis and restart",
+  );
   const activity = (options.recentActivity ?? []).filter(Boolean).slice(0, 3);
   if (activity.length > 0) {
     lines.push("├─ Recent activity");
@@ -341,9 +347,12 @@ export function renderStatusDashboardLines(
     ),
   );
 
-  const controls = running
+  const controls = (running
     ? "↑↓ agent · Enter focus · Esc overview · Tab composer · /autoresearch stop"
-    : "Run /autoresearch to resume · /autoresearch inspect <candidate>";
+    : "Run /autoresearch to resume · /autoresearch inspect <candidate>") +
+    (options.oncallSupervised === true
+      ? " · on-call active"
+      : " · on-call inactive");
   lines.push(
     dashboardLine(
       `${dashboardLabel(theme, "KEYS")}  ${styled(
