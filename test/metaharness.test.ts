@@ -241,6 +241,149 @@ describe("MetaHarnessController", () => {
     for (const cleanup of cleanups.splice(0)) cleanup();
   });
 
+  it("fail-stops on the configured fatal attempt and records the current recovery", async () => {
+    const challenge = makeTmpChallenge();
+    cleanups.push(challenge.cleanup);
+    const initialized = await initChallenge({
+      repoRoot: challenge.repoRoot,
+      runner: new MockAgentRunner(),
+      exec: nodeExec,
+    });
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.metaHarness.enabled = true;
+    config.metaHarness.maxRecoveryAttempts = 2;
+    config.metaHarness.retryBaseDelayMs = 0;
+    config.metaHarness.retryMaxDelayMs = 0;
+    config.resilience.agentMaxAttempts = 1;
+    let proposalCalls = 0;
+    const runner: AgentRunner = {
+      async run(task) {
+        if (task.kind === "propose") {
+          proposalCalls += 1;
+          return {
+            ok: false,
+            output: "",
+            error: "current provider outage",
+            filesWritten: [],
+          };
+        }
+        return new MockAgentRunner().run(task);
+      },
+    };
+    const manifest = readManifest(challenge.repoRoot);
+    const controller = await MetaHarnessController.create(
+      challenge.repoRoot,
+      initialized.stateDir,
+      config,
+      {
+        runner,
+        adapter: new YukonCliAdapter({
+          repoRoot: challenge.repoRoot,
+          manifest,
+          cli: detectCli(challenge.repoRoot, manifest),
+          verifyCommand: initialized.state.challenge.verifyCommand,
+          benchCommand: initialized.state.challenge.benchCommand,
+          execution: config.execution,
+          logDir: statePaths(initialized.stateDir).logsDir,
+          exec: nodeExec,
+        }),
+        exec: nodeExec,
+        emit: () => {},
+        delay: async () => {},
+      },
+    );
+
+    await controller.runUntilDone();
+
+    expect(proposalCalls).toBe(2);
+    expect(loadMetaHarnessStatus(initialized.stateDir)).toMatchObject({
+      phase: "paused",
+      recoveryAttempts: 2,
+    });
+    expect(loadState(initialized.stateDir)).toMatchObject({
+      phase: "paused",
+      resumePhase: "loop.proposing",
+      recovery: {
+        scope: "loop.proposing",
+        message: expect.stringContaining("current provider outage"),
+        consecutiveFailures: 2,
+      },
+    });
+    const journal = fs.readFileSync(
+      metaHarnessPaths(initialized.stateDir).journal,
+      "utf8",
+    );
+    expect(journal).toContain("metaharness recovery 2/2");
+    expect(journal).not.toContain("metaharness recovery 3/2");
+  });
+
+  it("excludes operational-only loops from a harness evaluation window", async () => {
+    const challenge = makeTmpChallenge();
+    cleanups.push(challenge.cleanup);
+    const baseRunner = new MockAgentRunner();
+    const runner: AgentRunner = {
+      async run(task) {
+        if (task.kind === "implement" && task.input.loop === 2) {
+          return {
+            ok: false,
+            output: "",
+            error: "provider authentication unavailable",
+            filesWritten: [],
+          };
+        }
+        return baseRunner.run(task);
+      },
+    };
+    const initialized = await initChallenge({
+      repoRoot: challenge.repoRoot,
+      runner,
+      exec: nodeExec,
+    });
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.metaHarness.enabled = true;
+    config.metaHarness.evaluationLoops = 1;
+    config.metaHarness.maxGenerations = 1;
+    config.maxLoops = 3;
+    config.advisor.enabled = false;
+    config.churchTriggerThreshold = 0;
+    const manifest = readManifest(challenge.repoRoot);
+    const controller = await MetaHarnessController.create(
+      challenge.repoRoot,
+      initialized.stateDir,
+      config,
+      {
+        runner,
+        adapter: new YukonCliAdapter({
+          repoRoot: challenge.repoRoot,
+          manifest,
+          cli: detectCli(challenge.repoRoot, manifest),
+          verifyCommand: initialized.state.challenge.verifyCommand,
+          benchCommand: initialized.state.challenge.benchCommand,
+          execution: config.execution,
+          logDir: statePaths(initialized.stateDir).logsDir,
+          exec: nodeExec,
+        }),
+        exec: nodeExec,
+        emit: () => {},
+        delay: async () => {},
+      },
+    );
+
+    await controller.runUntilDone();
+
+    expect(loadState(initialized.stateDir)?.history).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ loop: 2, evaluatedCandidates: 0 }),
+      ]),
+    );
+    const evaluation = readMetaHarnessLedger(initialized.stateDir)[0]!;
+    expect(evaluation.loops).toEqual([3]);
+    expect(evaluation.totalIdeas).toBeGreaterThan(0);
+    expect(
+      fs.readFileSync(metaHarnessPaths(initialized.stateDir).journal, "utf8"),
+    ).toContain("metaharness.loop-not-evaluable");
+  }, 30_000);
+
   it("evaluates immutable profiles through ordinary loops and resumes with a champion", async () => {
     const challenge = makeTmpChallenge();
     cleanups.push(challenge.cleanup);

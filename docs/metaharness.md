@@ -85,7 +85,7 @@ last-known-good harness profile
   -> validate schema, paths, size, and non-no-op behavior
   -> verify frozen evaluator fingerprint
   -> activate profile through the AgentRunner port
-  -> run N ordinary inner research loops
+  -> run N scientifically evaluable ordinary inner research loops
        candidates still pass integrity -> verify -> benchmark -> main recheck
   -> verify frozen evaluator fingerprint again
   -> compute objective gain and inner-candidate success rate
@@ -152,6 +152,10 @@ The controller is designed to run between supervision points for hours:
 - all subprocess, correctness, and benchmark deadlines remain enforced by the
   existing inner loop;
 - fatal inner-loop failures use bounded exponential retry;
+- the configured recovery count includes the first failed inner-loop
+  execution and fail-stops exactly at that total;
+- operational-only loops where no candidate reaches deterministic evaluation
+  are archived but do not consume a profile evaluation slot;
 - after repeated failures, a not-yet-materialized bad profile can be rolled
   back safely; once immutable professor output or candidates exist, the system
   fail-stops instead of mixing profiles inside one experiment;

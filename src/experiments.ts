@@ -554,6 +554,8 @@ export interface CandidateMetricsV1 {
   comparisonScore: number | null;
   score?: number;
   improved: boolean;
+  /** Whether the candidate reached the deterministic verifier. */
+  evaluationStarted?: boolean;
   verify: EvaluationCommandV1[];
   benchmark?: EvaluationCommandV1;
   failure?: string;

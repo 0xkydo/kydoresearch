@@ -837,10 +837,22 @@ export class MetaHarnessController {
 
     for (const summary of completed) {
       if (active.completedLoops.length >= active.targetLoops) break;
-      active.completedLoops.push(summary.loop);
       active.lastRecordedLoop = summary.loop;
-      active.totalIdeas += summary.ideas.length;
-      active.failedIdeas += summary.ideas.filter(
+      const evaluatedIdeas =
+        summary.evaluatedCandidates === undefined
+          ? summary.ideas
+          : summary.ideas.filter((idea) => idea.evaluated === true);
+      if (evaluatedIdeas.length === 0) {
+        appendJournal(this.paths.journal, {
+          event: "metaharness.loop-not-evaluable",
+          loop: summary.loop,
+          reason: "no candidate reached deterministic evaluation",
+        });
+        continue;
+      }
+      active.completedLoops.push(summary.loop);
+      active.totalIdeas += evaluatedIdeas.length;
+      active.failedIdeas += evaluatedIdeas.filter(
         (idea) => idea.status === "failed",
       ).length;
     }
@@ -963,11 +975,15 @@ export class MetaHarnessController {
       loop: innerState.loop,
       attempts,
     });
+    const maxAttempts = Math.max(
+      1,
+      this.config.metaHarness.maxRecoveryAttempts,
+    );
     this.emitLog(
-      `metaharness recovery ${attempts}/${this.config.metaHarness.maxRecoveryAttempts}: ${message}`,
+      `metaharness recovery ${attempts}/${maxAttempts}: ${message}`,
     );
 
-    if (attempts <= this.config.metaHarness.maxRecoveryAttempts) {
+    if (attempts < maxAttempts) {
       const delayMs = Math.min(
         this.config.metaHarness.retryMaxDelayMs,
         this.config.metaHarness.retryBaseDelayMs * 2 ** Math.max(0, attempts - 1),
@@ -997,7 +1013,15 @@ export class MetaHarnessController {
       return true;
     }
 
-    this.pauseInnerState(`metaharness recovery exhausted: ${message}`);
+    this.pauseInnerState(
+      `metaharness recovery exhausted: ${message}`,
+      {
+        scope: innerState.resumePhase ?? innerState.phase,
+        message,
+        consecutiveFailures: attempts,
+        failedAt: new Date().toISOString(),
+      },
+    );
     this.pauseMeta(`recovery exhausted after ${attempts} attempts`);
     return false;
   }
@@ -1103,11 +1127,15 @@ export class MetaHarnessController {
     this.emitLog(message);
   }
 
-  private pauseInnerState(reason: string): void {
+  private pauseInnerState(
+    reason: string,
+    recovery?: LoopState["recovery"],
+  ): void {
     const state = loadState(this.stateDir);
     if (!state) return;
     if (state.phase !== "paused") state.resumePhase = state.phase;
     state.phase = "paused";
+    if (recovery) state.recovery = recovery;
     saveState(this.stateDir, state);
     appendJournal(statePaths(this.stateDir).journal, {
       phase: "paused",
