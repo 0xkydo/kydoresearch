@@ -156,6 +156,8 @@ The controller is designed to run between supervision points for hours:
   execution and fail-stops exactly at that total;
 - operational-only loops where no candidate reaches deterministic evaluation
   are archived but do not consume a profile evaluation slot;
+- startup drift diagnostics name the expected and observed frozen values and
+  preserve the last recorded inner-loop failure in the operator notification;
 - after repeated failures, a not-yet-materialized bad profile can be rolled
   back safely; once immutable professor output or candidates exist, the system
   fail-stops instead of mixing profiles inside one experiment;

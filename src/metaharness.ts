@@ -485,6 +485,7 @@ export class MetaHarnessController {
         verifier.fingerprint,
         current.fingerprint,
         drift,
+        describeVerifierContractDriftValues(verifier, current, drift),
       );
     }
     if (state.phase === "paused") {
@@ -1090,10 +1091,12 @@ export class MetaHarnessController {
       );
     }
     if (current.fingerprint !== this.verifier.fingerprint) {
+      const drift = describeVerifierContractDrift(this.verifier, current);
       throw new VerifierDriftError(
         this.verifier.fingerprint,
         current.fingerprint,
-        describeVerifierContractDrift(this.verifier, current),
+        drift,
+        describeVerifierContractDriftValues(this.verifier, current, drift),
       );
     }
   }
@@ -1216,13 +1219,21 @@ export class VerifierContractCheckError extends Error {
 }
 
 export class VerifierDriftError extends VerifierContractCheckError {
-  constructor(expected: string, actual: string, drift: string[] = []) {
+  constructor(
+    expected: string,
+    actual: string,
+    drift: string[] = [],
+    changedValues: string[] = [],
+  ) {
     const detail = formatVerifierDrift(drift);
+    const values = formatVerifierDrift(changedValues);
     super(
       `Declared verifier or runtime contract changed during metaharness search ` +
         `(expected ${expected}, observed ${actual}); ` +
         `${detail ? `changed components: ${detail}; ` : ""}` +
-        "the campaign was paused.",
+        `${values ? `changed values: ${values}; ` : ""}` +
+        "restore the frozen value(s) in config before resuming, or intentionally " +
+        "initialize a new campaign; the campaign was paused.",
     );
     this.name = "VerifierDriftError";
   }
@@ -1237,6 +1248,40 @@ export function describeVerifierContractDrift(
   collectValueDrift(expected.runtime, actual.runtime, "runtime", drift);
 
   return [...drift].sort();
+}
+
+function describeVerifierContractDriftValues(
+  expected: VerifierContractV1,
+  actual: VerifierContractV1,
+  drift: string[],
+): string[] {
+  return drift.map((valuePath) => {
+    const expectedValue = verifierValueAtPath(expected, valuePath);
+    const actualValue = verifierValueAtPath(actual, valuePath);
+    return `${valuePath} expected ${formatContractValue(expectedValue)}, ` +
+      `observed ${formatContractValue(actualValue)}`;
+  });
+}
+
+function verifierValueAtPath(
+  contract: VerifierContractV1,
+  valuePath: string,
+): unknown {
+  let value: unknown = contract;
+  for (const segment of valuePath.split(".")) {
+    if (typeof value !== "object" || value === null || Array.isArray(value)) {
+      return undefined;
+    }
+    value = (value as Record<string, unknown>)[segment];
+  }
+  return value;
+}
+
+function formatContractValue(value: unknown): string {
+  if (value === undefined) return "<missing>";
+  const rendered = JSON.stringify(value);
+  if (rendered === undefined) return String(value);
+  return rendered.length <= 160 ? rendered : `${rendered.slice(0, 157)}...`;
 }
 
 function collectValueDrift(

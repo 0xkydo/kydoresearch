@@ -42,6 +42,7 @@ import {
 import {
   loadMetaHarnessStatus,
   MetaHarnessController,
+  VerifierDriftError,
 } from "../../src/metaharness.ts";
 import type { OrchestratorEvent, StatusReport } from "../../src/orchestrator.ts";
 import {
@@ -656,9 +657,7 @@ export function registerAutoresearchCommand(
     } catch (error) {
       notify(
         ctx,
-        `failed to start ${config.metaHarness.enabled ? "metaharness" : "autoresearch"}: ${
-          error instanceof Error ? error.message : String(error)
-        }`,
+        renderRunStartupFailure(error, config.metaHarness.enabled, state),
         "error",
       );
       return;
@@ -1275,6 +1274,41 @@ export function registerAutoresearchCommand(
       await startRun(ctx as ExtensionCommandContext);
     },
   };
+}
+
+function renderRunStartupFailure(
+  error: unknown,
+  metaharnessEnabled: boolean,
+  state: NonNullable<ReturnType<typeof loadState>>,
+): string {
+  const message = error instanceof Error ? error.message : String(error);
+  const lines = [
+    `failed to start ${metaharnessEnabled ? "metaharness" : "autoresearch"}: ${message}`,
+  ];
+  const recovery = state.recovery?.message?.trim();
+  if (
+    metaharnessEnabled &&
+    error instanceof VerifierDriftError &&
+    recovery &&
+    !message.includes(recovery)
+  ) {
+    lines.push(
+      "Last recorded loop failure (not retried because contract drift blocked startup first): " +
+        recovery,
+    );
+    if (isProviderCreditOrAuthenticationFailure(recovery)) {
+      lines.push(
+        "Resolve the provider credit or authentication issue, restore the frozen runtime " +
+          "setting, then retry /autoresearch.",
+      );
+    }
+  }
+  return lines.join("\n\n");
+}
+
+function isProviderCreditOrAuthenticationFailure(message: string): boolean {
+  return /\b(?:401|402)\b|insufficient credits|authentication token|unauthori[sz]ed|sign in again/i
+    .test(message);
 }
 
 function refreshAgentMonitor(
