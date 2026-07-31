@@ -487,7 +487,7 @@ typed proposal + explicit parent
   → source + parent-relative diff + metrics + logs + postmortem
   → seal run
   → append compact ledger record
-  → clean successful worktree or retain failed worktree
+  → durably schedule and clean the terminal worktree
 ```
 
 Core invariants:
@@ -504,8 +504,8 @@ Core invariants:
 - **Direction-aware selection:** `betterScore` and `minImprovement` honor both
   lower-is-better (`-`) and higher-is-better (`+`) manifests.
 - **Failure containment:** an individual model crash, verify exhaustion, or
-  benchmark failure marks only that idea failed. Failed worktrees are retained
-  deliberately for diagnosis.
+  benchmark failure marks only that idea failed. Its durable archive remains
+  for diagnosis after the disposable worktree is cleaned.
 - **Candidate fallback:** main-checkout verification or benchmarking failure
   rejects only that finalist; finalization proceeds to the next qualifying
   candidate in score order. A durable editable-path snapshot restores the main
@@ -529,8 +529,9 @@ Failures are split by blast radius:
 - Hypothesis notes, Advisor review, and church reflection are best-effort. They
   retry as model tasks and then log-and-continue. A failed church visit does not
   reset the dry-loop streak.
-- Worktree removal is best-effort but durable: failed cleanup IDs are stored in
-  `pendingCleanup` and retried at the next loop checkpoint.
+- Worktree removal is best-effort but durable: cleanup intent is stored in
+  `pendingCleanup` before removal, includes every terminal candidate, and is
+  retried at the next loop checkpoint.
 - Proposal and submission are essential checkpoints. Exhausting their local
   attempts raises to `runUntilDone`, which persists `recovery`, waits with a
   1–15 minute exponential backoff, and resumes the same phase. Twelve
@@ -557,13 +558,17 @@ Additional archive and lineage invariants:
   `editablePaths` are rejected before verification. Unchanged untracked setup
   artifacts seeded from the main repository are allowed; modified copies are
   rejected.
+- **Bounded setup seeding:** only individually enumerated, non-ignored regular
+  files and symlinks may be copied into a candidate. Harness roots, Git
+  metadata, nested worktrees, and directories are excluded; a byte ceiling
+  and free-space reserve prevent hidden recursive amplification.
 - **Deterministic scoring:** the LLM never decides correctness, validity, or
   improvement.
 - **Main-checkout gate:** only the selected winner's complete editable surface
   is copied to main, then re-verified and re-benched before submission.
-- **Archive before cleanup:** every terminal candidate is sealed before a
-  successful or superseded worktree is removed. Failed worktrees remain for
-  diagnosis.
+- **Archive before cleanup:** every terminal candidate is sealed and indexed
+  before its worktree is removed, including failed candidates. The archive
+  remains authoritative for diagnosis.
 - **Direction-aware selection:** score comparison and `minImprovement` support
   both lower-is-better and higher-is-better manifests.
 

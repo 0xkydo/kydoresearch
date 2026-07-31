@@ -672,7 +672,7 @@ bounded exponential backoff and honor `/autoresearch stop` immediately.
 | Best candidate fails on main | Mark only that candidate failed and try the next qualifying candidate. If all finalists fail, restore the pre-finalization main checkout snapshot. |
 | Submission | Reconcile against the remote user's submissions before each of five attempts. An exhausted submit remains at `loop.finalizing` for durable checkpoint recovery and is never marked submitted. |
 | Notes, Advisor, or church | Retry twice, log the failure, and continue. A failed church visit preserves the dry-loop streak so it is attempted again later. |
-| Worktree cleanup | Retry once, persist a cleanup queue, and try it again at the next checkpoint. |
+| Worktree cleanup | Seal and index every terminal candidate, persist cleanup intent, retry once, and try it again at the next checkpoint. |
 | Unexpected loop-level failure | Resume the same saved phase with a 1–15 minute backoff. After 12 consecutive failures, pause with a visible recovery reason instead of spinning or spending indefinitely. |
 
 Successful idea work is checkpointed throughout. An unfinished loop does not
@@ -701,7 +701,7 @@ All runtime data lives in `.autoresearch/` inside the challenge repository:
   ideas/                    compatibility idea specifications
   logs/                     setup and main-checkout evaluation output
   notes/                    advisor, God, and submission notes
-  worktrees/<candidateId>/  active or intentionally retained failed checkout
+  worktrees/<candidateId>/  active checkout or terminal cleanup awaiting retry
   metaharness/              outer state, verifier contract, profiles, traces,
                             evaluations, ledger, frontier, and heartbeat
 ```
@@ -709,6 +709,12 @@ All runtime data lives in `.autoresearch/` inside the challenge repository:
 The directory is added to `.git/info/exclude`, not `.gitignore`, and
 initialization refuses to continue if `.autoresearch/` falls under an editable
 path. The harness never intentionally includes it in a submission.
+
+Candidate creation never copies `.autoresearch/`, `.git/`, `.worktrees/`, or
+an untracked directory. Small non-ignored setup files and symlinks are seeded
+individually under a bounded byte budget; builds, caches, weights, nested
+repositories, and other recursively discovered runtime trees stay outside the
+candidate checkout.
 
 `state.json` is written atomically and is the operational resume source of
 truth. `ledger.ndjson` is the professor's compact search index. `runs/`
@@ -735,8 +741,9 @@ The useful files in a candidate run are:
 | `postmortem.md` | What the experiment taught the research program. |
 | `agent/` | Effective soul, immutable task context, invocation metadata, and raw Pi JSONL trace. |
 
-Successful and superseded worktrees are removed only after their evidence is
-sealed and indexed. Failed worktrees remain for diagnosis.
+Every terminal worktree, including a failed candidate, is removed only after
+its evidence is sealed and indexed. The durable source snapshot, diff, logs,
+metrics, postmortem, and agent trace remain under `runs/<candidateId>/`.
 
 A local checkpoint prevents ordinary resume from repeating a recorded
 submission. No local state file can make the external CLI transactional,
@@ -849,9 +856,9 @@ the role's tool policy, and retains the raw JSONL event stream.
 - **Outer proposals keep failing:** inspect the candidate's `agent/` trace and
   profile validation error. The champion continues during configured cooldown
   loops unless the inner loop itself exhausted recovery.
-- **Failed worktrees remain:** this is intentional. Inspect
-  `.autoresearch/worktrees/<candidateId>/` and the sealed run evidence before
-  removing one with normal Git worktree hygiene.
+- **Worktree cleanup is pending:** inspect `state.json` `pendingCleanup` and the
+  sealed evidence under `.autoresearch/runs/<candidateId>/`, then resume the
+  harness so it can retry managed removal and Git worktree pruning.
 
 ## Development
 

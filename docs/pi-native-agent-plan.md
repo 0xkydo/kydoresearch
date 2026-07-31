@@ -128,7 +128,7 @@ Preserve:
 - application of only the winning editable paths to main;
 - re-verification and re-benchmarking on main before submission;
 - persisted resume phases and pending summaries;
-- deliberate retention of failed worktrees;
+- archive-before-cleanup for every terminal worktree, including failures;
 - mock agents and the mock challenge as the deterministic integration test
   substrate.
 
@@ -657,8 +657,8 @@ Use the mock challenge and fake Pi executable to prove:
 6. verify retry receives the same task plus the latest verifier report;
 7. benchmark execution remains serialized;
 8. every terminal candidate receives an archive and postmortem;
-9. successful/superseded worktrees are archived before cleanup;
-10. failed worktrees remain available;
+9. every terminal worktree is archived and indexed before cleanup;
+10. failed-candidate evidence remains available after worktree cleanup;
 11. the winner is re-evaluated on main and submitted once;
 12. pause/resume from every existing phase remains idempotent;
 13. God still triggers after the configured dry streak and writes the same

@@ -74,4 +74,49 @@ describe("WorktreePool parent materialization", () => {
       expect(fs.existsSync(path.join(worktreesDir, "invalid-parent"))).toBe(false);
     },
   );
+
+  it("seeds individual untracked files without recursively copying nested worktrees", async () => {
+    const markerPath = path.join(repoRoot, "generated", "setup-marker.txt");
+    const nestedWeight = path.join(
+      repoRoot,
+      ".worktrees",
+      "old-experiment",
+      "weights",
+      "model.safetensors",
+    );
+    fs.mkdirSync(path.dirname(markerPath), { recursive: true });
+    fs.writeFileSync(markerPath, "ready\n");
+    fs.mkdirSync(path.dirname(nestedWeight), { recursive: true });
+    fs.writeFileSync(nestedWeight, "large runtime artifact\n");
+
+    const worktreesDir = path.join(repoRoot, ".autoresearch", "worktrees");
+    const pool = new WorktreePool(repoRoot, worktreesDir, nodeExec);
+    const worktree = await pool.create("seed-safe");
+
+    await pool.seedUntracked("seed-safe");
+
+    expect(fs.readFileSync(path.join(worktree, "generated", "setup-marker.txt"), "utf8"))
+      .toBe("ready\n");
+    expect(fs.existsSync(path.join(worktree, ".worktrees"))).toBe(false);
+
+    await pool.remove("seed-safe");
+  });
+
+  it("rejects an oversized untracked seed before copying it", async () => {
+    const oversized = path.join(repoRoot, "generated", "oversized.bin");
+    fs.mkdirSync(path.dirname(oversized), { recursive: true });
+    fs.writeFileSync(oversized, "");
+    fs.truncateSync(oversized, 64 * 1024 * 1024 + 1);
+
+    const worktreesDir = path.join(repoRoot, ".autoresearch", "worktrees");
+    const pool = new WorktreePool(repoRoot, worktreesDir, nodeExec);
+    const worktree = await pool.create("seed-budget");
+
+    await expect(pool.seedUntracked("seed-budget")).rejects.toThrow(
+      /untracked seed exceeds the 64 MiB limit/i,
+    );
+    expect(fs.existsSync(path.join(worktree, "generated", "oversized.bin"))).toBe(false);
+
+    await pool.remove("seed-budget");
+  });
 });

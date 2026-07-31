@@ -266,6 +266,7 @@ export class Orchestrator {
 
   private async runLoopInner(): Promise<LoopSummary | null> {
     await this.drainPendingCleanup();
+    await this.reconcileSealedWorktrees();
     const loopInProgress = this.state.loop > this.state.history.length;
     const inferredResumePhase: Phase =
       this.state.ideas.length === 0
@@ -335,12 +336,15 @@ export class Orchestrator {
     }
 
     // Seal every terminal candidate before advisor/search consumers inspect
-    // this loop, and before successful worktrees are pruned.
+    // this loop and before its disposable execution worktree is pruned.
     for (const idea of this.state.ideas) {
       if (!isIdeaTerminal(idea.status)) continue;
       await this.archiveIdea(idea);
     }
     this.persist();
+    for (const idea of this.state.ideas) {
+      if (isIdeaTerminal(idea.status)) await this.cleanupWorktree(idea.id);
+    }
 
     // Loop end: summary, advisor, streak, church.
     let summary = this.state.pendingSummary;
@@ -396,12 +400,6 @@ export class Orchestrator {
       this.persist();
     }
 
-    // Prune before committing loop completion. If cleanup is interrupted, the
-    // pending summary and idea IDs remain durable so resume can retry it.
-    // Failed worktrees are intentionally kept for debugging.
-    for (const idea of summary.ideas) {
-      if (idea.status !== "failed") await this.cleanupWorktree(idea.id);
-    }
     this.discardFinalizationSnapshot();
 
     this.state.history.push(summary);
@@ -811,7 +809,10 @@ export class Orchestrator {
       if (idea.lastVerifyError !== undefined || idea.status === "implementing") {
         idea.status = "failed";
         this.persist();
-        this.emitIdea(idea, `failed after ${idea.verifyAttempts} verify attempt(s); worktree kept for debugging`);
+        this.emitIdea(
+          idea,
+          `failed after ${idea.verifyAttempts} verify attempt(s); evidence will be archived before cleanup`,
+        );
         return;
       }
 
@@ -848,7 +849,7 @@ export class Orchestrator {
         idea.status = "failed";
         idea.lastVerifyError = bench.raw;
         this.persist();
-        this.emitIdea(idea, "benchmark failed; worktree kept for debugging");
+        this.emitIdea(idea, "benchmark failed; evidence will be archived before cleanup");
         return;
       }
       idea.localScore = bench.score;
@@ -1842,6 +1843,10 @@ export class Orchestrator {
   }
 
   private async cleanupWorktree(ideaId: string): Promise<void> {
+    if (!this.state.pendingCleanup?.includes(ideaId)) {
+      this.state.pendingCleanup = [...(this.state.pendingCleanup ?? []), ideaId];
+      this.persist();
+    }
     try {
       await this.retryResult(
         `worktree cleanup ${ideaId}`,
@@ -1849,16 +1854,10 @@ export class Orchestrator {
         () => this.worktrees.remove(ideaId),
         () => true,
       );
-      if (this.state.pendingCleanup?.includes(ideaId)) {
-        this.state.pendingCleanup = this.state.pendingCleanup.filter((id) => id !== ideaId);
-        this.persist();
-      }
+      this.state.pendingCleanup = this.state.pendingCleanup?.filter((id) => id !== ideaId);
+      this.persist();
     } catch (error) {
       if (this.aborted()) return;
-      this.state.pendingCleanup = Array.from(
-        new Set([...(this.state.pendingCleanup ?? []), ideaId]),
-      );
-      this.persist();
       this.emitLog(
         `worktree cleanup ${ideaId} deferred to the next checkpoint · ${errorMessage(error)}`,
       );
@@ -1869,6 +1868,30 @@ export class Orchestrator {
     for (const ideaId of [...(this.state.pendingCleanup ?? [])]) {
       if (this.aborted()) return;
       await this.cleanupWorktree(ideaId);
+    }
+  }
+
+  private async reconcileSealedWorktrees(): Promise<void> {
+    const activeIdeaIds = new Set(
+      this.state.ideas
+        .filter((idea) => !isIdeaTerminal(idea.status))
+        .map((idea) => idea.id),
+    );
+    for (const ideaId of this.worktrees.listManagedIds()) {
+      if (activeIdeaIds.has(ideaId) || this.state.pendingCleanup?.includes(ideaId)) continue;
+      const runRecord = candidateRunPaths(this.stateDir, ideaId).record;
+      if (!fs.existsSync(runRecord)) continue;
+      try {
+        if (!isCandidateRunSealed(this.stateDir, ideaId)) continue;
+      } catch (error) {
+        this.emitLog(
+          `worktree reconciliation skipped ${ideaId}; run evidence is unreadable · ${errorMessage(error)}`,
+        );
+        continue;
+      }
+      this.emitLog(`worktree reconciliation scheduled sealed candidate ${ideaId} for cleanup`);
+      await this.cleanupWorktree(ideaId);
+      if (this.aborted()) return;
     }
   }
 

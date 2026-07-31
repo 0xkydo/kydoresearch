@@ -82,7 +82,7 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
       history: [{ improved: false }],
     });
     expect(mySubmissions(repoRoot)).toEqual([]);
-    expect(fs.existsSync(path.join(harness.stateDir, "worktrees", "L001-I1"))).toBe(true);
+    expect(fs.existsSync(path.join(harness.stateDir, "worktrees", "L001-I1"))).toBe(false);
     expect(fs.existsSync(path.join(harness.stateDir, "worktrees", "L001-I2"))).toBe(false);
 
     const records = readRecords(recordPath);

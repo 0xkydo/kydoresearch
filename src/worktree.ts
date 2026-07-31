@@ -3,6 +3,10 @@ import * as path from "node:path";
 import type { ExecPort } from "./exec.ts";
 import { Mutex } from "./util.ts";
 
+const MAX_UNTRACKED_SEED_BYTES = 64 * 1024 * 1024;
+const MIN_FREE_DISK_BYTES = 1024 * 1024 * 1024;
+const MANAGED_RUNTIME_ROOTS = [".autoresearch", ".git", ".worktrees"] as const;
+
 export interface ParentArtifact {
   /** Directory containing a snapshot rooted by each editable path. */
   parentArtifactDir: string;
@@ -41,8 +45,10 @@ export class WorktreePool {
     const wtPath = path.join(this.worktreesDir, ideaId);
     if (fs.existsSync(wtPath)) await this.removeUnlocked(ideaId); // stale from a previous crash
     fs.mkdirSync(this.worktreesDir, { recursive: true });
+    this.assertDiskReserve(0);
     const result = await this.git(["worktree", "add", "--detach", wtPath]);
     if (result.code !== 0) {
+      await this.removeUnlocked(ideaId).catch(() => {});
       throw new Error(`git worktree add failed for ${ideaId}: ${result.stderr.trim()}`);
     }
     if (parent) {
@@ -110,6 +116,18 @@ export class WorktreePool {
 
   async remove(ideaId: string): Promise<void> {
     await this.registryLock.runExclusive(() => this.removeUnlocked(ideaId));
+  }
+
+  listManagedIds(): string[] {
+    if (!fs.existsSync(this.worktreesDir)) return [];
+    return fs.readdirSync(this.worktreesDir, { withFileTypes: true })
+      .filter(
+        (entry) =>
+          (entry.isDirectory() || entry.isSymbolicLink()) &&
+          /^[A-Za-z0-9][A-Za-z0-9._-]*$/.test(entry.name),
+      )
+      .map((entry) => entry.name)
+      .sort();
   }
 
   private async removeUnlocked(ideaId: string): Promise<void> {
@@ -185,24 +203,74 @@ export class WorktreePool {
   /**
    * Copy files that setup produced but git doesn't track (setup markers,
    * generated fixtures) into a worktree so verify/bench work there. Ignored
-   * files (large weights, build dirs) are deliberately NOT copied — challenges
-   * gitignore heavy artifacts and setup must be idempotent for those.
+   * files, directories, and harness/worktree roots are deliberately NOT
+   * copied. Directory recursion can cross a nested repository boundary and
+   * silently include ignored weights or build caches, so only individually
+   * enumerated regular files and symlinks are eligible.
    */
   async seedUntracked(ideaId: string): Promise<void> {
     const wtPath = path.join(this.worktreesDir, ideaId);
-    const status = await this.git(["status", "--porcelain", "--untracked-files=all"]);
-    if (status.code !== 0) {
-      throw new Error(`git status failed while seeding ${ideaId}: ${status.stderr.trim()}`);
+    const untracked = await this.git(["ls-files", "--others", "--exclude-standard", "-z"]);
+    if (untracked.code !== 0) {
+      throw new Error(`git ls-files failed while seeding ${ideaId}: ${untracked.stderr.trim()}`);
     }
-    for (const line of status.stdout.split("\n")) {
-      if (!line.startsWith("?? ")) continue;
-      const rel = line.slice(3).trim();
-      if (rel === "" || rel.startsWith(".autoresearch/")) continue;
-      const src = path.join(this.repoRoot, rel);
-      const dst = path.join(wtPath, rel);
-      if (!fs.existsSync(src) || fs.existsSync(dst)) continue;
+
+    const entries: Array<{
+      src: string;
+      dst: string;
+      stat: fs.Stats;
+    }> = [];
+    let totalBytes = 0;
+    for (const rel of untracked.stdout.split("\0")) {
+      if (rel === "" || this.isManagedRuntimePath(rel)) continue;
+      const src = this.resolveEditablePath(this.repoRoot, rel, "repository");
+      const dst = this.resolveEditablePath(wtPath, rel, "worktree");
+      if (fs.existsSync(dst)) continue;
+      let stat: fs.Stats;
+      try {
+        stat = fs.lstatSync(src);
+      } catch (error) {
+        if ((error as NodeJS.ErrnoException).code === "ENOENT") continue;
+        throw error;
+      }
+      if (!stat.isFile() && !stat.isSymbolicLink()) continue;
+      totalBytes += stat.isFile() ? stat.size : Buffer.byteLength(fs.readlinkSync(src));
+      entries.push({ src, dst, stat });
+    }
+
+    if (totalBytes > MAX_UNTRACKED_SEED_BYTES) {
+      throw new Error(
+        `Untracked seed exceeds the 64 MiB limit for ${ideaId}: ${totalBytes} bytes`,
+      );
+    }
+    this.assertDiskReserve(totalBytes);
+
+    for (const { src, dst, stat } of entries) {
       fs.mkdirSync(path.dirname(dst), { recursive: true });
-      fs.cpSync(src, dst, { recursive: true });
+      if (stat.isSymbolicLink()) {
+        fs.symlinkSync(fs.readlinkSync(src), dst);
+      } else {
+        fs.copyFileSync(src, dst);
+        fs.chmodSync(dst, stat.mode & 0o777);
+      }
+    }
+  }
+
+  private isManagedRuntimePath(relativePath: string): boolean {
+    return MANAGED_RUNTIME_ROOTS.some(
+      (root) => relativePath === root || relativePath.startsWith(`${root}/`),
+    );
+  }
+
+  private assertDiskReserve(additionalBytes: number): void {
+    const stats = fs.statfsSync(this.worktreesDir);
+    const availableBytes = Number(stats.bavail) * Number(stats.bsize);
+    const requiredBytes = MIN_FREE_DISK_BYTES + additionalBytes;
+    if (availableBytes < requiredBytes) {
+      throw new Error(
+        `Insufficient free disk space for candidate worktree: ` +
+          `${availableBytes} bytes available, ${requiredBytes} bytes required`,
+      );
     }
   }
 }

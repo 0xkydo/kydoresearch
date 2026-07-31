@@ -10,7 +10,7 @@ import { candidateRunPaths, readLedger, readRunRecord } from "../src/archive.ts"
 import { YukonCliAdapter } from "../src/challenge/adapter.ts";
 import { detectCli, readManifest } from "../src/challenge/detect.ts";
 import type { HarnessConfig } from "../src/config.ts";
-import { nodeExec } from "../src/exec.ts";
+import { nodeExec, type ExecPort } from "../src/exec.ts";
 import { initChallenge } from "../src/init.ts";
 import type { OrchestratorEvent } from "../src/orchestrator.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
@@ -35,8 +35,9 @@ async function makeHarness(
   repoRoot: string,
   configPatch: Partial<HarnessConfig> = {},
   runner: AgentRunner = new MockAgentRunner(),
+  exec: ExecPort = nodeExec,
 ): Promise<Harness> {
-  const { stateDir, config } = await initChallenge({ repoRoot, runner, exec: nodeExec });
+  const { stateDir, config } = await initChallenge({ repoRoot, runner, exec });
   Object.assign(config, configPatch);
   const manifest = readManifest(repoRoot);
   const events: OrchestratorEvent[] = [];
@@ -52,9 +53,9 @@ async function makeHarness(
         cli: detectCli(repoRoot, manifest),
         verifyCommand: "./verify.sh",
         benchCommand: "./benchmark.sh",
-        exec: nodeExec,
+        exec,
       }),
-      exec: nodeExec,
+      exec,
       emit: (ev) => events.push(ev),
       signal,
       delay: delay ?? (async () => {}),
@@ -104,16 +105,16 @@ describe("Orchestrator scenario matrix", () => {
     const params = JSON.parse(fs.readFileSync(path.join(repoRoot, "src/solution/params.json"), "utf8"));
     expect(params.algorithm).toBe("baseline-guess");
 
-    // Failed idea's worktree kept for debugging; the other pruned.
-    expect(fs.existsSync(path.join(h.stateDir, "worktrees", "L001-I1"))).toBe(true);
+    // Every terminal worktree is pruned after its durable evidence is sealed.
+    expect(fs.existsSync(path.join(h.stateDir, "worktrees", "L001-I1"))).toBe(false);
     expect(fs.existsSync(path.join(h.stateDir, "worktrees", "L001-I2"))).toBe(false);
 
     // Hypothesis notes exist for both non-winning ideas.
     expect(fs.existsSync(path.join(h.stateDir, "notes", "loop-001-L001-I1.md"))).toBe(true);
     expect(fs.existsSync(path.join(h.stateDir, "notes", "loop-001-L001-I2.md"))).toBe(true);
 
-    // Every terminal candidate is sealed with evidence before successful
-    // worktrees are pruned.
+    // Every terminal candidate is sealed with evidence before its worktree is
+    // pruned, including failed candidates.
     for (const ideaId of ["L001-I1", "L001-I2"]) {
       const run = candidateRunPaths(h.stateDir, ideaId);
       expect(readRunRecord(h.stateDir, ideaId).status).toBe("sealed");
@@ -136,6 +137,65 @@ describe("Orchestrator scenario matrix", () => {
       "L001-I1",
       "L001-I2",
     ]);
+  });
+
+  it("persists cleanup intent before removal and drains deferred cleanup", async () => {
+    let stateDir = "";
+    let failPrune = true;
+    const cleanupIntents = new Set<string>();
+    const exec: ExecPort = async (command, args, options) => {
+      if (
+        stateDir !== "" &&
+        command === "git" &&
+        args[0] === "worktree" &&
+        args[1] === "remove"
+      ) {
+        for (const ideaId of loadState(stateDir)?.pendingCleanup ?? []) {
+          cleanupIntents.add(ideaId);
+        }
+      }
+      if (
+        failPrune &&
+        command === "git" &&
+        args[0] === "worktree" &&
+        args[1] === "prune"
+      ) {
+        return { stdout: "", stderr: "simulated prune failure", code: 1 };
+      }
+      return nodeExec(command, args, options);
+    };
+    const h = await makeHarness(repoRoot, {}, new MockAgentRunner(), exec);
+    stateDir = h.stateDir;
+    h.config.resilience.commandMaxAttempts = 1;
+
+    await h.makeOrchestrator().runLoop();
+
+    expect(cleanupIntents).toEqual(new Set(["L001-I1", "L001-I2"]));
+    expect(loadState(h.stateDir)?.pendingCleanup).toEqual(["L001-I1", "L001-I2"]);
+
+    failPrune = false;
+    await h.makeOrchestrator().runLoop();
+
+    expect(loadState(h.stateDir)?.pendingCleanup).toEqual([]);
+    expect(fs.readdirSync(path.join(h.stateDir, "worktrees"))).toEqual([]);
+  });
+
+  it("reconciles a sealed legacy worktree at the next loop checkpoint", async () => {
+    const h = await makeHarness(repoRoot);
+    await h.makeOrchestrator().runLoop();
+    const staleWorktree = path.join(h.stateDir, "worktrees", "L001-I1");
+    execFileSync("git", ["worktree", "add", "--detach", staleWorktree], {
+      cwd: repoRoot,
+      stdio: "pipe",
+    });
+    expect(fs.existsSync(staleWorktree)).toBe(true);
+
+    await h.makeOrchestrator().runLoop();
+
+    expect(fs.existsSync(staleWorktree)).toBe(false);
+    expect(fs.readFileSync(path.join(h.stateDir, "journal.ndjson"), "utf8")).toContain(
+      "worktree reconciliation scheduled sealed candidate L001-I1 for cleanup",
+    );
   });
 
   it("loop 2: verify-retry-then-pass, best-of-two winner submits, loser superseded", async () => {

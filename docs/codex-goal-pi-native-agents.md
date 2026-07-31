@@ -63,7 +63,7 @@ Treat these as non-negotiable:
   the one-at-a-time benchmark lock, deterministic verification and scoring,
   direction-aware improvement, main-checkout re-verification/re-benchmarking,
   submission idempotency behavior, pause/resume checkpoints, advisor blockers,
-  God triggering, and deliberate retention of failed worktrees.
+  God triggering, and archive-before-cleanup for every terminal worktree.
 - Design for portability. Do not rely on one user's home directory, global Pi
   extensions, skills, prompt templates, persisted child sessions, or a
   hard-coded Pi binary path.
@@ -130,8 +130,8 @@ Memory ownership:
 - `knowledge-base.md`: human-readable navigation and subject summary, not the
   sole memory store;
 - Pi JSONL traces: full per-invocation empirical trace;
-- worktrees: disposable execution surfaces, except failed worktrees retained
-  intentionally for diagnosis.
+- worktrees: disposable execution surfaces removed after the authoritative
+  candidate evidence is sealed and indexed.
 
 ## Implementation currently present in the working tree
 
@@ -237,8 +237,8 @@ Work through the existing plan without redesigning the architecture:
    - failed-before-worktree, failed-implementation, integrity-failed,
      verify-failed, benchmark-failed, no-improvement, superseded, and improved
      candidates all archive coherently;
-   - failed worktrees remain and successful/superseded worktrees are removable
-     only after archival;
+   - all terminal worktrees, including failures, are removable only after
+     archival and indexing;
    - the winning archived source becomes the next loop's actual parent;
    - main re-verification, re-benchmarking, submission, and submission replay
      prevention remain intact.

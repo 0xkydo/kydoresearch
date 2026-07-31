@@ -87,8 +87,8 @@ resume.
 - `knowledge-base.md` is navigation, not the sole memory store.
 - Pi traces retain effective soul, rendered context, invocation metadata, and
   raw JSONL events.
-- Failed worktrees are retained; successful worktrees are disposable only
-  after archive sealing and indexing.
+- Every terminal worktree is disposable only after its candidate evidence is
+  sealed and indexed. Cleanup intent is durable and includes failed candidates.
 
 Every terminal candidate must retain immutable task, proposal, and parent
 records; exact editable-source snapshot; parent-relative diff; metrics and

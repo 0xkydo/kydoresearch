@@ -85,7 +85,7 @@ export interface LoopState {
   pendingSummary?: LoopSummary;
   /** Last systemic loop failure and its automatic recovery status. */
   recovery?: RecoveryState;
-  /** Best-effort worktree removals that will be retried at the next checkpoint. */
+  /** Worktree cleanup intents, persisted before removal and retried at checkpoints. */
   pendingCleanup?: string[];
   challenge: ChallengeInfo;
   startedAt: string;
