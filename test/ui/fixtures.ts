@@ -8,6 +8,7 @@ export const ALL_PHASES: Phase[] = [
   "init.knowledge",
   "ready",
   "loop.syncing",
+  "loop.reviewing-submissions",
   "loop.proposing",
   "loop.ideas",
   "loop.finalizing",

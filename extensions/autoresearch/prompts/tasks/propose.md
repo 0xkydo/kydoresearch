@@ -16,6 +16,11 @@ Read `{{stateDir}}/knowledge-base.md` first. Then inspect the most relevant
 recent idea specs and hypothesis, Advisor, church, and submission notes. Use the
 current values above when an older note differs.
 
+The immutable task may contain `resolvedSubmissionReviews` discovered during
+this loop's remote-review checkpoint. Incorporate each accepted or rejected
+official result into the evidence ledger. A pending submission is not a result
+and must not block this portfolio.
+
 {{#operatorSteering}}
 The operator's current search preference is:
 

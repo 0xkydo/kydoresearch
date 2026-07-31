@@ -434,8 +434,8 @@ The Control Deck has three compact rows rather than duplicating agent cards:
 - **Activity Navigator** projects the selected invocation, position, current
   stage, monitor view, and editor mode.
 - **Run Overview** projects durable stage, unique sealed experiment count,
-  server-confirmed harness accept count, other remote submission count, and
-  current inner-loop token total.
+  server-confirmed harness accept, pending-review, and rejection counts, other
+  remote submission count, and current inner-loop token total.
 - **Controls** advertises the active keys and stop/inspection actions.
 
 Agent truth is independent of either renderer. Before spawning a child,
@@ -466,6 +466,7 @@ The durable top-level phases remain:
 ```text
 ready
   → loop.syncing
+  → loop.reviewing-submissions
   → loop.proposing
   → loop.ideas
   → loop.finalizing
@@ -526,8 +527,9 @@ cycle.
 
 Failures are split by blast radius:
 
-- Leaderboard sync and fetch are advisory. After command retries are exhausted,
-  the orchestrator reads the last atomic `leaderboard.json` and continues.
+- Leaderboard sync, fetch, and remote submission review are advisory. After
+  command retries are exhausted, the orchestrator reads the last atomic
+  `leaderboard.json` and continues.
 - Idea implementation, verification, and benchmarking are isolated to that
   idea. Parallel siblings and later loops continue.
 - Hypothesis notes, Advisor review, and church reflection are best-effort. They
@@ -555,6 +557,17 @@ a previous command reached the server but lost its response, that remote entry
 becomes the idempotency marker. A failed submit is never assigned
 `done-improved`, never advances `bestSubmittedScore`, and remains resumable in
 `loop.finalizing`.
+
+A successful submit command means the remote system queued or recorded the
+submission; it does not manufacture official acceptance. The orchestrator
+persists a `submissionReviews` record and completes the loop immediately. At
+the start of every later loop, `loop.reviewing-submissions` consumes one
+bounded all/mine snapshot without polling. `validating`, `verifying`, and
+`promoting` remain pending. Accepted and rejected outcomes are checkpointed,
+announced, appended idempotently to `knowledge-base.md`, and embedded as
+`resolvedSubmissionReviews` in the next immutable Professor task. The
+Professor therefore receives official feedback before proposing while remote
+latency never stalls research.
 
 Additional archive and lineage invariants:
 
@@ -791,9 +804,12 @@ charged as failed verification attempts.
 God's stable role and conversational behavior are unchanged.
 
 A `done-improved` idea with its persisted submission record remains the local
-idempotency marker. The harness prevents replay after the adapter result is
-stored, although no local state file can make a remote submission and a hard
-process kill transactionally atomic.
+idempotency marker and means locally improved, applied, and submitted—not
+remotely accepted. The separate durable submission review remains pending
+until the remote snapshot reports acceptance or rejection. The harness
+prevents replay after the adapter result is stored, although no local state
+file can make a remote submission and a hard process kill transactionally
+atomic.
 
 The external challenge CLI does not expose a submission idempotency key. The
 harness prevents replay after the adapter result is persisted and reconciles a
@@ -831,7 +847,7 @@ on-call supervisor diagnose the same incident.
 - correctness from the detected or setup-selected verify command;
 - performance from the benchmark command and `scorePath`;
 - `submit --note-file [--model]`;
-- `submissions --all`;
+- `submissions` and `submissions --all` for owned and global review snapshots;
 - `sync`.
 
 Before submission, the harness writes a public reproducibility note from the

@@ -172,6 +172,7 @@ describe("Orchestrator with PiSubprocessRunner failures", () => {
 
   it.each([
     "loop.syncing",
+    "loop.reviewing-submissions",
     "loop.proposing",
     "loop.ideas",
     "loop.finalizing",
