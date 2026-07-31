@@ -853,6 +853,11 @@ the role's tool policy, and retains the raw JSONL event stream.
 - **Status says `on-call inactive`:** the extension was launched through
   ordinary `pi`. Start the challenge with `pi-kydo` when you want the optional
   outer process to diagnose catastrophic pauses and own restart behavior.
+- **Meta-harness reports runtime contract drift:** restore the displayed frozen
+  setting to its expected value before resuming, or intentionally initialize a
+  new campaign. The startup notification includes expected and observed values.
+  If drift prevents a retry, it also shows the last recorded loop failure—such
+  as provider credits or authentication—so both blockers can be repaired.
 - **The on-call supervisor intervened:** inspect the newest directory under
   `.autoresearch/oncall/incidents/`. `report.md` is the diagnosis,
   `evidence.log` is the bounded process window, `codex.ndjson` is the repair

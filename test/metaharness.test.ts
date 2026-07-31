@@ -583,6 +583,27 @@ describe("MetaHarnessController", () => {
     expect(migratedVerifier.runtime).not.toHaveProperty("fixedRoleArtifacts");
     expect(loadMetaHarnessStatus(initialized.stateDir)?.phase).toBe("ready");
 
+    const policyDrift = structuredClone(config);
+    policyDrift.maxVerifyAttempts = config.maxVerifyAttempts - 1;
+    await expect(
+      MetaHarnessController.create(
+        challenge.repoRoot,
+        initialized.stateDir,
+        policyDrift,
+        ports,
+      ),
+    ).rejects.toThrow(
+      /runtime\.innerPolicy\.maxVerifyAttempts.*expected 3, observed 2.*restore the frozen value/i,
+    );
+
+    await MetaHarnessController.create(
+      challenge.repoRoot,
+      initialized.stateDir,
+      config,
+      ports,
+    );
+    expect(loadMetaHarnessStatus(initialized.stateDir)?.phase).toBe("ready");
+
     const drifted = structuredClone(config);
     drifted.roles.professor.model = "example/different-fixed-model";
     await expect(

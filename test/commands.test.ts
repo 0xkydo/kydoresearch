@@ -9,8 +9,12 @@ import * as path from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { registerAutoresearchCommand } from "../extensions/autoresearch/commands.ts";
 import { createCandidateRun, writeCandidateProposal } from "../src/archive.ts";
-import { DEFAULT_CONFIG } from "../src/config.ts";
+import { DEFAULT_CONFIG, saveConfig } from "../src/config.ts";
 import { EXPERIMENT_SCHEMA_VERSION } from "../src/experiments.ts";
+import {
+  MetaHarnessController,
+  VerifierDriftError,
+} from "../src/metaharness.ts";
 import {
   loadState,
   newLoopState,
@@ -976,6 +980,60 @@ describe("/autoresearch startup errors", () => {
       "error",
     );
     expect(fs.existsSync(path.join(challenge.repoRoot, STATE_DIR_NAME, "state.json"))).toBe(false);
+  });
+
+  it("shows the last provider-credit failure when metaharness drift blocks startup", async () => {
+    const challenge = makeTmpChallenge();
+    cleanups.push(challenge.cleanup);
+    const stateDir = path.join(challenge.repoRoot, STATE_DIR_NAME);
+    const state = newLoopState({
+      name: "drifted-campaign",
+      cli: "",
+      direction: "-",
+      setupCommand: "./setup.sh",
+      verifyCommand: "./verify.sh",
+      benchCommand: "./benchmark.sh",
+      submitNeedsModel: false,
+      editablePaths: ["src"],
+      scorePath: "score.json",
+    });
+    state.phase = "paused";
+    state.resumePhase = "loop.proposing";
+    state.loop = 3;
+    state.recovery = {
+      scope: "loop.proposing",
+      message:
+        'Professor propose failed: 402: {"message":"Insufficient credits. Add more using OpenRouter settings"}',
+      consecutiveFailures: 5,
+      failedAt: "2026-07-31T17:26:06.980Z",
+    };
+    saveState(stateDir, state);
+    const config = structuredClone(DEFAULT_CONFIG);
+    config.runner = "mock";
+    config.metaHarness.enabled = true;
+    saveConfig(stateDir, config);
+    const create = vi.spyOn(MetaHarnessController, "create").mockRejectedValue(
+      new VerifierDriftError("expected-fingerprint", "observed-fingerprint", [
+        "runtime.innerPolicy.maxVerifyAttempts",
+      ]),
+    );
+
+    try {
+      const harness = commandHarness(challenge.repoRoot);
+      await harness.run();
+
+      const notification = harness.notify.mock.calls
+        .map((call) => String(call[0]))
+        .join("\n");
+      expect(notification).toContain(
+        "changed components: runtime.innerPolicy.maxVerifyAttempts",
+      );
+      expect(notification).toContain("Last recorded loop failure");
+      expect(notification).toContain("Insufficient credits");
+      expect(notification).toContain("Resolve the provider credit or authentication issue");
+    } finally {
+      create.mockRestore();
+    }
   });
 
   it("surfaces actionable setup and missing-benchmark guidance without a stack trace", async () => {
