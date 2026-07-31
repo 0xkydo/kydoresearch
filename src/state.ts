@@ -1,5 +1,6 @@
 import * as path from "node:path";
 import type { EvaluationCommandV1, LocalEvaluationV1 } from "./experiments.ts";
+import type { RemoteSubmissionStatus } from "./challenge/types.ts";
 import type { IdeaStatus, Phase } from "./phases.ts";
 import type { Direction } from "./util.ts";
 import { atomicWriteJson, readJsonIfExists } from "./util.ts";
@@ -31,6 +32,25 @@ export interface Idea {
   /** ISO timestamp written after the candidate evidence bundle is sealed. */
   archivedAt?: string;
   submitted?: { submissionId?: string; noteFile: string };
+}
+
+/** Durable local tracking for an asynchronously reviewed remote submission. */
+export interface SubmissionReview {
+  candidateId: string;
+  submissionId?: string;
+  localScore: number;
+  noteFile: string;
+  submittedAt: string;
+  status: RemoteSubmissionStatus;
+  /** Exact status text from the most recent remote snapshot. */
+  remoteStatus?: string;
+  remoteMetrics?: string;
+  officialScore?: number;
+  promoted?: boolean;
+  lastCheckedAt?: string;
+  resolvedAt?: string;
+  /** Terminal state already appended to the knowledge base. */
+  feedbackRecordedStatus?: Exclude<RemoteSubmissionStatus, "pending">;
 }
 
 export interface LoopSummary {
@@ -96,6 +116,8 @@ export interface LoopState {
   recovery?: RecoveryState;
   /** Worktree cleanup intents, persisted before removal and retried at checkpoints. */
   pendingCleanup?: string[];
+  /** Submission queue and later official review results. Optional for legacy v1 state. */
+  submissionReviews?: SubmissionReview[];
   challenge: ChallengeInfo;
   startedAt: string;
   updatedAt: string;

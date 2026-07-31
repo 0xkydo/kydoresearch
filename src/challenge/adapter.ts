@@ -7,15 +7,41 @@ import type {
   BenchmarkManifest,
   ChallengeAdapter,
   LeaderboardEntry,
+  RemoteSubmissionStatus,
   ScoreResult,
   SubmitResult,
 } from "./types.ts";
 
 const RAW_TAIL = 4000;
+const ANSI_ESCAPE = /\u001b(?:\[[0-?]*[ -/]*[@-~]|\][^\u0007]*(?:\u0007|\u001b\\)|[@-Z\\-_])/g;
 
 function tail(result: ExecResult): string {
   const combined = `${result.stdout}\n${result.stderr}`.trim();
   return combined.length > RAW_TAIL ? combined.slice(-RAW_TAIL) : combined;
+}
+
+function stripAnsi(value: string): string {
+  return value.replace(ANSI_ESCAPE, "");
+}
+
+function remoteSubmissionStatus(raw: string): RemoteSubmissionStatus {
+  const status = raw.trim().toLowerCase();
+  if (
+    status === "rejected" ||
+    status === "failed"
+  ) {
+    return "rejected";
+  }
+  if (
+    status === "promoted" ||
+    status === "not promoted" ||
+    status === "promotion failed" ||
+    status === "superseded" ||
+    status === "accepted"
+  ) {
+    return "accepted";
+  }
+  return "pending";
 }
 
 export interface YukonCliAdapterOptions {
@@ -209,10 +235,21 @@ export class YukonCliAdapter implements ChallengeAdapter {
     });
     const raw = tail(result);
     const idMatch = raw.match(/\b(sub-[a-z0-9]+|[0-9a-f]{8}-[0-9a-f-]{27,})\b/i);
+    const plain = stripAnsi(raw);
+    const statusMatch = /^status\s+(.+?)\s*$/im.exec(plain);
+    const rawStatus = statusMatch?.[1]?.trim();
+    const promoted = /\bpromoted\b/i.test(plain) && !/\bnot promoted\b/i.test(plain);
     return {
       ok: result.code === 0,
       submissionId: idMatch?.[1],
-      promoted: /promoted/i.test(raw) && !/not promoted/i.test(raw),
+      ...(result.code === 0
+        ? {
+            status: rawStatus
+              ? remoteSubmissionStatus(rawStatus)
+              : ("accepted" as const),
+          }
+        : {}),
+      promoted,
       raw,
     };
   }
@@ -226,20 +263,7 @@ export class YukonCliAdapter implements ChallengeAdapter {
     if (result.code !== 0) {
       throw new Error(`Challenge submissions command failed (exit ${result.code}): ${tail(result)}`);
     }
-    // Tab-separated table: ID SCORE AUTHOR PROMOTED CREATED (header row skipped).
-    return result.stdout
-      .trim()
-      .split("\n")
-      .slice(1)
-      .map((line) => line.split("\t"))
-      .filter((cols) => cols.length >= 4 && Number.isFinite(Number(cols[1])))
-      .map((cols) => ({
-        id: cols[0] ?? "",
-        score: Number(cols[1]),
-        author: cols[2] ?? "",
-        promoted: (cols[3] ?? "").toLowerCase().startsWith("y"),
-        createdAt: cols[4],
-      }));
+    return parseSubmissionTable(result.stdout);
   }
 
   async sync(signal?: AbortSignal): Promise<{ ok: boolean; raw: string }> {
@@ -247,4 +271,74 @@ export class YukonCliAdapter implements ChallengeAdapter {
     const result = await this.sh(`${this.cli} sync`, { cwd: this.repoRoot, signal });
     return { ok: result.code === 0, raw: tail(result) };
   }
+}
+
+/** Parse both legacy Yukon TSV output and the current mlxfast status table. */
+export function parseSubmissionTable(stdout: string): LeaderboardEntry[] {
+  const lines = stripAnsi(stdout)
+    .split(/\r?\n/)
+    .map((line) => line.trimEnd())
+    .filter((line) => line.trim() !== "");
+  const legacyHeader = lines.findIndex((line) => /^ID\tSCORE\tAUTHOR\tPROMOTED(?:\t|$)/i.test(line));
+  if (legacyHeader >= 0) {
+    return lines
+      .slice(legacyHeader + 1)
+      .map((line) => line.split("\t"))
+      .filter((cols) => cols.length >= 4 && Number.isFinite(Number(cols[1])))
+      .map((cols) => ({
+        id: cols[0] ?? "",
+        score: Number(cols[1]),
+        author: cols[2] ?? "",
+        status: "accepted",
+        rawStatus: (cols[3] ?? "").toLowerCase().startsWith("y")
+          ? "promoted"
+          : "not promoted",
+        promoted: (cols[3] ?? "").toLowerCase().startsWith("y"),
+        createdAt: cols[4],
+      }));
+  }
+
+  const headerIndex = lines.findIndex((line) => {
+    const headers = line.trim().split(/\s{2,}/).map((column) => column.toLowerCase());
+    return headers.includes("submission") && headers.includes("solver") && headers.includes("status");
+  });
+  if (headerIndex < 0) return [];
+  const headers = lines[headerIndex]!.trim().split(/\s{2,}/).map((column) => column.toLowerCase());
+  const index = (name: string) => headers.indexOf(name);
+  const submissionIndex = index("submission");
+  const solverIndex = index("solver");
+  const statusIndex = index("status");
+  const scoreIndex = index("score");
+  const metricsIndex = index("metrics");
+  const createdIndex = index("created");
+
+  return lines
+    .slice(headerIndex + 1)
+    .filter((line) => !/^[\s\-─]+$/.test(line))
+    .map((line) => line.trim().split(/\s{2,}/))
+    .filter((columns) =>
+      submissionIndex >= 0 &&
+      solverIndex >= 0 &&
+      statusIndex >= 0 &&
+      columns.length > Math.max(submissionIndex, solverIndex, statusIndex)
+    )
+    .map((columns) => {
+      const rawStatus = columns[statusIndex]?.trim() ?? "unknown";
+      const rawScore = scoreIndex >= 0 ? columns[scoreIndex]?.trim() : undefined;
+      const score = rawScore === undefined || rawScore.toLowerCase() === "n/a"
+        ? null
+        : Number(rawScore);
+      const rawMetrics = metricsIndex >= 0 ? columns[metricsIndex]?.trim() : undefined;
+      return {
+        id: columns[submissionIndex]?.trim() ?? "",
+        score: score !== null && Number.isFinite(score) ? score : null,
+        author: columns[solverIndex]?.trim() ?? "",
+        status: remoteSubmissionStatus(rawStatus),
+        rawStatus,
+        metrics: rawMetrics && rawMetrics.toLowerCase() !== "n/a" ? rawMetrics : undefined,
+        promoted: rawStatus.toLowerCase() === "promoted",
+        createdAt: createdIndex >= 0 ? columns.slice(createdIndex).join("  ").trim() : undefined,
+      };
+    })
+    .filter((entry) => entry.id !== "");
 }
