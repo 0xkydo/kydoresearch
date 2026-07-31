@@ -91,6 +91,18 @@ describe("test impact selector", () => {
     expect(receipt.fullSuiteRequired).toBe(false);
   });
 
+  it("maps provider registration changes to policy and extension integration", () => {
+    const receipt = select({
+      mode: "related",
+      changedFiles: ["extensions/autoresearch/provider-policy.ts"],
+    });
+    const files = selectedFiles(receipt);
+
+    expect(files).toContain("test/provider-policy.test.ts");
+    expect(files).toContain("test/integration/pi-extension/loading.test.ts");
+    expect(receipt.fullSuiteRequired).toBe(false);
+  });
+
   it("maps guided onboarding and initialization to Setup and UI contracts", () => {
     for (const file of [
       "extensions/autoresearch/onboarding.ts",
