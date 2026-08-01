@@ -30,14 +30,25 @@ export interface ScoreResult {
 export interface SubmitResult {
   ok: boolean;
   submissionId?: string;
+  /** Authoritative remote review state when the CLI exposes it. */
+  status?: RemoteSubmissionStatus;
   promoted?: boolean;
   raw: string;
 }
 
+export type RemoteSubmissionStatus = "pending" | "accepted" | "rejected";
+
 export interface LeaderboardEntry {
   id: string;
-  score: number;
+  /** Pending or rejected submissions may not have an official score. */
+  score: number | null;
   author: string;
+  /** Optional for legacy adapters and cached snapshots. */
+  status?: RemoteSubmissionStatus;
+  /** Human-readable status emitted by the challenge CLI. */
+  rawStatus?: string;
+  /** Bounded official metrics summary emitted by the challenge CLI. */
+  metrics?: string;
   promoted: boolean;
   createdAt?: string;
 }

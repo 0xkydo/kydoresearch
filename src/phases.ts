@@ -5,6 +5,7 @@ export type Phase =
   | "init.knowledge"
   | "ready"
   | "loop.syncing"
+  | "loop.reviewing-submissions"
   | "loop.proposing"
   | "loop.ideas" // parallel idea pipelines in flight
   | "loop.finalizing" // winner selection + apply to main repo + submit

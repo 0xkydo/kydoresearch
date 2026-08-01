@@ -23,6 +23,11 @@ cached provenance honestly. This evidence informs the search; it does not
 require a particular parent or interrupt an already-materialized loop.
 {{/leaderboardSnapshotPath}}
 
+The immutable task may contain `resolvedSubmissionReviews` discovered during
+this loop's remote-review checkpoint. Incorporate each accepted or rejected
+official result into the evidence ledger. A pending submission is not a result
+and must not block this portfolio.
+
 {{#operatorSteering}}
 The operator's current search preference is:
 

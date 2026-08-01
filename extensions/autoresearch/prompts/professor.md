@@ -26,6 +26,10 @@ Consider:
 - Dry loop streak: {{dryLoopStreak}}
 - Prior outcomes indexed in `{{ledgerPath}}`; cite run IDs or artifact paths
 - Competitor submissions and notes (leaderboard digest in the knowledge base)
+- Resolved official submission reviews in `resolvedSubmissionReviews` in the
+  immutable task. Accepted results are authoritative validation evidence;
+  rejected results invalidate treating that local improvement as official
+  success and should inform repair or parent selection.
 
 {{#operatorSteering}}
 ## Operator steering

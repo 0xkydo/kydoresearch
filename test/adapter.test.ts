@@ -206,4 +206,99 @@ describe("YukonCliAdapter against mockchal", () => {
 
     expect((await adapter.sync()).ok).toBe(true);
   });
+
+  it("parses queued mlxfast submissions and their asynchronous review states", async () => {
+    const manifest = readManifest(repoRoot);
+    const submissionId = "019fba1d-d5eb-7633-b93f-f713966c02a7";
+    const exec: ExecPort = async (_cmd, args) => {
+      const command = args[1] ?? "";
+      if (/\bsubmit\b/.test(command.replaceAll('"', ""))) {
+        return {
+          stdout: [
+            "Submission queued",
+            "benchmark   eigenlabs/mlxfast-challenge",
+            `submission  ${submissionId}`,
+            "status      validating",
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+        };
+      }
+      if (command.includes(" submissions")) {
+        return {
+          stdout: [
+            "MLX Fast submissions",
+            "submission  solver  status         score  metrics        diff  commit   created",
+            "----------  ------  -------------  -----  -------------  ----  -------  ----------------",
+            "019fba1     me      validating     n/a    n/a            n/a   1234567  7/31/26, 9:00 AM",
+            "029fba2     me      rejected       n/a    verifier fail  n/a   2345678  7/31/26, 9:01 AM",
+            "039fba3     me      promoted       1.25   {\"ok\":true}    -0.5  3456789  7/31/26, 9:02 AM",
+            "049fba4     me      not promoted   1.5    {\"ok\":true}    0     4567890  7/31/26, 9:03 AM",
+          ].join("\n"),
+          stderr: "",
+          code: 0,
+        };
+      }
+      return { stdout: "", stderr: "", code: 0 };
+    };
+    const currentAdapter = new YukonCliAdapter({
+      repoRoot,
+      manifest,
+      cli: "mlxfast",
+      verifyCommand: "./verify.sh",
+      benchCommand: "./benchmark.sh",
+      exec,
+    });
+    const noteFile = path.join(repoRoot, "submission-note.md");
+    fs.writeFileSync(noteFile, "Detailed submission note.");
+
+    await expect(currentAdapter.submit({ noteFile, model: "GPT-5.6" })).resolves.toMatchObject({
+      ok: true,
+      submissionId,
+      status: "pending",
+      promoted: false,
+    });
+    await expect(currentAdapter.listSubmissions(true)).resolves.toEqual([
+      {
+        id: "019fba1",
+        score: null,
+        author: "me",
+        status: "pending",
+        rawStatus: "validating",
+        metrics: undefined,
+        promoted: false,
+        createdAt: "7/31/26, 9:00 AM",
+      },
+      {
+        id: "029fba2",
+        score: null,
+        author: "me",
+        status: "rejected",
+        rawStatus: "rejected",
+        metrics: "verifier fail",
+        promoted: false,
+        createdAt: "7/31/26, 9:01 AM",
+      },
+      {
+        id: "039fba3",
+        score: 1.25,
+        author: "me",
+        status: "accepted",
+        rawStatus: "promoted",
+        metrics: '{"ok":true}',
+        promoted: true,
+        createdAt: "7/31/26, 9:02 AM",
+      },
+      {
+        id: "049fba4",
+        score: 1.5,
+        author: "me",
+        status: "accepted",
+        rawStatus: "not promoted",
+        metrics: '{"ok":true}',
+        promoted: false,
+        createdAt: "7/31/26, 9:03 AM",
+      },
+    ]);
+  });
 });

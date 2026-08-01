@@ -24,6 +24,7 @@ import {
 import type {
   ChallengeAdapter,
   LeaderboardEntry,
+  RemoteSubmissionStatus,
   SubmitResult,
 } from "./challenge/types.ts";
 import type { HarnessConfig } from "./config.ts";
@@ -53,7 +54,7 @@ import { auditCandidateIntegrity } from "./integrity.ts";
 import type { Phase } from "./phases.ts";
 import { isIdeaTerminal } from "./phases.ts";
 import { abortableDelay, retryBackoffMs, retryOperation } from "./retry.ts";
-import type { Idea, LoopState, LoopSummary } from "./state.ts";
+import type { Idea, LoopState, LoopSummary, SubmissionReview } from "./state.ts";
 import type { MetaHarnessStatus } from "./metaharness.ts";
 import { loadState, saveState, statePaths } from "./state.ts";
 import { loadOperatorSteering } from "./steering.ts";
@@ -63,6 +64,12 @@ import { appendJournal, atomicWriteJson, betterScore, isImprovement, Mutex } fro
 import { WorktreePool } from "./worktree.ts";
 
 const STATE_DIRECTORY_SENTINEL = ".autoresearch/**";
+
+interface LeaderboardSnapshot {
+  entries: LeaderboardEntry[];
+  mine: LeaderboardEntry[];
+  fetchedAt?: string;
+}
 
 export type OrchestratorEvent =
   | { type: "phase"; phase: Phase; loop: number }
@@ -76,6 +83,15 @@ export type OrchestratorEvent =
       score: number;
       submissionId?: string;
       promoted?: boolean;
+      status?: RemoteSubmissionStatus;
+    }
+  | {
+      type: "submission-result";
+      loop: number;
+      candidateId: string;
+      submissionId?: string;
+      status: "accepted" | "rejected";
+      officialScore?: number;
     }
   | { type: "log"; message: string };
 
@@ -125,6 +141,8 @@ export interface StatusReport {
 export interface RunOverviewStatus {
   experimentsRun: number;
   remoteAccepted: number;
+  remotePending: number;
+  remoteRejected: number;
   otherSubmissions: number;
   loopTokens: number;
   tokenUsageComplete: boolean;
@@ -300,6 +318,10 @@ export class Orchestrator {
       this.state.ideas = [];
       await this.syncLeaderboard();
       if (this.aborted()) return this.abortLoop();
+      this.reviewRemoteSubmissions(
+        this.loadLoopLeaderboardSnapshot() ?? this.loadCachedLeaderboard(),
+      );
+      if (this.aborted()) return this.abortLoop();
       await this.propose();
     } else {
       this.emitLog(
@@ -309,6 +331,15 @@ export class Orchestrator {
       if (this.state.ideas.length === 0 && !resumeAtFinalizing) {
         if (resumePhase === "loop.syncing") {
           await this.syncLeaderboard();
+          if (this.aborted()) return this.abortLoop();
+        }
+        if (
+          resumePhase === "loop.syncing" ||
+          resumePhase === "loop.reviewing-submissions"
+        ) {
+          this.reviewRemoteSubmissions(
+            this.loadLoopLeaderboardSnapshot() ?? this.loadCachedLeaderboard(),
+          );
           if (this.aborted()) return this.abortLoop();
         }
         await this.propose();
@@ -439,7 +470,6 @@ export class Orchestrator {
   private async syncLeaderboard(): Promise<void> {
     this.transition("loop.syncing");
     if (this.aborted()) return;
-
     const snapshotPath = this.loopLeaderboardSnapshotPath();
     const existing = this.readLoopLeaderboardSnapshot(snapshotPath);
     if (existing) {
@@ -449,10 +479,16 @@ export class Orchestrator {
       return;
     }
 
+    const cached = this.loadCachedLeaderboard();
     let syncOk = false;
+    let syncThrew = false;
     let syncDetail = "sync did not complete";
+    let syncResult: { ok: boolean; raw: string } = {
+      ok: false,
+      raw: "sync did not complete",
+    };
     try {
-      const syncResult = await this.retryResult(
+      syncResult = await this.retryResult(
         "leaderboard sync",
         this.config.resilience.commandMaxAttempts,
         () => this.ports.adapter.sync(this.ports.signal),
@@ -464,12 +500,24 @@ export class Orchestrator {
         (syncResult.ok ? "sync succeeded" : "sync unavailable");
     } catch (error) {
       if (this.aborted()) return;
+      syncThrew = true;
       syncDetail = errorMessage(error);
+      this.emitLog(
+        `leaderboard sync threw after ${this.config.resilience.commandMaxAttempts} attempt(s); ` +
+          `continuing with ${cached.entries.length} cached submission(s) · ${errorMessage(error)}`,
+      );
+    }
+    if (!syncOk && !syncThrew && syncDetail !== "sync did not complete") {
+      this.emitLog(
+        `leaderboard sync unavailable after ${this.config.resilience.commandMaxAttempts} attempt(s); ` +
+          `continuing with ${cached.entries.length} cached submission(s) · ${syncDetail}`,
+      );
     }
 
-    let entries: LeaderboardEntry[];
-    let provenance: LoopLeaderboardSnapshotV1["provenance"] = "remote";
-    let observedAt: string | undefined;
+    let entries = cached.entries;
+    let mine = cached.mine;
+    let allFetched = false;
+    let mineFetched = false;
     try {
       entries = await this.retryResult(
         "leaderboard fetch",
@@ -477,47 +525,180 @@ export class Orchestrator {
         () => this.ports.adapter.listSubmissions(true, this.ports.signal),
         () => true,
       );
-      observedAt = new Date().toISOString();
-      atomicWriteJson(this.paths.leaderboard, { fetchedAt: observedAt, entries });
+      allFetched = true;
     } catch (error) {
       if (this.aborted()) return;
-      const cached = this.loadCachedLeaderboardSnapshot();
-      entries = cached.entries;
-      observedAt = cached.fetchedAt;
-      provenance = "cache";
       this.emitLog(
         `leaderboard fetch unavailable; continuing with ${entries.length} cached submission(s) · ${errorMessage(error)}`,
       );
+    }
+    try {
+      mine = await this.retryResult(
+        "submission review fetch",
+        this.config.resilience.commandMaxAttempts,
+        () => this.ports.adapter.listSubmissions(false, this.ports.signal),
+        () => true,
+      );
+      mineFetched = true;
+    } catch (error) {
+      if (this.aborted()) return;
+      this.emitLog(
+        `submission review fetch unavailable; continuing with ${mine.length} cached own submission(s) · ${errorMessage(error)}`,
+      );
+    }
+    const capturedAt = new Date().toISOString();
+    if (allFetched || mineFetched) {
+      atomicWriteJson(this.paths.leaderboard, {
+        fetchedAt: capturedAt,
+        entries,
+        mine,
+      });
     }
 
     const snapshot: LoopLeaderboardSnapshotV1 = {
       schemaVersion: EXPERIMENT_SCHEMA_VERSION,
       loop: this.state.loop,
-      capturedAt: new Date().toISOString(),
-      provenance,
-      ...(observedAt ? { observedAt } : {}),
+      capturedAt,
+      provenance: allFetched && mineFetched ? "remote" : "cache",
+      sources: {
+        entries: allFetched ? "remote" : "cache",
+        mine: mineFetched ? "remote" : "cache",
+      },
+      ...((allFetched || mineFetched)
+        ? { observedAt: capturedAt }
+        : cached.fetchedAt
+          ? { observedAt: cached.fetchedAt }
+          : {}),
       sync: { ok: syncOk, detail: syncDetail },
       entries,
+      mine,
     };
     fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
     atomicWriteJson(snapshotPath, snapshot);
     this.appendKnowledge(this.leaderboardDigest(entries));
     this.emitLog(
-      `leaderboard: froze ${entries.length} ${provenance} submission(s) for loop ${this.state.loop} · ` +
-        `sync ${syncOk ? "succeeded" : "unavailable"} · ${syncDetail}`,
+      `leaderboard: froze ${entries.length} submission(s) and ${mine.length} own submission(s) ` +
+        `for loop ${this.state.loop} · all ${snapshot.sources?.entries} · mine ${snapshot.sources?.mine} · ` +
+        `sync ${syncOk ? "succeeded" : "unavailable"}`,
     );
   }
 
   private leaderboardDigest(entries: LeaderboardEntry[]): string {
     if (entries.length === 0) return `\n### Loop ${this.state.loop} leaderboard\n(no submissions yet)\n`;
-    const sorted = [...entries].sort((a, b) =>
-      this.state.challenge.direction === "+" ? b.score - a.score : a.score - b.score,
-    );
+    const sorted = [...entries].sort((a, b) => {
+      if (a.score === null) return 1;
+      if (b.score === null) return -1;
+      return this.state.challenge.direction === "+" ? b.score - a.score : a.score - b.score;
+    });
     const top = sorted
       .slice(0, 5)
-      .map((e) => `- ${e.id} · score ${e.score} · ${e.author}${e.promoted ? " · promoted" : ""}`)
+      .map((e) =>
+        `- ${e.id} · score ${e.score ?? "pending"} · ${e.author} · ` +
+          `${e.rawStatus ?? e.status ?? (e.promoted ? "promoted" : "status unknown")}`
+      )
       .join("\n");
     return `\n### Loop ${this.state.loop} leaderboard (top ${Math.min(5, sorted.length)})\n${top}\n`;
+  }
+
+  /**
+   * Reconcile queued submissions from one bounded snapshot. This is a normal
+   * loop checkpoint, never a poll or a wait for remote validation.
+   */
+  private reviewRemoteSubmissions(snapshot: LeaderboardSnapshot): void {
+    this.transition("loop.reviewing-submissions");
+    if (this.aborted()) return;
+    const reviews = this.state.submissionReviews ?? [];
+    this.state.submissionReviews = reviews;
+    for (const idea of this.state.ideas) {
+      if (!idea.submitted || idea.localScore === undefined) continue;
+      if (reviews.some((review) => review.candidateId === idea.id)) continue;
+      reviews.push({
+        candidateId: idea.id,
+        ...(idea.submitted.submissionId
+          ? { submissionId: idea.submitted.submissionId }
+          : {}),
+        localScore: idea.localScore,
+        noteFile: idea.submitted.noteFile,
+        submittedAt: idea.archivedAt ?? this.state.updatedAt,
+        status: "pending",
+      });
+    }
+    const remoteEntries = deduplicateLeaderboardEntries(snapshot.entries);
+    const ownEntries = deduplicateLeaderboardEntries(snapshot.mine);
+    const checkedAt = new Date().toISOString();
+
+    for (const review of reviews) {
+      const entry = findSubmissionReviewEntry(review, ownEntries, remoteEntries);
+      if (!entry) continue;
+      review.submissionId ??= entry.id;
+      review.lastCheckedAt = checkedAt;
+      review.status = submissionStatus(entry);
+      review.remoteStatus = entry.rawStatus ?? review.status;
+      review.remoteMetrics = entry.metrics;
+      review.promoted = entry.promoted;
+      if (entry.score !== null) review.officialScore = entry.score;
+      if (review.status !== "pending" && !review.resolvedAt) {
+        review.resolvedAt = checkedAt;
+      }
+    }
+    this.persist();
+
+    for (const review of reviews) {
+      if (review.status === "pending") continue;
+      if (review.feedbackRecordedStatus === review.status) continue;
+      this.recordSubmissionFeedback(review);
+    }
+  }
+
+  private recordSubmissionFeedback(review: SubmissionReview): void {
+    if (review.status === "pending") return;
+    const marker = submissionFeedbackMarker(review);
+    const knowledge = fs.existsSync(this.paths.knowledgeBase)
+      ? fs.readFileSync(this.paths.knowledgeBase, "utf8")
+      : "";
+    if (!knowledge.includes(marker)) {
+      const officialScore = review.officialScore === undefined
+        ? "not reported"
+        : String(review.officialScore);
+      const consequence = review.status === "accepted"
+        ? "Treat this as official validation evidence; promotion is recorded separately."
+        : "Do not treat the local improvement as official success; use the rejection as repair or parent-selection evidence.";
+      this.appendKnowledge(
+        [
+          "",
+          `### Remote submission ${review.status} before loop ${this.state.loop}`,
+          marker,
+          `- Candidate: ${review.candidateId}`,
+          `- Submission: ${review.submissionId ?? "id unknown"}`,
+          `- Local score: ${review.localScore}`,
+          `- Official score: ${officialScore}`,
+          `- Remote status: ${review.remoteStatus ?? review.status}`,
+          `- Promoted: ${review.promoted === true ? "yes" : "no"}`,
+          ...(review.remoteMetrics ? [`- Remote metrics: ${review.remoteMetrics}`] : []),
+          `- Research consequence: ${consequence}`,
+          "",
+        ].join("\n"),
+      );
+    }
+    review.feedbackRecordedStatus = review.status;
+    this.persist();
+    appendJournal(this.paths.journal, {
+      event: "submission.remote-result",
+      loop: this.state.loop,
+      candidateId: review.candidateId,
+      submissionId: review.submissionId,
+      status: review.status,
+      officialScore: review.officialScore,
+      remoteStatus: review.remoteStatus,
+    });
+    this.ports.emit({
+      type: "submission-result",
+      loop: this.state.loop,
+      candidateId: review.candidateId,
+      ...(review.submissionId ? { submissionId: review.submissionId } : {}),
+      status: review.status,
+      ...(review.officialScore === undefined ? {} : { officialScore: review.officialScore }),
+    });
   }
 
   private async propose(): Promise<void> {
@@ -555,6 +736,22 @@ export class Orchestrator {
         ...(fs.existsSync(leaderboardSnapshotPath) ? { leaderboardSnapshotPath } : {}),
         currentBestCandidateId,
         inFlightCandidateIds: this.state.ideas.map((idea) => idea.id),
+        resolvedSubmissionReviews: (this.state.submissionReviews ?? [])
+          .filter(isResolvedSubmissionReview)
+          .slice(-20)
+          .map((review) => ({
+            candidateId: review.candidateId,
+            ...(review.submissionId ? { submissionId: review.submissionId } : {}),
+            status: review.status,
+            localScore: review.localScore,
+            ...(review.officialScore === undefined
+              ? {}
+              : { officialScore: review.officialScore }),
+            promoted: review.promoted === true,
+            remoteStatus: review.remoteStatus ?? review.status,
+            ...(review.remoteMetrics ? { remoteMetrics: review.remoteMetrics } : {}),
+            resolvedAt: review.resolvedAt ?? review.lastCheckedAt ?? review.submittedAt,
+          })),
         ...(operatorSteering ? { operatorSteering } : {}),
       },
     };
@@ -1107,6 +1304,30 @@ export class Orchestrator {
         noteFile: noteRel,
         ...(submit.promoted === undefined ? {} : { promoted: submit.promoted }),
       };
+      const submittedAt = new Date().toISOString();
+      const submissionReviews = this.state.submissionReviews ?? [];
+      this.state.submissionReviews = submissionReviews;
+      const existingReview = submissionReviews.find((review) =>
+        review.candidateId === candidate.id ||
+        (submit.submissionId !== undefined &&
+          submissionIdsMatch(review.submissionId, submit.submissionId))
+      );
+      const initialStatus = submit.status ?? "pending";
+      if (existingReview) {
+        existingReview.submissionId ??= submit.submissionId;
+        existingReview.status = initialStatus;
+        existingReview.promoted = submit.promoted === true;
+      } else {
+        submissionReviews.push({
+          candidateId: candidate.id,
+          ...(submit.submissionId ? { submissionId: submit.submissionId } : {}),
+          localScore: bench.score,
+          noteFile: noteRel,
+          submittedAt,
+          status: initialStatus,
+          promoted: submit.promoted === true,
+        });
+      }
       this.state.bestCandidateId = candidate.id;
       this.state.bestScore =
         this.state.bestScore === null
@@ -1135,16 +1356,21 @@ export class Orchestrator {
         score: bench.score,
         submissionId: submit.submissionId,
         promoted: submit.promoted,
+        status: submit.status,
       });
+      const remoteStatus = submit.status ?? "pending";
       const promotion =
         submit.promoted === true
           ? "promoted"
-          : submit.promoted === false
-            ? "not promoted"
-            : "promotion unknown";
+          : remoteStatus === "pending"
+            ? "promotion pending"
+            : submit.promoted === false
+              ? "not promoted"
+              : "promotion unknown";
       this.appendKnowledge(
         `\n### Loop ${this.state.loop} submission\n- ${candidate.id} "${candidate.title}" · ` +
-          `local score ${bench.score} · submitted (${submit.submissionId ?? "id unknown"}) · ${promotion}\n`,
+          `local score ${bench.score} · submitted (${submit.submissionId ?? "id unknown"}) · ` +
+          `remote status ${remoteStatus} · ${promotion}\n`,
       );
       this.discardFinalizationSnapshot();
       return true;
@@ -1185,11 +1411,14 @@ export class Orchestrator {
             () => this.ports.adapter.listSubmissions(false, this.ports.signal),
             () => true,
           );
-          const existing = mine.find((entry) => sameScore(entry.score, score));
+          const existing = mine.find(
+            (entry) => entry.score !== null && sameScore(entry.score, score),
+          );
           if (existing) {
             return {
               ok: true,
               submissionId: existing.id,
+              status: submissionStatus(existing),
               promoted: existing.promoted,
               raw: `Reconciled existing submission ${existing.id} at score ${existing.score}.`,
             };
@@ -1873,23 +2102,25 @@ export class Orchestrator {
     );
   }
 
-  private loadCachedLeaderboardSnapshot(): {
-    entries: LeaderboardEntry[];
-    fetchedAt?: string;
-  } {
-    if (!fs.existsSync(this.paths.leaderboard)) return { entries: [] };
+  private loadCachedLeaderboard(): LeaderboardSnapshot {
+    if (!fs.existsSync(this.paths.leaderboard)) return { entries: [], mine: [] };
     try {
       const parsed = JSON.parse(fs.readFileSync(this.paths.leaderboard, "utf8")) as {
-        entries?: unknown;
         fetchedAt?: unknown;
+        entries?: unknown;
+        mine?: unknown;
       };
-      if (!Array.isArray(parsed.entries)) return { entries: [] };
       return {
-        entries: parsed.entries.filter(isLeaderboardEntry),
+        entries: Array.isArray(parsed.entries)
+          ? parsed.entries.filter(isLeaderboardEntry)
+          : [],
+        mine: Array.isArray(parsed.mine)
+          ? parsed.mine.filter(isLeaderboardEntry)
+          : [],
         ...(typeof parsed.fetchedAt === "string" ? { fetchedAt: parsed.fetchedAt } : {}),
       };
     } catch {
-      return { entries: [] };
+      return { entries: [], mine: [] };
     }
   }
 
@@ -1918,11 +2149,28 @@ export class Orchestrator {
       typeof value.sync.ok !== "boolean" ||
       typeof value.sync.detail !== "string" ||
       !Array.isArray(value.entries) ||
-      !value.entries.every(isLeaderboardEntry)
+      !value.entries.every(isLeaderboardEntry) ||
+      (value.mine !== undefined &&
+        (!Array.isArray(value.mine) || !value.mine.every(isLeaderboardEntry)))
     ) {
       throw new Error(`Invalid loop leaderboard snapshot at ${snapshotPath}`);
     }
-    return value as LoopLeaderboardSnapshotV1;
+    return {
+      ...(value as LoopLeaderboardSnapshotV1),
+      mine: value.mine ?? [],
+    };
+  }
+
+  private loadLoopLeaderboardSnapshot(): LeaderboardSnapshot | null {
+    const snapshot = this.readLoopLeaderboardSnapshot(
+      this.loopLeaderboardSnapshotPath(),
+    );
+    if (!snapshot) return null;
+    return {
+      entries: snapshot.entries,
+      mine: snapshot.mine,
+      ...(snapshot.observedAt ? { fetchedAt: snapshot.observedAt } : {}),
+    };
   }
 
   private finalizationSnapshotDir(): string {
@@ -2260,6 +2508,7 @@ export function loadRunOverviewStatus(
   }
 
   let entries: LeaderboardEntry[] = [];
+  let reviews: SubmissionReview[] = [];
   let leaderboardUpdatedAt: string | undefined;
   try {
     const parsed = JSON.parse(
@@ -2277,19 +2526,48 @@ export function loadRunOverviewStatus(
   } catch {
     // An absent or interrupted cache is represented by zero remote entries.
   }
+  try {
+    const parsed = JSON.parse(
+      fs.readFileSync(statePaths(stateDir).state, "utf8"),
+    ) as { submissionReviews?: unknown };
+    if (Array.isArray(parsed.submissionReviews)) {
+      reviews = parsed.submissionReviews.filter(isSubmissionReview);
+    }
+  } catch {
+    // Legacy state and advisory status callers may have no review records.
+  }
 
   const experimentsRun = new Set(ledger.map((entry) => entry.candidateId)).size;
+  const reviewIdentity = (review: SubmissionReview) =>
+    review.submissionId ?? review.candidateId;
   const remoteAccepted = new Set(
-    ledger
-      .filter((entry) => entry.terminalStatus === "done-improved")
-      .map((entry) => entry.candidateId),
+    reviews.filter((review) => review.status === "accepted").map(reviewIdentity),
   ).size;
-  const remoteSubmissionCount = new Set(entries.map((entry) => entry.id)).size;
+  const remotePending = new Set(
+    reviews.filter((review) => review.status === "pending").map(reviewIdentity),
+  ).size;
+  const remoteRejected = new Set(
+    reviews.filter((review) => review.status === "rejected").map(reviewIdentity),
+  ).size;
+  const localSubmissionIds = reviews
+    .map((review) => review.submissionId)
+    .filter((id): id is string => id !== undefined);
+  const otherSubmissions = new Set(
+    entries
+      .filter((entry) =>
+        !localSubmissionIds.some((submissionId) =>
+          submissionIdsMatch(submissionId, entry.id)
+        )
+      )
+      .map((entry) => entry.id),
+  ).size;
 
   return {
     experimentsRun,
     remoteAccepted,
-    otherSubmissions: Math.max(0, remoteSubmissionCount - remoteAccepted),
+    remotePending,
+    remoteRejected,
+    otherSubmissions,
     loopTokens: loopUsage?.tokens.total ?? 0,
     tokenUsageComplete: loopUsage?.tokens.complete ?? false,
     ...(leaderboardUpdatedAt ? { leaderboardUpdatedAt } : {}),
@@ -2333,11 +2611,93 @@ function isLeaderboardEntry(value: unknown): value is LeaderboardEntry {
   const entry = value as Partial<LeaderboardEntry>;
   return (
     typeof entry.id === "string" &&
-    typeof entry.score === "number" &&
-    Number.isFinite(entry.score) &&
+    (entry.score === null ||
+      (typeof entry.score === "number" && Number.isFinite(entry.score))) &&
     typeof entry.author === "string" &&
+    (entry.status === undefined ||
+      entry.status === "pending" ||
+      entry.status === "accepted" ||
+      entry.status === "rejected") &&
     typeof entry.promoted === "boolean"
   );
+}
+
+function isSubmissionReview(value: unknown): value is SubmissionReview {
+  if (typeof value !== "object" || value === null) return false;
+  const review = value as Partial<SubmissionReview>;
+  return (
+    typeof review.candidateId === "string" &&
+    (review.submissionId === undefined || typeof review.submissionId === "string") &&
+    typeof review.localScore === "number" &&
+    Number.isFinite(review.localScore) &&
+    typeof review.noteFile === "string" &&
+    typeof review.submittedAt === "string" &&
+    (review.status === "pending" ||
+      review.status === "accepted" ||
+      review.status === "rejected")
+  );
+}
+
+function submissionStatus(entry: LeaderboardEntry): RemoteSubmissionStatus {
+  if (entry.status) return entry.status;
+  if (entry.promoted) return "accepted";
+  const rawStatus = entry.rawStatus?.trim().toLowerCase();
+  if (rawStatus === "rejected" || rawStatus === "failed") return "rejected";
+  if (
+    rawStatus === "accepted" ||
+    rawStatus === "not promoted" ||
+    rawStatus === "promotion failed" ||
+    rawStatus === "superseded"
+  ) {
+    return "accepted";
+  }
+  return "pending";
+}
+
+function submissionIdsMatch(left: string | undefined, right: string | undefined): boolean {
+  if (!left || !right) return false;
+  const normalizedLeft = left.trim().toLowerCase();
+  const normalizedRight = right.trim().toLowerCase();
+  return (
+    normalizedLeft === normalizedRight ||
+    normalizedLeft.startsWith(normalizedRight) ||
+    normalizedRight.startsWith(normalizedLeft)
+  );
+}
+
+function deduplicateLeaderboardEntries(entries: LeaderboardEntry[]): LeaderboardEntry[] {
+  const unique: LeaderboardEntry[] = [];
+  for (const entry of entries) {
+    if (unique.some((candidate) => submissionIdsMatch(candidate.id, entry.id))) continue;
+    unique.push(entry);
+  }
+  return unique;
+}
+
+function findSubmissionReviewEntry(
+  review: SubmissionReview,
+  mine: LeaderboardEntry[],
+  all: LeaderboardEntry[],
+): LeaderboardEntry | undefined {
+  if (review.submissionId) {
+    return [...mine, ...all].find((entry) =>
+      submissionIdsMatch(review.submissionId, entry.id)
+    );
+  }
+  const scoreMatches = mine.filter(
+    (entry) => entry.score !== null && sameScore(entry.score, review.localScore),
+  );
+  return scoreMatches.length === 1 ? scoreMatches[0] : undefined;
+}
+
+function isResolvedSubmissionReview(
+  review: SubmissionReview,
+): review is SubmissionReview & { status: "accepted" | "rejected" } {
+  return review.status === "accepted" || review.status === "rejected";
+}
+
+function submissionFeedbackMarker(review: SubmissionReview): string {
+  return `<!-- remote-submission-result:${review.candidateId}:${review.submissionId ?? "unknown"}:${review.status} -->`;
 }
 
 function sameJson(left: unknown, right: unknown): boolean {

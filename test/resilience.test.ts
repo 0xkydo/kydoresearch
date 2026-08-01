@@ -96,7 +96,7 @@ describe("overnight failure recovery", () => {
 
     expect(summary).not.toBeNull();
     expect(syncCalls).toBe(2);
-    expect(listCalls).toBe(1);
+    expect(listCalls).toBe(2);
     const snapshotPath = path.join(
       harness.stateDir,
       "loops",
@@ -226,6 +226,7 @@ describe("overnight failure recovery", () => {
       submit: async () => ({
         ok: true,
         submissionId: "sub-raced-frontier",
+        status: "accepted",
         promoted: false,
         raw: "submitted but not promoted",
       }),
@@ -273,6 +274,97 @@ describe("overnight failure recovery", () => {
       bestSubmittedScore: 2,
     });
   });
+
+  it.each(["accepted", "rejected"] as const)(
+    "continues after a queued submission and feeds a later %s review into the next loop",
+    async (remoteStatus) => {
+      const harness = await makeResilienceHarness(repoRoot);
+      let resolved = false;
+      let submitCalls = 0;
+      const proposalInputs: Record<string, unknown>[] = [];
+      const runner: AgentRunner = {
+        run: async (task) => {
+          if (task.kind === "propose") proposalInputs.push(task.input);
+          return harness.runner.run(task);
+        },
+      };
+      const remoteEntry = {
+        id: "sub-review1",
+        score: remoteStatus === "accepted" ? 2 : null,
+        author: "me",
+        status: remoteStatus,
+        rawStatus: remoteStatus === "accepted" ? "promoted" : "rejected",
+        metrics: remoteStatus === "accepted" ? '{"verified":true}' : "official verifier failed",
+        promoted: remoteStatus === "accepted",
+        createdAt: "2026-07-31T12:00:00.000Z",
+      } as const;
+      const adapter = overrideAdapter(harness.adapter, {
+        submit: async () => {
+          submitCalls += 1;
+          return {
+            ok: true,
+            submissionId: remoteEntry.id,
+            status: "pending",
+            promoted: false,
+            raw: "Submission queued\nstatus validating",
+          };
+        },
+        listSubmissions: async () => resolved ? [remoteEntry] : [],
+      });
+
+      await harness.makeOrchestrator(runner, adapter).runLoop();
+      const submittedLoop = await harness.makeOrchestrator(runner, adapter).runLoop();
+
+      expect(submittedLoop).toMatchObject({ loop: 2, improved: true });
+      expect(submitCalls).toBe(1);
+      expect(loadState(harness.stateDir)).toMatchObject({
+        history: [{ loop: 1 }, { loop: 2 }],
+        submissionReviews: [
+          {
+            candidateId: "L002-I1",
+            submissionId: remoteEntry.id,
+            status: "pending",
+          },
+        ],
+      });
+
+      resolved = true;
+      await harness.makeOrchestrator(runner, adapter).runLoop();
+
+      const state = loadState(harness.stateDir)!;
+      expect(state.history).toHaveLength(3);
+      expect(state.submissionReviews).toMatchObject([
+        {
+          candidateId: "L002-I1",
+          submissionId: remoteEntry.id,
+          status: remoteStatus,
+          remoteStatus: remoteEntry.rawStatus,
+          remoteMetrics: remoteEntry.metrics,
+          promoted: remoteEntry.promoted,
+        },
+      ]);
+      expect(proposalInputs.at(-1)).toMatchObject({
+        resolvedSubmissionReviews: [
+          {
+            candidateId: "L002-I1",
+            submissionId: remoteEntry.id,
+            status: remoteStatus,
+          },
+        ],
+      });
+
+      const knowledge = fs.readFileSync(path.join(harness.stateDir, "knowledge-base.md"), "utf8");
+      expect(knowledge).toContain(`Remote submission ${remoteStatus}`);
+      expect(knowledge).toContain(remoteEntry.metrics);
+
+      await harness.makeOrchestrator(runner, adapter).runLoop();
+      const afterRepeat = fs.readFileSync(
+        path.join(harness.stateDir, "knowledge-base.md"),
+        "utf8",
+      );
+      expect(afterRepeat.match(new RegExp(`Remote submission ${remoteStatus}`, "g"))).toHaveLength(1);
+    },
+  );
 
   it("keeps a failed submission resumable and does not skip it at maxLoops", async () => {
     const harness = await makeResilienceHarness(repoRoot);

@@ -186,6 +186,8 @@ export interface ProfessorProposalTaskInputV1 {
   leaderboardSnapshotPath?: string;
   currentBestCandidateId: string;
   inFlightCandidateIds: string[];
+  /** Official outcomes discovered before this task was materialized. */
+  resolvedSubmissionReviews?: ResolvedSubmissionReviewV1[];
   /** Operator preference captured immutably when this proposal task is created. */
   operatorSteering?: {
     text: string;
@@ -198,6 +200,11 @@ export interface LoopLeaderboardSnapshotV1 {
   loop: number;
   capturedAt: string;
   provenance: "remote" | "cache";
+  /** Per-view provenance when all and own submissions have different fallbacks. */
+  sources?: {
+    entries: "remote" | "cache";
+    mine: "remote" | "cache";
+  };
   /** Timestamp of the remote observation, or of the cached observation reused. */
   observedAt?: string;
   sync: {
@@ -205,6 +212,20 @@ export interface LoopLeaderboardSnapshotV1 {
     detail: string;
   };
   entries: LeaderboardEntry[];
+  /** Own submissions used by the bounded remote-review checkpoint. */
+  mine: LeaderboardEntry[];
+}
+
+export interface ResolvedSubmissionReviewV1 {
+  candidateId: string;
+  submissionId?: string;
+  status: "accepted" | "rejected";
+  localScore: number;
+  officialScore?: number;
+  promoted: boolean;
+  remoteStatus: string;
+  remoteMetrics?: string;
+  resolvedAt: string;
 }
 
 export type ProfessorProposalTaskV1 = ResearchTaskBaseV1<
@@ -389,6 +410,28 @@ export function validateResearchTask(input: unknown): ResearchTaskV1 {
       }
       nonEmptyString(taskInput.currentBestCandidateId, "task.input.currentBestCandidateId");
       stringArray(taskInput.inFlightCandidateIds, "task.input.inFlightCandidateIds");
+      if (taskInput.resolvedSubmissionReviews !== undefined) {
+        if (!Array.isArray(taskInput.resolvedSubmissionReviews)) {
+          throw new Error("task.input.resolvedSubmissionReviews must be an array");
+        }
+        for (const [index, rawReview] of taskInput.resolvedSubmissionReviews.entries()) {
+          const label = `task.input.resolvedSubmissionReviews[${index}]`;
+          const review = record(rawReview, label);
+          nonEmptyString(review.candidateId, `${label}.candidateId`);
+          optionalNonEmptyString(review.submissionId, `${label}.submissionId`);
+          if (review.status !== "accepted" && review.status !== "rejected") {
+            throw new Error(`${label}.status must be accepted or rejected`);
+          }
+          finiteNumber(review.localScore, `${label}.localScore`);
+          optionalFiniteNumber(review.officialScore, `${label}.officialScore`);
+          if (typeof review.promoted !== "boolean") {
+            throw new Error(`${label}.promoted must be a boolean`);
+          }
+          nonEmptyString(review.remoteStatus, `${label}.remoteStatus`);
+          optionalNonEmptyString(review.remoteMetrics, `${label}.remoteMetrics`);
+          nonEmptyString(review.resolvedAt, `${label}.resolvedAt`);
+        }
+      }
       if (taskInput.operatorSteering !== undefined) {
         const steering = record(
           taskInput.operatorSteering,

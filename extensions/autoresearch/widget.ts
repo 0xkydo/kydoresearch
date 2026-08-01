@@ -68,6 +68,7 @@ const PHASE_LABELS: Record<StatusReport["phase"], string> = {
   "init.knowledge": "mapping the challenge",
   ready: "ready to start",
   "loop.syncing": "syncing leaderboard evidence",
+  "loop.reviewing-submissions": "reviewing remote submission results",
   "loop.proposing": "Professor is proposing experiments",
   "loop.ideas": "researching candidates",
   "loop.finalizing": "selecting and validating a winner",
@@ -213,6 +214,8 @@ export function renderStatusLines(
     lines.push(
       `│  run  ${report.runOverview.experimentsRun} experiments · ` +
         `${report.runOverview.remoteAccepted} remote accepted · ` +
+        `${report.runOverview.remotePending} pending · ` +
+        `${report.runOverview.remoteRejected} rejected · ` +
         `${report.runOverview.otherSubmissions} others · ` +
         `${tokenPrefix}${formatCompactNumber(report.runOverview.loopTokens)} loop tokens`,
     );
@@ -340,7 +343,9 @@ export function renderStatusDashboardLines(
     dashboardLine(
       `${dashboardLabel(theme, "RUN")}  ` +
         `Experiments ${overview?.experimentsRun ?? "—"} · ` +
-        `Remote accepted ${overview?.remoteAccepted ?? "—"} · ` +
+        `Remote ${overview?.remoteAccepted ?? "—"} accepted / ` +
+        `${overview?.remotePending ?? "—"} pending / ` +
+        `${overview?.remoteRejected ?? "—"} rejected · ` +
         `Others ${overview?.otherSubmissions ?? "—"} · ` +
         `Loop tokens ${tokens}`,
       viewport,

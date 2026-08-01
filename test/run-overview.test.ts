@@ -29,8 +29,21 @@ describe("durable Run Overview counters", () => {
             id: `submission-${index}`,
             score: index,
             author: `author-${index}`,
+            status: index === 0 ? "accepted" : "pending",
             promoted: index === 0,
           })),
+        }),
+      );
+      fs.writeFileSync(
+        paths.state,
+        JSON.stringify({
+          version: 1,
+          submissionReviews: [
+            review("L001-I1", "submission-0", "accepted"),
+            review("L003-I1", "submission-1", "accepted"),
+            review("L004-I1", "submission-2", "pending"),
+            review("L005-I1", "submission-3", "rejected"),
+          ],
         }),
       );
 
@@ -42,7 +55,9 @@ describe("durable Run Overview counters", () => {
       expect(loadRunOverviewStatus(stateDir, 4)).toEqual({
         experimentsRun: 3,
         remoteAccepted: 2,
-        otherSubmissions: 3,
+        remotePending: 1,
+        remoteRejected: 1,
+        otherSubmissions: 1,
         loopTokens: 200,
         tokenUsageComplete: true,
         leaderboardUpdatedAt: "2026-07-26T12:00:00.000Z",
@@ -51,7 +66,41 @@ describe("durable Run Overview counters", () => {
       fs.rmSync(stateDir, { recursive: true, force: true });
     }
   });
+
+  it("does not infer remote acceptance from a local done-improved ledger entry", () => {
+    const stateDir = fs.mkdtempSync(
+      path.join(os.tmpdir(), "autoresearch-run-overview-legacy-"),
+    );
+    try {
+      const paths = statePaths(stateDir);
+      fs.writeFileSync(paths.ledger, `${JSON.stringify(ledger("L001-I1", "done-improved"))}\n`);
+
+      expect(loadRunOverviewStatus(stateDir, 1)).toMatchObject({
+        experimentsRun: 1,
+        remoteAccepted: 0,
+        remotePending: 0,
+        remoteRejected: 0,
+      });
+    } finally {
+      fs.rmSync(stateDir, { recursive: true, force: true });
+    }
+  });
 });
+
+function review(
+  candidateId: string,
+  submissionId: string,
+  status: "pending" | "accepted" | "rejected",
+): Record<string, unknown> {
+  return {
+    candidateId,
+    submissionId,
+    localScore: 1,
+    noteFile: "notes/submission.md",
+    submittedAt: "2026-07-26T12:00:00.000Z",
+    status,
+  };
+}
 
 function terminalUsage(
   stateDir: string,

@@ -288,8 +288,8 @@ After initialization, the same compact Control Deck has three rows:
 - **Activity Navigator:** selected invocation, position, stage, Overview/Focus,
   and `NAV`/`TYPE` state.
 - **Run Overview:** durable stage plus lifetime sealed experiment count,
-  server-confirmed harness accepts, submissions from others, and tokens spent
-  by inner-loop agents in the current loop.
+  server-confirmed harness accepts, pending and rejected reviews, submissions
+  from others, and tokens spent by inner-loop agents in the current loop.
 - **Controls:** the available navigation keys and stop/inspection actions.
 
 Token totals include input, output, cache-read, and cache-write tokens. A `≥`
@@ -368,6 +368,9 @@ init (once per repository)
 research loop
   attempt challenge sync, independently fetch the leaderboard, and freeze one
   remote-or-cached evidence snapshot for the loop
+  reconcile queued submission reviews from one remote snapshot
+    still validating → remain pending and continue without polling
+    accepted or rejected → persist the result and feed it to this loop's Professor task
   search the knowledge base, compact experiment ledger, and selected run evidence
   materialize an immutable professor task
   checkpoint normalized proposals before candidate creation
@@ -377,7 +380,7 @@ research loop
     verify fails → retry the same requirement with the latest verifier report
     verify passes → benchmark under a global lock with candidate-specific logs
   archive every terminal candidate and write a result-aware postmortem
-  best meaningful improvement → apply to main → re-verify → re-bench → submit
+  best meaningful improvement → apply to main → re-verify → re-bench → queue submission
   advisor reviews the loop; a configured blocker pauses it
   repeated evaluated dry loops → Professor goes to church and reflects with God → next loop
 ```
@@ -675,7 +678,8 @@ bounded exponential backoff and honor `/autoresearch stop` immediately.
 | Leaderboard sync/fetch | Retry each operation independently. A failed repository sync does not prevent a fresh leaderboard fetch; a failed fetch falls back to `.autoresearch/leaderboard.json`. The selected remote-or-cached evidence is frozen for the loop. |
 | Correctness or benchmark command | Retry once. An idea that still fails is isolated; other ideas continue. |
 | Best candidate fails on main | Mark only that candidate failed and try the next qualifying candidate. If all finalists fail, restore the pre-finalization main checkout snapshot. |
-| Submission | Reconcile against the remote user's submissions before each of five attempts. An exhausted submit remains at `loop.finalizing` for durable checkpoint recovery and is never marked submitted. |
+| Submission | Reconcile against the remote user's submissions before each of five attempts. A successful queue response is persisted immediately and research continues without waiting for official validation. An exhausted submit remains at `loop.finalizing` for durable checkpoint recovery and is never marked submitted. |
+| Remote submission review | At the start of each later loop, fetch one bounded all/mine snapshot. Still-validating submissions remain pending; accepted or rejected results are persisted, announced, written once to the knowledge base, and embedded in the next immutable Professor task. Fetch failure uses cached evidence and never blocks research. |
 | Notes, Advisor, or church | Retry twice, log the failure, and continue. A failed church visit preserves the dry-loop streak so it is attempted again later. |
 | Worktree cleanup | Seal and index every terminal candidate, persist cleanup intent, retry once, and try it again at the next checkpoint. |
 | Unexpected loop-level failure | Resume the same saved phase with a 1–15 minute backoff. After 12 consecutive failures, pause with a visible recovery reason instead of spinning or spending indefinitely. |
@@ -760,10 +764,13 @@ metrics, postmortem, and agent trace remain under `runs/<candidateId>/`.
 
 A local checkpoint prevents ordinary resume from repeating a recorded
 submission. Sealed candidate metrics and the compact ledger retain the
-submission ID and the challenge CLI's promotion result when supplied. No local
-state file can make the external CLI transactional, however: a hard kill after
-remote acceptance but before the local result is persisted leaves a narrow
-duplicate-submission risk.
+submission ID and the challenge CLI's promotion result when supplied.
+`state.json.submissionReviews` distinguishes queued, accepted, and
+rejected remote outcomes. Queueing never waits for validation; each later loop
+performs one snapshot reconciliation before proposal, and terminal results are
+included in Professor evidence. No local state file can make the external CLI
+transactional, however: a hard kill after queue creation but before the local
+result is persisted leaves a narrow duplicate-submission risk.
 
 ## Security and operational guidance
 
