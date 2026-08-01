@@ -473,6 +473,13 @@ ready
   → church? → next loop | paused | done
 ```
 
+`loop.syncing` contains two independent advisory operations: challenge
+repository sync and leaderboard fetch. Failure of the first does not suppress
+the second. The fetch falls back to the last atomic global cache when needed,
+then the orchestrator writes one immutable
+`loops/loop-NNN/leaderboard-snapshot.json`. Resume reuses that file rather than
+refreshing an already-started loop.
+
 One candidate follows:
 
 ```text
@@ -526,8 +533,10 @@ cycle.
 
 Failures are split by blast radius:
 
-- Leaderboard sync and fetch are advisory. After command retries are exhausted,
-  the orchestrator reads the last atomic `leaderboard.json` and continues.
+- Leaderboard repository sync and fetch are independent advisory operations.
+  A failed sync does not prevent a fresh fetch. After fetch retries are
+  exhausted, the orchestrator reads the last atomic `leaderboard.json`, marks
+  the loop snapshot as cached, and continues.
 - Idea implementation, verification, and benchmarking are isolated to that
   idea. Parallel siblings and later loops continue.
 - Hypothesis notes, Advisor review, and church reflection are best-effort. They
@@ -595,6 +604,8 @@ Before proposing, the professor receives an immutable task pointing to:
 - `ledger.ndjson`, the compact index of completed experiments;
 - `runs/`, the evidence bundles behind ledger entries;
 - `knowledge-base.md`, the navigational subject/leaderboard summary;
+- the loop's immutable leaderboard snapshot, including remote-or-cache
+  provenance and the independent repository-sync outcome;
 - the current best candidate ID, objective, direction, improvement threshold,
   in-flight candidate IDs, and proposal budget.
 - the current operator steering snapshot, when present.
@@ -709,6 +720,7 @@ The main filesystem layout is:
     init/
       setup-task.json
     loop-004/
+      leaderboard-snapshot.json
       professor-task.json
       professor-result.json
       professor-agent/{soul.md,context.md,invocation.json,events.ndjson}
@@ -847,6 +859,11 @@ The execution config exposes `setupTimeoutMs`, `verifyTimeoutMs`, and
 also retain command, cwd, timeout, timestamps, exit code, and output path.
 Before each benchmark, a stale score file is removed; success requires a new
 finite numeric score.
+
+The challenge adapter's returned submission ID and promotion flag, when
+present, are retained in sealed candidate metrics and the compact ledger. An
+accepted but explicitly non-promoted submission is never presented as
+promoted.
 
 ## Verification strategy
 

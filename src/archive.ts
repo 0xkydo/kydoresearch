@@ -44,6 +44,10 @@ export interface CandidateLedgerRecordV1 {
   score?: number;
   comparisonScore: number | null;
   improved: boolean;
+  submission?: {
+    submissionId?: string;
+    promoted?: boolean;
+  };
   runPath: string;
   recordedAt: string;
 }

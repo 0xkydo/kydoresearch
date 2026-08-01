@@ -337,7 +337,15 @@ export function registerAutoresearchCommand(
         );
         break;
       case "submitted":
-        notify(ctx, `submitted ${ev.ideaId} (score ${ev.score})${ev.submissionId ? ` as ${ev.submissionId}` : ""}`);
+        notify(
+          ctx,
+          `submitted ${ev.ideaId} (score ${ev.score})${ev.submissionId ? ` as ${ev.submissionId}` : ""}` +
+            (ev.promoted === true
+              ? " · promoted"
+              : ev.promoted === false
+                ? " · not promoted"
+                : ""),
+        );
         break;
       case "church":
         notify(ctx, `the Professor went to church after loop ${ev.loop} — see ${ev.noteFile}`, "warning");
@@ -1586,7 +1594,12 @@ function activityFromEvent(event: OrchestratorEvent): string {
     case "church":
       return `church reflection saved · ${event.noteFile}`;
     case "submitted":
-      return `${event.ideaId} · submitted score ${event.score}`;
+      return `${event.ideaId} · submitted score ${event.score}` +
+        (event.promoted === true
+          ? " · promoted"
+          : event.promoted === false
+            ? " · not promoted"
+            : "");
     case "log":
       return event.message;
   }

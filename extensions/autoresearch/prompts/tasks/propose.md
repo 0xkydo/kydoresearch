@@ -16,6 +16,13 @@ Read `{{stateDir}}/knowledge-base.md` first. Then inspect the most relevant
 recent idea specs and hypothesis, Advisor, church, and submission notes. Use the
 current values above when an older note differs.
 
+{{#leaderboardSnapshotPath}}
+Read the frozen loop-start leaderboard evidence at
+`{{leaderboardSnapshotPath}}` before selecting the portfolio. Treat remote and
+cached provenance honestly. This evidence informs the search; it does not
+require a particular parent or interrupt an already-materialized loop.
+{{/leaderboardSnapshotPath}}
+
 {{#operatorSteering}}
 The operator's current search preference is:
 

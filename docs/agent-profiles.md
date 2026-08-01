@@ -101,10 +101,12 @@ the dependency command or Setup worker starts.
 The Professor is a read-mostly research director. It inspects the compact
 ledger and selected raw run evidence, proposes falsifiable independent
 experiments, and declares each archived parent. It does not implement or run
-the full benchmark. When its immutable task contains operator steering, it
-must make the direction's influence or evidentiary conflict explicit without
-treating that preference as authority to weaken the evaluator, role
-boundaries, or editable-path contract.
+the full benchmark. Its task points to the immutable loop-start leaderboard
+snapshot, whose provenance distinguishes a fresh observation from cached
+fallback without forcing a particular parent. When its immutable task contains
+operator steering, it must make the direction's influence or evidentiary
+conflict explicit without treating that preference as authority to weaken the
+evaluator, role boundaries, or editable-path contract.
 
 ### PhD
 

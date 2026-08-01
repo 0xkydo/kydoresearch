@@ -5,6 +5,12 @@ Your immutable task contract is `{{taskPath}}`. Read it first.
 
 Orient from `{{knowledgeBasePath}}`, the compact experiment ledger at
 `{{ledgerPath}}`, and the candidate evidence bundles under `{{runsDirectory}}`.
+{{#leaderboardSnapshotPath}}
+Read the immutable loop-start leaderboard evidence at
+`{{leaderboardSnapshotPath}}`. Its `provenance` distinguishes a fresh remote
+observation from cached fallback, and its sync result is evidence rather than
+an instruction to change parent lineage.
+{{/leaderboardSnapshotPath}}
 The exact current best is `{{currentBestCandidateId}}`; inspect its proposal,
 source, diff, metrics, integrity result, evaluator logs, and postmortem before
 choosing the next search directions. The special `baseline` parent has only

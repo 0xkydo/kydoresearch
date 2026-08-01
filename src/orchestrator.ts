@@ -38,6 +38,7 @@ import type {
   EvaluationCommandV1,
   GodConversationTaskV1,
   LocalEvaluationV1,
+  LoopLeaderboardSnapshotV1,
   PhdImplementationTaskV1,
   PhdPostmortemTaskV1,
   ProfessorProposalTaskV1,
@@ -68,7 +69,14 @@ export type OrchestratorEvent =
   | { type: "idea"; idea: Idea; message: string }
   | { type: "advice"; notes: AdvisorNote[]; loop: number }
   | { type: "church"; loop: number; noteFile: string }
-  | { type: "submitted"; loop: number; ideaId: string; score: number; submissionId?: string }
+  | {
+      type: "submitted";
+      loop: number;
+      ideaId: string;
+      score: number;
+      submissionId?: string;
+      promoted?: boolean;
+    }
   | { type: "log"; message: string };
 
 export interface OrchestratorPorts {
@@ -431,35 +439,37 @@ export class Orchestrator {
   private async syncLeaderboard(): Promise<void> {
     this.transition("loop.syncing");
     if (this.aborted()) return;
-    let syncResult: { ok: boolean; raw: string };
+
+    const snapshotPath = this.loopLeaderboardSnapshotPath();
+    const existing = this.readLoopLeaderboardSnapshot(snapshotPath);
+    if (existing) {
+      this.emitLog(
+        `leaderboard: reusing frozen ${existing.provenance} snapshot for loop ${this.state.loop}`,
+      );
+      return;
+    }
+
+    let syncOk = false;
+    let syncDetail = "sync did not complete";
     try {
-      syncResult = await this.retryResult(
+      const syncResult = await this.retryResult(
         "leaderboard sync",
         this.config.resilience.commandMaxAttempts,
         () => this.ports.adapter.sync(this.ports.signal),
         (result) => result.ok,
       );
+      syncOk = syncResult.ok;
+      syncDetail =
+        firstLine(syncResult.raw) ||
+        (syncResult.ok ? "sync succeeded" : "sync unavailable");
     } catch (error) {
       if (this.aborted()) return;
-      const cached = this.loadCachedLeaderboard();
-      this.emitLog(
-        `leaderboard sync threw after ${this.config.resilience.commandMaxAttempts} attempt(s); ` +
-          `continuing with ${cached.length} cached submission(s) · ${errorMessage(error)}`,
-      );
-      if (cached.length > 0) this.appendKnowledge(this.leaderboardDigest(cached));
-      return;
-    }
-    if (!syncResult.ok) {
-      const cached = this.loadCachedLeaderboard();
-      this.emitLog(
-        `leaderboard sync unavailable after ${this.config.resilience.commandMaxAttempts} attempt(s); ` +
-          `continuing with ${cached.length} cached submission(s) · ${firstLine(syncResult.raw)}`,
-      );
-      if (cached.length > 0) this.appendKnowledge(this.leaderboardDigest(cached));
-      return;
+      syncDetail = errorMessage(error);
     }
 
     let entries: LeaderboardEntry[];
+    let provenance: LoopLeaderboardSnapshotV1["provenance"] = "remote";
+    let observedAt: string | undefined;
     try {
       entries = await this.retryResult(
         "leaderboard fetch",
@@ -467,15 +477,35 @@ export class Orchestrator {
         () => this.ports.adapter.listSubmissions(true, this.ports.signal),
         () => true,
       );
+      observedAt = new Date().toISOString();
+      atomicWriteJson(this.paths.leaderboard, { fetchedAt: observedAt, entries });
     } catch (error) {
-      entries = this.loadCachedLeaderboard();
+      if (this.aborted()) return;
+      const cached = this.loadCachedLeaderboardSnapshot();
+      entries = cached.entries;
+      observedAt = cached.fetchedAt;
+      provenance = "cache";
       this.emitLog(
         `leaderboard fetch unavailable; continuing with ${entries.length} cached submission(s) · ${errorMessage(error)}`,
       );
     }
-    atomicWriteJson(this.paths.leaderboard, { fetchedAt: new Date().toISOString(), entries });
+
+    const snapshot: LoopLeaderboardSnapshotV1 = {
+      schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+      loop: this.state.loop,
+      capturedAt: new Date().toISOString(),
+      provenance,
+      ...(observedAt ? { observedAt } : {}),
+      sync: { ok: syncOk, detail: syncDetail },
+      entries,
+    };
+    fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+    atomicWriteJson(snapshotPath, snapshot);
     this.appendKnowledge(this.leaderboardDigest(entries));
-    this.emitLog(`sync: ${entries.length} submissions on leaderboard · ${syncResult.raw.split("\n")[0] ?? ""}`);
+    this.emitLog(
+      `leaderboard: froze ${entries.length} ${provenance} submission(s) for loop ${this.state.loop} · ` +
+        `sync ${syncOk ? "succeeded" : "unavailable"} · ${syncDetail}`,
+    );
   }
 
   private leaderboardDigest(entries: LeaderboardEntry[]): string {
@@ -499,6 +529,7 @@ export class Orchestrator {
       this.paths.loopsDir,
       `loop-${String(this.state.loop).padStart(3, "0")}`,
     );
+    const leaderboardSnapshotPath = this.loopLeaderboardSnapshotPath();
     fs.mkdirSync(loopDir, { recursive: true });
     const professorTaskPath = path.join(loopDir, "professor-task.json");
     const operatorSteering = loadOperatorSteering(this.stateDir);
@@ -521,6 +552,7 @@ export class Orchestrator {
         ledgerPath: this.paths.ledger,
         knowledgeBasePath: this.paths.knowledgeBase,
         runsDirectory: this.paths.runsDir,
+        ...(fs.existsSync(leaderboardSnapshotPath) ? { leaderboardSnapshotPath } : {}),
         currentBestCandidateId,
         inFlightCandidateIds: this.state.ideas.map((idea) => idea.id),
         ...(operatorSteering ? { operatorSteering } : {}),
@@ -1070,7 +1102,11 @@ export class Orchestrator {
 
       candidate.lastVerifyError = undefined;
       candidate.status = "done-improved";
-      candidate.submitted = { submissionId: submit.submissionId, noteFile: noteRel };
+      candidate.submitted = {
+        submissionId: submit.submissionId,
+        noteFile: noteRel,
+        ...(submit.promoted === undefined ? {} : { promoted: submit.promoted }),
+      };
       this.state.bestCandidateId = candidate.id;
       this.state.bestScore =
         this.state.bestScore === null
@@ -1098,10 +1134,17 @@ export class Orchestrator {
         ideaId: candidate.id,
         score: bench.score,
         submissionId: submit.submissionId,
+        promoted: submit.promoted,
       });
+      const promotion =
+        submit.promoted === true
+          ? "promoted"
+          : submit.promoted === false
+            ? "not promoted"
+            : "promotion unknown";
       this.appendKnowledge(
         `\n### Loop ${this.state.loop} submission\n- ${candidate.id} "${candidate.title}" · ` +
-          `local score ${bench.score} · submitted (${submit.submissionId ?? "id unknown"})\n`,
+          `local score ${bench.score} · submitted (${submit.submissionId ?? "id unknown"}) · ${promotion}\n`,
       );
       this.discardFinalizationSnapshot();
       return true;
@@ -1549,6 +1592,18 @@ export class Orchestrator {
       evaluationStarted: (idea.verifyRecords?.length ?? 0) > 0,
       verify: idea.verifyRecords ?? [],
       ...(idea.benchmarkRecord ? { benchmark: idea.benchmarkRecord } : {}),
+      ...(idea.submitted
+        ? {
+            submission: {
+              ...(idea.submitted.submissionId
+                ? { submissionId: idea.submitted.submissionId }
+                : {}),
+              ...(idea.submitted.promoted === undefined
+                ? {}
+                : { promoted: idea.submitted.promoted }),
+            },
+          }
+        : {}),
       ...(idea.lastVerifyError ? { failure: idea.lastVerifyError } : {}),
     };
     writeCandidateMetrics(this.stateDir, idea.id, metrics);
@@ -1598,6 +1653,7 @@ export class Orchestrator {
       ...(metrics.score === undefined ? {} : { score: metrics.score }),
       comparisonScore: metrics.comparisonScore,
       improved: metrics.improved,
+      ...(metrics.submission ? { submission: metrics.submission } : {}),
     });
   }
 
@@ -1817,17 +1873,56 @@ export class Orchestrator {
     );
   }
 
-  private loadCachedLeaderboard(): LeaderboardEntry[] {
-    if (!fs.existsSync(this.paths.leaderboard)) return [];
+  private loadCachedLeaderboardSnapshot(): {
+    entries: LeaderboardEntry[];
+    fetchedAt?: string;
+  } {
+    if (!fs.existsSync(this.paths.leaderboard)) return { entries: [] };
     try {
       const parsed = JSON.parse(fs.readFileSync(this.paths.leaderboard, "utf8")) as {
         entries?: unknown;
+        fetchedAt?: unknown;
       };
-      if (!Array.isArray(parsed.entries)) return [];
-      return parsed.entries.filter(isLeaderboardEntry);
+      if (!Array.isArray(parsed.entries)) return { entries: [] };
+      return {
+        entries: parsed.entries.filter(isLeaderboardEntry),
+        ...(typeof parsed.fetchedAt === "string" ? { fetchedAt: parsed.fetchedAt } : {}),
+      };
     } catch {
-      return [];
+      return { entries: [] };
     }
+  }
+
+  private loopLeaderboardSnapshotPath(): string {
+    return path.join(
+      this.paths.loopsDir,
+      `loop-${String(this.state.loop).padStart(3, "0")}`,
+      "leaderboard-snapshot.json",
+    );
+  }
+
+  private readLoopLeaderboardSnapshot(
+    snapshotPath: string,
+  ): LoopLeaderboardSnapshotV1 | null {
+    if (!fs.existsSync(snapshotPath)) return null;
+    const value = JSON.parse(
+      fs.readFileSync(snapshotPath, "utf8"),
+    ) as Partial<LoopLeaderboardSnapshotV1>;
+    if (
+      value.schemaVersion !== EXPERIMENT_SCHEMA_VERSION ||
+      value.loop !== this.state.loop ||
+      (value.provenance !== "remote" && value.provenance !== "cache") ||
+      typeof value.capturedAt !== "string" ||
+      typeof value.sync !== "object" ||
+      value.sync === null ||
+      typeof value.sync.ok !== "boolean" ||
+      typeof value.sync.detail !== "string" ||
+      !Array.isArray(value.entries) ||
+      !value.entries.every(isLeaderboardEntry)
+    ) {
+      throw new Error(`Invalid loop leaderboard snapshot at ${snapshotPath}`);
+    }
+    return value as LoopLeaderboardSnapshotV1;
   }
 
   private finalizationSnapshotDir(): string {
