@@ -340,7 +340,12 @@ export function registerAutoresearchCommand(
         notify(
           ctx,
           `${ev.status === "pending" ? "submission queued" : "submitted"} ${ev.ideaId} ` +
-            `(score ${ev.score})${ev.submissionId ? ` as ${ev.submissionId}` : ""}`,
+            `(score ${ev.score})${ev.submissionId ? ` as ${ev.submissionId}` : ""}` +
+            (ev.promoted === true
+              ? " · promoted"
+              : ev.status === "accepted" && ev.promoted === false
+                ? " · not promoted"
+                : ""),
         );
         break;
       case "submission-result":
@@ -1599,7 +1604,15 @@ function activityFromEvent(event: OrchestratorEvent): string {
     case "church":
       return `church reflection saved · ${event.noteFile}`;
     case "submitted":
-      return `${event.ideaId} · ${event.status === "pending" ? "submission queued" : "submitted"} score ${event.score}`;
+      return (
+        `${event.ideaId} · ${event.status === "pending" ? "submission queued" : "submitted"} ` +
+        `score ${event.score}` +
+        (event.promoted === true
+          ? " · promoted"
+          : event.status === "accepted" && event.promoted === false
+            ? " · not promoted"
+            : "")
+      );
     case "submission-result":
       return `${event.candidateId} · remote ${event.status}`;
     case "log":

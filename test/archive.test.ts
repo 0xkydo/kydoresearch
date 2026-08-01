@@ -148,6 +148,12 @@ describe("proposal contracts", () => {
         ledgerPath: path.join(stateDir, "ledger.ndjson"),
         knowledgeBasePath: path.join(stateDir, "knowledge-base.md"),
         runsDirectory: path.join(stateDir, "runs"),
+        leaderboardSnapshotPath: path.join(
+          stateDir,
+          "loops",
+          "loop-001",
+          "leaderboard-snapshot.json",
+        ),
         currentBestCandidateId: "baseline",
         inFlightCandidateIds: [],
         operatorSteering: {
@@ -167,6 +173,15 @@ describe("proposal contracts", () => {
         },
       }),
     ).toThrow(/operatorSteering\.text/);
+    expect(() =>
+      validateResearchTask({
+        ...task,
+        input: {
+          ...task.input,
+          leaderboardSnapshotPath: "relative/leaderboard-snapshot.json",
+        },
+      }),
+    ).toThrow(/leaderboardSnapshotPath/);
   });
 
   it("validates immutable baseline-review evidence for Setup", () => {

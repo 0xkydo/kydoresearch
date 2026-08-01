@@ -9,7 +9,7 @@ import type { ChallengeAdapter } from "../src/challenge/types.ts";
 import { nodeExec } from "../src/exec.ts";
 import { initChallenge } from "../src/init.ts";
 import { Orchestrator } from "../src/orchestrator.ts";
-import { loadState } from "../src/state.ts";
+import { loadState, saveState } from "../src/state.ts";
 import { makeTmpChallenge } from "./helpers/tmp-challenge.ts";
 
 describe("overnight failure recovery", () => {
@@ -77,13 +77,18 @@ describe("overnight failure recovery", () => {
     });
   });
 
-  it("continues from cached knowledge when leaderboard sync stays unavailable", async () => {
+  it("fetches fresh leaderboard evidence even when repository sync stays unavailable", async () => {
     const harness = await makeResilienceHarness(repoRoot);
     let syncCalls = 0;
+    let listCalls = 0;
     const adapter = overrideAdapter(harness.adapter, {
       sync: async () => {
         syncCalls += 1;
         return { ok: false, raw: "temporary leaderboard outage" };
+      },
+      listSubmissions: async (all, signal) => {
+        listCalls += 1;
+        return harness.adapter.listSubmissions(all, signal);
       },
     });
 
@@ -91,9 +96,159 @@ describe("overnight failure recovery", () => {
 
     expect(summary).not.toBeNull();
     expect(syncCalls).toBe(2);
+    expect(listCalls).toBe(2);
+    const snapshotPath = path.join(
+      harness.stateDir,
+      "loops",
+      "loop-001",
+      "leaderboard-snapshot.json",
+    );
+    const snapshot = JSON.parse(fs.readFileSync(snapshotPath, "utf8")) as {
+      provenance: string;
+      sync: { ok: boolean };
+      entries: unknown[];
+    };
+    expect(snapshot).toMatchObject({
+      provenance: "remote",
+      sync: { ok: false },
+    });
+    expect(snapshot.entries).toHaveLength(2);
+    const professorTask = JSON.parse(
+      fs.readFileSync(
+        path.join(harness.stateDir, "loops", "loop-001", "professor-task.json"),
+        "utf8",
+      ),
+    ) as { input: { leaderboardSnapshotPath?: string } };
+    expect(professorTask.input.leaderboardSnapshotPath).toBe(snapshotPath);
+  });
+
+  it("freezes cached leaderboard evidence when both sync and fetch are unavailable", async () => {
+    const harness = await makeResilienceHarness(repoRoot);
+    const cachedAt = "2026-07-30T12:00:00.000Z";
+    fs.writeFileSync(
+      path.join(harness.stateDir, "leaderboard.json"),
+      JSON.stringify({
+        fetchedAt: cachedAt,
+        entries: [
+          {
+            id: "cached-frontier",
+            score: 7,
+            author: "competitor",
+            promoted: true,
+          },
+        ],
+      }),
+    );
+    const adapter = overrideAdapter(harness.adapter, {
+      sync: async () => ({ ok: false, raw: "sync unavailable" }),
+      listSubmissions: async () => {
+        throw new Error("leaderboard fetch unavailable");
+      },
+    });
+
+    await harness.makeOrchestrator(harness.runner, adapter).runLoop();
+
+    const snapshot = JSON.parse(
+      fs.readFileSync(
+        path.join(
+          harness.stateDir,
+          "loops",
+          "loop-001",
+          "leaderboard-snapshot.json",
+        ),
+        "utf8",
+      ),
+    ) as {
+      provenance: string;
+      observedAt?: string;
+      entries: Array<{ id: string }>;
+    };
+    expect(snapshot).toMatchObject({
+      provenance: "cache",
+      observedAt: cachedAt,
+      entries: [{ id: "cached-frontier" }],
+    });
+  });
+
+  it("reuses an existing loop snapshot without refreshing evidence on resume", async () => {
+    const harness = await makeResilienceHarness(repoRoot);
+    const state = loadState(harness.stateDir)!;
+    state.loop = 1;
+    state.phase = "paused";
+    state.resumePhase = "loop.syncing";
+    saveState(harness.stateDir, state);
+    const snapshotPath = path.join(
+      harness.stateDir,
+      "loops",
+      "loop-001",
+      "leaderboard-snapshot.json",
+    );
+    fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+    fs.writeFileSync(
+      snapshotPath,
+      JSON.stringify({
+        schemaVersion: 1,
+        loop: 1,
+        capturedAt: "2026-07-30T12:00:00.000Z",
+        provenance: "cache",
+        observedAt: "2026-07-30T11:00:00.000Z",
+        sync: { ok: false, detail: "previous sync unavailable" },
+        entries: [],
+      }),
+    );
+    let syncCalls = 0;
+    let listCalls = 0;
+    const adapter = overrideAdapter(harness.adapter, {
+      sync: async () => {
+        syncCalls += 1;
+        return { ok: true, raw: "unexpected refresh" };
+      },
+      listSubmissions: async () => {
+        listCalls += 1;
+        return [];
+      },
+    });
+
+    const summary = await harness.makeOrchestrator(harness.runner, adapter).runLoop();
+
+    expect(summary?.loop).toBe(1);
+    expect(syncCalls).toBe(0);
+    expect(listCalls).toBe(0);
+    expect(JSON.parse(fs.readFileSync(snapshotPath, "utf8"))).toMatchObject({
+      provenance: "cache",
+      capturedAt: "2026-07-30T12:00:00.000Z",
+    });
+  });
+
+  it("archives an explicitly non-promoted submission without presenting it as promoted", async () => {
+    const harness = await makeResilienceHarness(repoRoot);
+    const adapter = overrideAdapter(harness.adapter, {
+      submit: async () => ({
+        ok: true,
+        submissionId: "sub-raced-frontier",
+        status: "accepted",
+        promoted: false,
+        raw: "submitted but not promoted",
+      }),
+    });
+    const orchestrator = harness.makeOrchestrator(harness.runner, adapter);
+
+    await orchestrator.runLoop();
+    await orchestrator.runLoop();
+
+    const metrics = JSON.parse(
+      fs.readFileSync(
+        path.join(harness.stateDir, "runs", "L002-I1", "metrics.json"),
+        "utf8",
+      ),
+    ) as { submission?: { submissionId?: string; promoted?: boolean } };
+    expect(metrics.submission).toEqual({
+      submissionId: "sub-raced-frontier",
+      promoted: false,
+    });
     expect(
-      fs.readFileSync(path.join(harness.stateDir, "journal.ndjson"), "utf8"),
-    ).toContain("continuing with 0 cached submission(s)");
+      fs.readFileSync(path.join(harness.stateDir, "knowledge-base.md"), "utf8"),
+    ).toContain("not promoted");
   });
 
   it("reconciles an ambiguously accepted submission instead of submitting twice", async () => {

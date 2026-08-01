@@ -39,6 +39,7 @@ import type {
   EvaluationCommandV1,
   GodConversationTaskV1,
   LocalEvaluationV1,
+  LoopLeaderboardSnapshotV1,
   PhdImplementationTaskV1,
   PhdPostmortemTaskV1,
   ProfessorProposalTaskV1,
@@ -81,6 +82,7 @@ export type OrchestratorEvent =
       ideaId: string;
       score: number;
       submissionId?: string;
+      promoted?: boolean;
       status?: RemoteSubmissionStatus;
     }
   | {
@@ -316,7 +318,9 @@ export class Orchestrator {
       this.state.ideas = [];
       await this.syncLeaderboard();
       if (this.aborted()) return this.abortLoop();
-      this.reviewRemoteSubmissions(this.loadCachedLeaderboard());
+      this.reviewRemoteSubmissions(
+        this.loadLoopLeaderboardSnapshot() ?? this.loadCachedLeaderboard(),
+      );
       if (this.aborted()) return this.abortLoop();
       await this.propose();
     } else {
@@ -333,7 +337,9 @@ export class Orchestrator {
           resumePhase === "loop.syncing" ||
           resumePhase === "loop.reviewing-submissions"
         ) {
-          this.reviewRemoteSubmissions(this.loadCachedLeaderboard());
+          this.reviewRemoteSubmissions(
+            this.loadLoopLeaderboardSnapshot() ?? this.loadCachedLeaderboard(),
+          );
           if (this.aborted()) return this.abortLoop();
         }
         await this.propose();
@@ -464,12 +470,23 @@ export class Orchestrator {
   private async syncLeaderboard(): Promise<void> {
     this.transition("loop.syncing");
     if (this.aborted()) return;
+    const snapshotPath = this.loopLeaderboardSnapshotPath();
+    const existing = this.readLoopLeaderboardSnapshot(snapshotPath);
+    if (existing) {
+      this.emitLog(
+        `leaderboard: reusing frozen ${existing.provenance} snapshot for loop ${this.state.loop}`,
+      );
+      return;
+    }
+
     const cached = this.loadCachedLeaderboard();
+    let syncOk = false;
+    let syncThrew = false;
+    let syncDetail = "sync did not complete";
     let syncResult: { ok: boolean; raw: string } = {
       ok: false,
       raw: "sync did not complete",
     };
-    let syncThrew = false;
     try {
       syncResult = await this.retryResult(
         "leaderboard sync",
@@ -477,18 +494,23 @@ export class Orchestrator {
         () => this.ports.adapter.sync(this.ports.signal),
         (result) => result.ok,
       );
+      syncOk = syncResult.ok;
+      syncDetail =
+        firstLine(syncResult.raw) ||
+        (syncResult.ok ? "sync succeeded" : "sync unavailable");
     } catch (error) {
       if (this.aborted()) return;
       syncThrew = true;
+      syncDetail = errorMessage(error);
       this.emitLog(
         `leaderboard sync threw after ${this.config.resilience.commandMaxAttempts} attempt(s); ` +
           `continuing with ${cached.entries.length} cached submission(s) · ${errorMessage(error)}`,
       );
     }
-    if (!syncResult.ok && !syncThrew) {
+    if (!syncOk && !syncThrew && syncDetail !== "sync did not complete") {
       this.emitLog(
         `leaderboard sync unavailable after ${this.config.resilience.commandMaxAttempts} attempt(s); ` +
-          `continuing with ${cached.entries.length} cached submission(s) · ${firstLine(syncResult.raw)}`,
+          `continuing with ${cached.entries.length} cached submission(s) · ${syncDetail}`,
       );
     }
 
@@ -524,17 +546,40 @@ export class Orchestrator {
         `submission review fetch unavailable; continuing with ${mine.length} cached own submission(s) · ${errorMessage(error)}`,
       );
     }
+    const capturedAt = new Date().toISOString();
     if (allFetched || mineFetched) {
       atomicWriteJson(this.paths.leaderboard, {
-        fetchedAt: new Date().toISOString(),
+        fetchedAt: capturedAt,
         entries,
         mine,
       });
     }
+
+    const snapshot: LoopLeaderboardSnapshotV1 = {
+      schemaVersion: EXPERIMENT_SCHEMA_VERSION,
+      loop: this.state.loop,
+      capturedAt,
+      provenance: allFetched && mineFetched ? "remote" : "cache",
+      sources: {
+        entries: allFetched ? "remote" : "cache",
+        mine: mineFetched ? "remote" : "cache",
+      },
+      ...((allFetched || mineFetched)
+        ? { observedAt: capturedAt }
+        : cached.fetchedAt
+          ? { observedAt: cached.fetchedAt }
+          : {}),
+      sync: { ok: syncOk, detail: syncDetail },
+      entries,
+      mine,
+    };
+    fs.mkdirSync(path.dirname(snapshotPath), { recursive: true });
+    atomicWriteJson(snapshotPath, snapshot);
     this.appendKnowledge(this.leaderboardDigest(entries));
     this.emitLog(
-      `sync: ${entries.length} submissions on leaderboard · ${mine.length} mine · ` +
-        `${syncResult.raw.split("\n")[0] ?? ""}`,
+      `leaderboard: froze ${entries.length} submission(s) and ${mine.length} own submission(s) ` +
+        `for loop ${this.state.loop} · all ${snapshot.sources?.entries} · mine ${snapshot.sources?.mine} · ` +
+        `sync ${syncOk ? "succeeded" : "unavailable"}`,
     );
   }
 
@@ -665,6 +710,7 @@ export class Orchestrator {
       this.paths.loopsDir,
       `loop-${String(this.state.loop).padStart(3, "0")}`,
     );
+    const leaderboardSnapshotPath = this.loopLeaderboardSnapshotPath();
     fs.mkdirSync(loopDir, { recursive: true });
     const professorTaskPath = path.join(loopDir, "professor-task.json");
     const operatorSteering = loadOperatorSteering(this.stateDir);
@@ -687,6 +733,7 @@ export class Orchestrator {
         ledgerPath: this.paths.ledger,
         knowledgeBasePath: this.paths.knowledgeBase,
         runsDirectory: this.paths.runsDir,
+        ...(fs.existsSync(leaderboardSnapshotPath) ? { leaderboardSnapshotPath } : {}),
         currentBestCandidateId,
         inFlightCandidateIds: this.state.ideas.map((idea) => idea.id),
         resolvedSubmissionReviews: (this.state.submissionReviews ?? [])
@@ -1252,7 +1299,11 @@ export class Orchestrator {
 
       candidate.lastVerifyError = undefined;
       candidate.status = "done-improved";
-      candidate.submitted = { submissionId: submit.submissionId, noteFile: noteRel };
+      candidate.submitted = {
+        submissionId: submit.submissionId,
+        noteFile: noteRel,
+        ...(submit.promoted === undefined ? {} : { promoted: submit.promoted }),
+      };
       const submittedAt = new Date().toISOString();
       const submissionReviews = this.state.submissionReviews ?? [];
       this.state.submissionReviews = submissionReviews;
@@ -1304,11 +1355,22 @@ export class Orchestrator {
         ideaId: candidate.id,
         score: bench.score,
         submissionId: submit.submissionId,
+        promoted: submit.promoted,
         status: submit.status,
       });
+      const remoteStatus = submit.status ?? "pending";
+      const promotion =
+        submit.promoted === true
+          ? "promoted"
+          : remoteStatus === "pending"
+            ? "promotion pending"
+            : submit.promoted === false
+              ? "not promoted"
+              : "promotion unknown";
       this.appendKnowledge(
         `\n### Loop ${this.state.loop} submission\n- ${candidate.id} "${candidate.title}" · ` +
-          `local score ${bench.score} · submitted (${submit.submissionId ?? "id unknown"})\n`,
+          `local score ${bench.score} · submitted (${submit.submissionId ?? "id unknown"}) · ` +
+          `remote status ${remoteStatus} · ${promotion}\n`,
       );
       this.discardFinalizationSnapshot();
       return true;
@@ -1759,6 +1821,18 @@ export class Orchestrator {
       evaluationStarted: (idea.verifyRecords?.length ?? 0) > 0,
       verify: idea.verifyRecords ?? [],
       ...(idea.benchmarkRecord ? { benchmark: idea.benchmarkRecord } : {}),
+      ...(idea.submitted
+        ? {
+            submission: {
+              ...(idea.submitted.submissionId
+                ? { submissionId: idea.submitted.submissionId }
+                : {}),
+              ...(idea.submitted.promoted === undefined
+                ? {}
+                : { promoted: idea.submitted.promoted }),
+            },
+          }
+        : {}),
       ...(idea.lastVerifyError ? { failure: idea.lastVerifyError } : {}),
     };
     writeCandidateMetrics(this.stateDir, idea.id, metrics);
@@ -1808,6 +1882,7 @@ export class Orchestrator {
       ...(metrics.score === undefined ? {} : { score: metrics.score }),
       comparisonScore: metrics.comparisonScore,
       improved: metrics.improved,
+      ...(metrics.submission ? { submission: metrics.submission } : {}),
     });
   }
 
@@ -2047,6 +2122,55 @@ export class Orchestrator {
     } catch {
       return { entries: [], mine: [] };
     }
+  }
+
+  private loopLeaderboardSnapshotPath(): string {
+    return path.join(
+      this.paths.loopsDir,
+      `loop-${String(this.state.loop).padStart(3, "0")}`,
+      "leaderboard-snapshot.json",
+    );
+  }
+
+  private readLoopLeaderboardSnapshot(
+    snapshotPath: string,
+  ): LoopLeaderboardSnapshotV1 | null {
+    if (!fs.existsSync(snapshotPath)) return null;
+    const value = JSON.parse(
+      fs.readFileSync(snapshotPath, "utf8"),
+    ) as Partial<LoopLeaderboardSnapshotV1>;
+    if (
+      value.schemaVersion !== EXPERIMENT_SCHEMA_VERSION ||
+      value.loop !== this.state.loop ||
+      (value.provenance !== "remote" && value.provenance !== "cache") ||
+      typeof value.capturedAt !== "string" ||
+      typeof value.sync !== "object" ||
+      value.sync === null ||
+      typeof value.sync.ok !== "boolean" ||
+      typeof value.sync.detail !== "string" ||
+      !Array.isArray(value.entries) ||
+      !value.entries.every(isLeaderboardEntry) ||
+      (value.mine !== undefined &&
+        (!Array.isArray(value.mine) || !value.mine.every(isLeaderboardEntry)))
+    ) {
+      throw new Error(`Invalid loop leaderboard snapshot at ${snapshotPath}`);
+    }
+    return {
+      ...(value as LoopLeaderboardSnapshotV1),
+      mine: value.mine ?? [],
+    };
+  }
+
+  private loadLoopLeaderboardSnapshot(): LeaderboardSnapshot | null {
+    const snapshot = this.readLoopLeaderboardSnapshot(
+      this.loopLeaderboardSnapshotPath(),
+    );
+    if (!snapshot) return null;
+    return {
+      entries: snapshot.entries,
+      mine: snapshot.mine,
+      ...(snapshot.observedAt ? { fetchedAt: snapshot.observedAt } : {}),
+    };
   }
 
   private finalizationSnapshotDir(): string {

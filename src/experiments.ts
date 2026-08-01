@@ -1,4 +1,5 @@
 import * as path from "node:path";
+import type { LeaderboardEntry } from "./challenge/types.ts";
 import type { Direction } from "./util.ts";
 
 /** Version of the persisted research contracts introduced by the Pi-native archive. */
@@ -181,6 +182,8 @@ export interface ProfessorProposalTaskInputV1 {
   ledgerPath: string;
   knowledgeBasePath: string;
   runsDirectory: string;
+  /** Immutable loop-start leaderboard evidence. Optional for legacy tasks. */
+  leaderboardSnapshotPath?: string;
   currentBestCandidateId: string;
   inFlightCandidateIds: string[];
   /** Official outcomes discovered before this task was materialized. */
@@ -190,6 +193,27 @@ export interface ProfessorProposalTaskInputV1 {
     text: string;
     updatedAt: string;
   };
+}
+
+export interface LoopLeaderboardSnapshotV1 {
+  schemaVersion: ExperimentSchemaVersion;
+  loop: number;
+  capturedAt: string;
+  provenance: "remote" | "cache";
+  /** Per-view provenance when all and own submissions have different fallbacks. */
+  sources?: {
+    entries: "remote" | "cache";
+    mine: "remote" | "cache";
+  };
+  /** Timestamp of the remote observation, or of the cached observation reused. */
+  observedAt?: string;
+  sync: {
+    ok: boolean;
+    detail: string;
+  };
+  entries: LeaderboardEntry[];
+  /** Own submissions used by the bounded remote-review checkpoint. */
+  mine: LeaderboardEntry[];
 }
 
 export interface ResolvedSubmissionReviewV1 {
@@ -378,6 +402,12 @@ export function validateResearchTask(input: unknown): ResearchTaskV1 {
       absolutePath(taskInput.ledgerPath, "task.input.ledgerPath");
       absolutePath(taskInput.knowledgeBasePath, "task.input.knowledgeBasePath");
       absolutePath(taskInput.runsDirectory, "task.input.runsDirectory");
+      if (taskInput.leaderboardSnapshotPath !== undefined) {
+        absolutePath(
+          taskInput.leaderboardSnapshotPath,
+          "task.input.leaderboardSnapshotPath",
+        );
+      }
       nonEmptyString(taskInput.currentBestCandidateId, "task.input.currentBestCandidateId");
       stringArray(taskInput.inFlightCandidateIds, "task.input.inFlightCandidateIds");
       if (taskInput.resolvedSubmissionReviews !== undefined) {
@@ -594,6 +624,10 @@ export interface CandidateMetricsV1 {
   evaluationStarted?: boolean;
   verify: EvaluationCommandV1[];
   benchmark?: EvaluationCommandV1;
+  submission?: {
+    submissionId?: string;
+    promoted?: boolean;
+  };
   failure?: string;
 }
 

@@ -141,6 +141,9 @@ from hallucinating a diagnosis without any inner run evidence.
 The inner evidence remains in the existing `.autoresearch/runs/` archive. The
 outer proposer receives paths to both archives and is expected to use the
 compact ledgers only for navigation. Raw evidence remains the authority.
+Ordinary Professor tasks also retain their immutable loop-start leaderboard
+snapshot path. The core records and freezes that evidence; how the Professor
+uses it remains part of the evolvable Professor soul, prompt, and tool policy.
 
 ## Reliability for unattended runs
 

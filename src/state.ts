@@ -31,7 +31,7 @@ export interface Idea {
   implementationSummary?: string;
   /** ISO timestamp written after the candidate evidence bundle is sealed. */
   archivedAt?: string;
-  submitted?: { submissionId?: string; noteFile: string };
+  submitted?: { submissionId?: string; noteFile: string; promoted?: boolean };
 }
 
 /** Durable local tracking for an asynchronously reviewed remote submission. */

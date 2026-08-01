@@ -366,7 +366,8 @@ init (once per repository)
   → bounded Setup review on failure → baseline archive
 
 research loop
-  sync leaderboard and competitor notes
+  attempt challenge sync, independently fetch the leaderboard, and freeze one
+  remote-or-cached evidence snapshot for the loop
   reconcile queued submission reviews from one remote snapshot
     still validating → remain pending and continue without polling
     accepted or rejected → persist the result and feed it to this loop's Professor task
@@ -674,7 +675,7 @@ bounded exponential backoff and honor `/autoresearch stop` immediately.
 |---|---|
 | Setup or baseline command | Setup retries once. After a first baseline failure, Setup reviews the completed benchmark log and score artifact before the remaining command attempt. The durable Setup result resumes without repeating successful setup/discovery work. |
 | Professor/setup/PhD model call | Retry twice. An exhausted PhD provider call fails the candidate before deterministic verification; it is not replayed as another verifier cycle. |
-| Leaderboard sync/fetch | Retry once, then continue from `.autoresearch/leaderboard.json`; research is not blocked. |
+| Leaderboard sync/fetch | Retry each operation independently. A failed repository sync does not prevent a fresh leaderboard fetch; a failed fetch falls back to `.autoresearch/leaderboard.json`. The selected remote-or-cached evidence is frozen for the loop. |
 | Correctness or benchmark command | Retry once. An idea that still fails is isolated; other ideas continue. |
 | Best candidate fails on main | Mark only that candidate failed and try the next qualifying candidate. If all finalists fail, restore the pre-finalization main checkout snapshot. |
 | Submission | Reconcile against the remote user's submissions before each of five attempts. A successful queue response is persisted immediately and research continues without waiting for official validation. An exhausted submit remains at `loop.finalizing` for durable checkpoint recovery and is never marked submitted. |
@@ -710,7 +711,8 @@ All runtime data lives in `.autoresearch/` inside the challenge repository:
   operator-steering.json    active operator direction for future Professor tasks
   leaderboard.json          last parsed submission snapshot
   taskboard.json            shared persisted task board
-  loops/                    immutable loop tasks and non-candidate traces
+  loops/                    immutable loop tasks, frozen leaderboard snapshots,
+                            and non-candidate traces
   runs/<candidateId>/       sealed empirical evidence for each candidate
   resolved-agents/          effective role configuration snapshots
   ideas/                    compatibility idea specifications
@@ -761,7 +763,9 @@ its evidence is sealed and indexed. The durable source snapshot, diff, logs,
 metrics, postmortem, and agent trace remain under `runs/<candidateId>/`.
 
 A local checkpoint prevents ordinary resume from repeating a recorded
-submission. `state.json.submissionReviews` distinguishes queued, accepted, and
+submission. Sealed candidate metrics and the compact ledger retain the
+submission ID and the challenge CLI's promotion result when supplied.
+`state.json.submissionReviews` distinguishes queued, accepted, and
 rejected remote outcomes. Queueing never waits for validation; each later loop
 performs one snapshot reconciliation before proposal, and terminal results are
 included in Professor evidence. No local state file can make the external CLI
